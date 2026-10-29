@@ -1,0 +1,110 @@
+/*
+ * Estilos base tomados del prototipo (prototipo/visitas-demo.html).
+ * Tema claro. El color de marca (--brand*) cambiará según la sucursal
+ * cuando exista el catálogo de sucursales.
+ */
+:root {
+  color-scheme: light;
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --fg: #15191f;
+  --muted: #5f6873;
+  --line: #e0e4e9;
+  --ok: #17703f;
+  --ok-soft: #e3f3e9;
+  --info: #1c5ca3;
+  --info-soft: #e5eef9;
+  --warn: #8a5300;
+  --warn-soft: #fdf0d8;
+  --bad: #b3261e;
+  --demo-bg: #22272e;
+  --demo-fg: #ffffff;
+  --brand: #22272e;
+  --brand-ink: #ffffff;
+  --brand-soft: #edf0f3;
+  --brand-text: #22272e;
+  --brand-line: #22272e;
+  --f-body: "Figtree Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--f-body);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand-line);
+  outline-offset: 2px;
+}
+
+.franja-entorno {
+  background: var(--demo-bg);
+  color: var(--demo-fg);
+  text-align: center;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 7px 16px;
+}
+
+.contenedor {
+  max-width: 1080px;
+  margin-inline: auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tarjeta {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sub {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.mono {
+  font-family: var(--f-mono);
+  font-size: 13px;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
