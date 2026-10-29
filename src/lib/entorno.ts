@@ -12,9 +12,15 @@ export type Entorno = "desarrollo" | "pruebas" | "produccion";
 
 const VALIDOS: readonly Entorno[] = ["desarrollo", "pruebas", "produccion"];
 
-export function leerEntorno(valor: string | undefined = process.env.APP_ENV): Entorno {
+/** Convierte un texto en un entorno válido; lo que falte o no se reconozca es "desarrollo". */
+export function normalizarEntorno(valor: string | undefined): Entorno {
   const limpio = (valor ?? "").trim().toLowerCase();
   return (VALIDOS as readonly string[]).includes(limpio) ? (limpio as Entorno) : "desarrollo";
+}
+
+/** Entorno actual, leído de la variable APP_ENV. */
+export function leerEntorno(): Entorno {
+  return normalizarEntorno(process.env.APP_ENV);
 }
 
 /** Texto de la franja superior. En producción no se muestra franja. */

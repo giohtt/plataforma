@@ -1,21 +1,35 @@
-import { describe, expect, it } from "vitest";
-import { etiquetaEntorno, leerEntorno, permitirIndexado } from "@/lib/entorno";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { etiquetaEntorno, leerEntorno, normalizarEntorno, permitirIndexado } from "@/lib/entorno";
 
-describe("leerEntorno", () => {
+describe("normalizarEntorno", () => {
   it("reconoce los tres entornos", () => {
-    expect(leerEntorno("desarrollo")).toBe("desarrollo");
-    expect(leerEntorno("pruebas")).toBe("pruebas");
-    expect(leerEntorno("produccion")).toBe("produccion");
+    expect(normalizarEntorno("desarrollo")).toBe("desarrollo");
+    expect(normalizarEntorno("pruebas")).toBe("pruebas");
+    expect(normalizarEntorno("produccion")).toBe("produccion");
   });
 
   it("acepta mayúsculas y espacios", () => {
-    expect(leerEntorno("  PRUEBAS ")).toBe("pruebas");
+    expect(normalizarEntorno("  PRUEBAS ")).toBe("pruebas");
   });
 
   it("si falta o es desconocido, nunca se trata como producción", () => {
-    expect(leerEntorno(undefined)).toBe("desarrollo");
-    expect(leerEntorno("")).toBe("desarrollo");
-    expect(leerEntorno("production")).toBe("desarrollo");
+    expect(normalizarEntorno(undefined)).toBe("desarrollo");
+    expect(normalizarEntorno("")).toBe("desarrollo");
+    expect(normalizarEntorno("production")).toBe("desarrollo");
+  });
+});
+
+describe("leerEntorno", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("lee la variable APP_ENV", () => {
+    vi.stubEnv("APP_ENV", "pruebas");
+    expect(leerEntorno()).toBe("pruebas");
+  });
+
+  it("sin APP_ENV es desarrollo", () => {
+    vi.stubEnv("APP_ENV", "");
+    expect(leerEntorno()).toBe("desarrollo");
   });
 });
 
