@@ -7,6 +7,16 @@ test("la portada muestra la franja de pruebas y el logo", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Plataforma administrativa" })).toBeVisible();
 });
 
+test("los estilos del diseño se aplican", async ({ page }) => {
+  await page.goto("/");
+  const estilos = await page.evaluate(() => {
+    const s = getComputedStyle(document.body);
+    return { fondo: s.backgroundColor, letra: s.fontFamily };
+  });
+  expect(estilos.fondo).toBe("rgb(245, 246, 248)");
+  expect(estilos.letra).toContain("Figtree");
+});
+
 test("la página no tiene desplazamiento horizontal", async ({ page }) => {
   await page.goto("/");
   const desborde = await page.evaluate(
