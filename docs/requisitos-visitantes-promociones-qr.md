@@ -82,21 +82,40 @@ La plataforma muestra siempre la primera, rotulada como «primera visita registr
 como la segunda.
 
 ### Definición comercial para promociones [Pendiente: decisión de Dirección]
-La regla que decide quién es «nuevo» para una promoción **no está aprobada**. Lo siguiente es una propuesta
-para discutir.
+La regla que decide quién es «nuevo» para una promoción **no está aprobada**. Hay dos reglas posibles,
+con condiciones distintas; **no se mezclan**. Dirección elige una (o una distinta por promoción). Esta
+elección solo se necesita para el bloque 7 y **no bloquea el bloque 1** ni los bloques 2 a 6.
 
-Una persona sería **«visitante nuevo para Fitnessland»** cuando, al momento de evaluar:
-1. No tiene ninguna visita previa registrada (pagada o gratuita, como visitante o invitado) en **ninguna sucursal**, dentro de la cobertura del historial; y
-2. La cobertura del historial abarca el periodo que exija la regla (por ejemplo, «sin visitas en los últimos 12 meses» exige 12 meses de cobertura en todas las sucursales); y
-3. [Pendiente] No es ni ha sido socio. Esto depende de datos de Open Desk.
+«Visita previa» significa en ambas: cualquier pase de visita no cancelado (pagado o gratuito, como visitante
+o invitado), en **cualquier sucursal**.
 
-El sistema distingue tres resultados, nunca solo «sí/no»:
-- **No es nuevo**: tiene visita previa (se indica fecha y sucursal).
-- **Nuevo dentro del historial disponible**: sin visitas previas y con cobertura suficiente.
-- **Sin historial suficiente para decidir**: hay huecos de cobertura. Qué hacer en este caso es [Pendiente]: negar, permitir con marca, o requerir autorización.
+#### Regla A: sin visitas previas en toda Fitnessland
+- **Condición:** la persona no tiene **ninguna** visita previa, en ninguna fecha.
+- **Historial necesario:** completo desde que cada sucursal empezó a operar. Hoy no existe: la plataforma
+  empieza vacía y la libreta y Open Desk no están disponibles (decisión 4).
+- **Consecuencia práctica:** mientras no se incorpore el historial anterior, casi todos los casos sin visitas
+  en la plataforma resultarían **«sin historial suficiente»**, no «nuevo».
+- Una persona que ya visitó **nunca vuelve a ser nueva**.
 
-- [Confirmado] Cambiar de sucursal **no** hace a nadie «nuevo».
-- [Pendiente] Ventana de tiempo: «nunca ha visitado» o «sin visitas en los últimos N meses».
+#### Regla B: sin visitas en los últimos N meses
+- **Condición:** la persona no tiene visitas previas **dentro de los N meses anteriores** a la fecha de
+  evaluación. Las visitas anteriores a ese periodo no cuentan.
+- **Historial necesario:** solo esos N meses, en todas las sucursales que operaron en ese periodo.
+- **Consecuencia práctica:** cuando la plataforma acumule N meses de registros en todas las sucursales,
+  podrá decidir sin depender de la libreta ni de Open Desk.
+- Una persona puede **volver a ser elegible** cuando pasen N meses sin visitar. Esto afecta, por ejemplo,
+  si un invitado puede usar pases de cortesía en meses posteriores.
+- [Pendiente] El valor de N.
+
+#### Común a las dos reglas
+- [Confirmado] Se evalúa en todas las sucursales: cambiar de sucursal **no** hace a nadie «nuevo».
+- [Pendiente] Si un socio o exsocio puede considerarse nuevo. Depende de datos de Open Desk y es una
+  condición aparte que se suma a la regla elegida.
+- El sistema distingue tres resultados, nunca solo «sí/no»:
+  - **No cumple**: tiene una visita previa que lo descarta (se indica fecha y sucursal).
+  - **Cumple dentro del historial disponible**: sin visitas que lo descarten y con el historial que la regla exige.
+  - **Sin historial suficiente para decidir**: falta cobertura. Qué hacer en este caso es [Pendiente]:
+    negar, permitir con marca o requerir autorización.
 
 ### En reportes [Propuesta]
 - **Primera visita registrada en el periodo**: su primera visita en la plataforma, en cualquier sucursal, ocurre dentro del periodo. Se rotula así, no como «nuevo para Fitnessland», mientras la cobertura no lo permita.
@@ -117,10 +136,27 @@ Filtros: sucursal, rango de fechas; vistas por día, semana y mes. [Propuesta] S
 | Cantidad de visitas | Pases de visita no cancelados. Separados en pagados y gratuitos. |
 | Frecuencia | Visitas ÷ personas únicas en el periodo, y distribución (1, 2, 3+ visitas). |
 | Promoción utilizada | Pases por promoción y versión aplicada. |
-| Cobros por forma de pago | Efectivo y tarjeta confirmados; **transferencias pendientes de abono en línea aparte**. |
+| Cobros confirmados por forma de pago | Efectivo, tarjeta confirmada operativamente y **transferencias con abono verificado**. Ver la regla siguiente. |
+| Transferencias pendientes de abono | Línea aparte, con cantidad e importe. No suman en cobros confirmados. |
 | Entradas confirmadas | Solo con fuente confiable; separadas de aperturas manuales y de visitas registradas. |
 
 [Confirmado] No se confunden personas, operaciones, pases y entradas: una operación para tres personas es un cobro y tres pases.
+
+### Cobros que cambian de estado, sin duplicar importes [Propuesta]
+- Cada cobro existe **una sola vez**, con un solo estado actual: confirmado, confirmado operativamente,
+  pendiente de abono, abono verificado o no localizado.
+- Verificar un abono **cambia el estado de ese mismo cobro**; no crea un cobro nuevo. El cambio queda en su
+  historial con quién lo verificó y cuándo.
+- Los reportes suman cobros según su **estado a la fecha de corte**, nunca sumando eventos de cambio de
+  estado. Así, un cobro aparece en «pendientes» o en «confirmados», nunca en ambos.
+- El cobro se reporta en el periodo de su **fecha de operación**. La fecha de verificación del abono se
+  muestra aparte.
+- Por eso un reporte de un periodo pasado puede cambiar cuando se verifica un abono: cada reporte indica
+  «actualizado al» con fecha y hora.
+- Los abonos **no localizados** van en otra línea aparte; cómo se resuelven sigue [Pendiente], igual que
+  quién verifica los abonos.
+- Prueba obligatoria: una transferencia de $150 pendiente aparece en pendientes; al verificarla pasa a
+  confirmados; el total general sigue siendo $150.
 
 ---
 
@@ -138,7 +174,7 @@ Filtros: sucursal, rango de fechas; vistas por día, semana y mes. [Propuesta] S
 ### Diseño [Propuesta]
 - Cada cambio a una promoción crea una **versión nueva**; los pases ya registrados conservan la versión con la que se aplicaron.
 - Condiciones disponibles al inicio: vigencia, sucursales, «requiere visitante nuevo» (sí/no), usos por visitante (total y por periodo), pases totales de la campaña, combinable (sí/no). Se agregan más tipos solo cuando se necesiten.
-- El cálculo de elegibilidad devuelve siempre **resultado + motivo**: «Aplica: primera visita a Fitnessland», «No aplica: visita previa el 12 oct en Santiago», «No aplica: promoción vigente solo en Tenango».
+- El cálculo de elegibilidad devuelve siempre **resultado + motivo**: «Aplica: sin visitas registradas en los últimos 12 meses», «No aplica: visita previa el 12 oct en Santiago», «No aplica: promoción vigente solo en Tenango».
 - Una operación de total $0 no pide forma de pago y no genera movimiento de caja.
 - [Pendiente] Si varias promociones aplican a la vez y no se combinan, cuál se elige (propuesta: recepción elige entre las aplicables; nunca se suman si no son combinables).
 
@@ -197,10 +233,38 @@ Filtros: sucursal, rango de fechas; vistas por día, semana y mes. [Propuesta] S
 - No se afirma compatibilidad con los lectores hasta confirmarla. Mientras tanto se conserva la apertura manual.
 
 ### Diseño [Propuesta]
-- El QR contiene solo un **código aleatorio opaco** (sin significado) que la plataforma o el lector consultan. La base guarda una huella del código, no el código en claro.
-- Si el lector exige otro formato (por ejemplo, firmado o con datos del pase), se ajusta cuando el proveedor lo confirme.
-- **Envío idempotente**: cada envío se liga al pase; reenviar repite el mismo QR.
+- El QR contiene solo un **código opaco** (sin significado legible) que la plataforma o el lector consultan.
 - Antes de existir un canal real, el QR solo se **muestra en pantalla** en recepción. No se simula un envío exitoso.
+- Si el lector exige otro formato (por ejemplo, firmado o con datos del pase), se ajusta cuando el proveedor lo confirme.
+
+#### Guardar solo una huella y aun así reenviar el mismo código
+Las dos necesidades chocan si el código es aleatorio: con solo la huella no se puede reconstruir el código
+para reenviarlo, y guardar el código en claro permitiría que quien lea la base copie pases válidos.
+
+**Solución propuesta: código derivado de una clave secreta.**
+1. Cada entorno tiene una **clave secreta del QR**, guardada en la configuración del alojamiento (nunca en
+   la base de datos ni en el repositorio). Pruebas y producción tienen claves distintas.
+2. El código de un pase se **calcula** con esa clave a partir del identificador interno del pase y su
+   número de versión (HMAC-SHA-256, recortado a por lo menos 128 bits y escrito en texto seguro para QR).
+   Sin la clave no se puede calcular ni adivinar.
+3. La base guarda solo: el identificador del pase, la versión, cuál clave se usó y la **huella** del código
+   (SHA-256). La huella sirve para validar y no permite reconstruir el código.
+4. **Validar:** se calcula la huella del código leído y se busca. Si existe, se revisan estado, vigencia y
+   sucursal. Si no existe, se rechaza.
+5. **Reenviar:** la plataforma vuelve a calcular el código con la misma clave, el mismo pase y la misma
+   versión. Sale **exactamente el mismo QR** sin haberlo guardado. Reenviar no crea otro pase ni otro cobro.
+6. **Cancelar o reemplazar:** cancelar marca el pase. Reemplazar sube la versión: el código anterior deja de
+   coincidir con la huella vigente y queda inválido.
+7. **Cambio de clave:** se crea una clave nueva para los pases nuevos. La anterior se conserva solo hasta que
+   venzan los pases emitidos con ella.
+
+**Qué protege:** una copia de la base de datos no basta para fabricar ni recuperar pases; hace falta además
+la clave del alojamiento. **Qué no protege:** quien tenga la imagen del QR puede usarlo, como cualquier pase;
+por eso hay vigencia, sucursales permitidas, uso único y cancelación. La plataforma no guarda la imagen; el
+canal de envío que se elija sí podría conservar el mensaje.
+
+Alternativa descartada por ahora: guardar el código cifrado y descifrarlo para reenviar. Es igual de
+segura si la clave está fuera de la base, pero agrega un dato sensible más que custodiar.
 
 ### Canales de envío [Pendiente]
 | Canal | Qué requiere |

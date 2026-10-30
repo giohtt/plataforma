@@ -56,7 +56,7 @@ y beneficios, y pases QR individuales.
 3. Protección contra duplicados por doble clic o reintento.
 4. Apertura manual por pase, separada de las entradas confirmadas.
 5. Historial del visitante entre sucursales con la marca de incompleto.
-- **Reporte básico:** operaciones, pases, cobros confirmados por forma de pago, transferencias pendientes aparte y efectivo esperado de la bolsa. Pruebas: tres personas = una operación, un cobro y tres pases.
+- **Reporte básico:** operaciones, pases, cobros confirmados por forma de pago (incluidas las transferencias con abono verificado), transferencias pendientes aparte y efectivo esperado de la bolsa. Pruebas: tres personas = una operación, un cobro y tres pases; una transferencia que pasa de pendiente a verificada cambia de línea sin duplicar el importe.
 - **Decisiones que necesita:** referencias mínimas de tarjeta y transferencia; comprobante para el visitante.
 
 ### Bloque 5. Conteos, entregas, retiros, cierre y revisión
@@ -113,4 +113,4 @@ Reportes avanzados de visitantes (nuevos y recurrentes, frecuencia, comparacione
 | `conteo`, `entrega`, `retiro`, `cierre`, `revision` | 5 | Conteos, entregas entre responsables, retiros, cierres y revisión. |
 | `gasto`, `solicitud_autorizacion` | 6 | Gastos y autorizaciones. |
 | `promocion`, `promocion_version`, `beneficio_pronto_pago`, `pase_cortesia` | 7 | Promociones versionadas y pases de cortesía con canje único. |
-| `credencial_qr`, `envio_pase` | 8 | Código opaco sin datos personales y envíos sin duplicar. |
+| `credencial_qr`, `envio_pase` | 8 | Solo huella, versión y clave usada; el código se recalcula con la clave secreta del entorno para reenviarlo. Envíos sin duplicar. |
