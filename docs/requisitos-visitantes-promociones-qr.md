@@ -7,9 +7,15 @@ Convención:
 - **[Propuesta]** diseño sugerido; requiere aprobación antes de construirse como regla.
 - **[Pendiente]** decisión que falta tomar; la función que depende de ella no se activa hasta resolverla.
 
-Siguen vigentes los tres manuales y los acuerdos previos: visitas de $50; efectivo en la bolsa de visitas;
-tarjeta «confirmada operativamente»; transferencia «pendiente de abono» que no suma como cobro confirmado;
-apertura manual desde recepción; Open Desk opera socios, membresías y accesos.
+**Estos requisitos amplían la primera versión; no la sustituyen.** Su alcance original se conserva: visitas
+y cobros, caja y turnos, cierres, gastos y autorizaciones. El orden de construcción está en
+[`plan-general.md`](plan-general.md).
+
+Siguen vigentes los tres manuales y los acuerdos previos: visitas de $50; efectivo en la bolsa de visitas,
+separada del cajón de mensualidades; tarjeta «confirmada operativamente»; transferencia «pendiente de abono»
+que no suma como cobro confirmado; apertura manual desde recepción; Open Desk opera socios, membresías y accesos.
+- [Confirmado] No se registran cobros reales hasta que sus movimientos se relacionen con caja, turno y responsable.
+- [Confirmado] El cajón de mensualidades indica que no está conciliado cuando faltan los datos de Open Desk.
 
 ---
 
@@ -34,7 +40,10 @@ apertura manual desde recepción; Open Desk opera socios, membresías y accesos.
 - **Fusión de expedientes**: nunca automática. Solo un usuario autorizado, con motivo; se conserva el historial de ambos y se puede consultar cuál absorbió a cuál.
 - Correcciones de datos: con motivo y valor anterior conservado. No modifican cobros ni pases.
 
-### Qué ve cada perfil [Propuesta]
+### Qué ve cada perfil [Propuesta, no aprobada]
+Esta tabla, incluido el enmascaramiento del teléfono, es una **propuesta pendiente de aprobación**
+(decisión 3). Hasta aprobarla, el bloque 2 se construye con estas reglas solo en el entorno de pruebas.
+
 | Perfil | Datos del visitante | Historial de otras sucursales |
 |---|---|---|
 | Recepción | Nombre completo, procedencia, teléfono **enmascarado** (últimos 4 dígitos) salvo que lo capture completo y coincida | Número total de visitas, fecha y sucursal de la última visita, y el **resultado de elegibilidad con su motivo**. **Sin** importes, formas de pago ni operaciones de otras sucursales. |
@@ -60,10 +69,23 @@ apertura manual desde recepción; Open Desk opera socios, membresías y accesos.
 
 ---
 
-## 3. Visitante nuevo
+## 3. Primera visita y visitante nuevo
 
-### Requiere confirmación de Dirección [Propuesta]
-Una persona es **«visitante nuevo para Fitnessland»** cuando, al momento de evaluar:
+### Dos hechos distintos [Propuesta de vocabulario]
+- **Primera visita registrada en nuestra base**: la visita más antigua de la persona en la plataforma.
+  Es un dato comprobable, pero solo dice qué hay desde que la plataforma empezó a registrar.
+- **Primera visita en Fitnessland**: la primera vez que la persona asistió a cualquier sucursal, en toda
+  la historia. Solo se puede afirmar si la cobertura del historial lo permite; sin libreta ni Open Desk,
+  normalmente **no se sabe**.
+
+La plataforma muestra siempre la primera, rotulada como «primera visita registrada», y nunca la presenta
+como la segunda.
+
+### Definición comercial para promociones [Pendiente: decisión de Dirección]
+La regla que decide quién es «nuevo» para una promoción **no está aprobada**. Lo siguiente es una propuesta
+para discutir.
+
+Una persona sería **«visitante nuevo para Fitnessland»** cuando, al momento de evaluar:
 1. No tiene ninguna visita previa registrada (pagada o gratuita, como visitante o invitado) en **ninguna sucursal**, dentro de la cobertura del historial; y
 2. La cobertura del historial abarca el periodo que exija la regla (por ejemplo, «sin visitas en los últimos 12 meses» exige 12 meses de cobertura en todas las sucursales); y
 3. [Pendiente] No es ni ha sido socio. Esto depende de datos de Open Desk.
@@ -77,7 +99,7 @@ El sistema distingue tres resultados, nunca solo «sí/no»:
 - [Pendiente] Ventana de tiempo: «nunca ha visitado» o «sin visitas en los últimos N meses».
 
 ### En reportes [Propuesta]
-- **Nuevo para Fitnessland en el periodo**: su primera visita registrada en cualquier sucursal ocurre dentro del periodo.
+- **Primera visita registrada en el periodo**: su primera visita en la plataforma, en cualquier sucursal, ocurre dentro del periodo. Se rotula así, no como «nuevo para Fitnessland», mientras la cobertura no lo permita.
 - **Primera vez en esta sucursal**: indicador aparte, para no confundirlo con el anterior.
 - **Recurrente en el periodo**: visitó en el periodo y ya tenía una visita registrada antes.
 - Todo reporte indica su cobertura y si el historial está incompleto.
@@ -212,3 +234,17 @@ Se piden por escrito, sin acceso a la plataforma ni al repositorio.
 4. ¿Hay historial de visitas o accesos exportable, y desde qué fecha?
 5. ¿En qué zona horaria entrega las fechas?
 6. ¿Exige IP fija, cómo se autentica y qué límites de uso tiene?
+
+---
+
+## 9. Decisiones pendientes
+
+Se resuelven primero las que necesita el bloque que se va a construir; no detienen todo el proyecto.
+
+| # | Decisión | Bloque que la necesita |
+|---|---|---|
+| 1 | Definición comercial de «visitante nuevo» (periodo, socios y exsocios, qué hacer sin historial suficiente) | 7. Promociones y beneficios |
+| 2 | Fuente válida del pago para el beneficio de pronto pago | 7. Promociones y beneficios |
+| 3 | Privacidad del expediente: aviso, campos obligatorios, conservación y qué ve cada perfil (incluido el enmascaramiento del teléfono) | 2. Expedientes, antes de cualquier dato real |
+| 4 | Historial anterior: libreta, Open Desk o empezar desde una fecha declarada | 7 y reportes de visitantes nuevos |
+| 5 | Canal de entrega del QR | 8. Pases QR |

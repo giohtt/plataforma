@@ -1,4 +1,4 @@
-# Primera entrega: usuarios, permisos y sucursales
+# Bloque 1: usuarios, permisos y sucursales
 
 Base: los tres manuales de Fitnessland y las aclaraciones acordadas después.
 Solo datos ficticios. Sitio de pruebas privado, separado de producción.

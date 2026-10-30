@@ -1,88 +1,116 @@
 # Plan general de implementación
 
 Fecha: 30 de octubre de 2026. Estado: **en revisión**.
-Requisitos de detalle: [`requisitos-visitantes-promociones-qr.md`](requisitos-visitantes-promociones-qr.md).
-Primera entrega: [`plan-entrega-1.md`](plan-entrega-1.md).
+Requisitos ampliados: [`requisitos-visitantes-promociones-qr.md`](requisitos-visitantes-promociones-qr.md).
+Detalle del bloque 1: [`plan-entrega-1.md`](plan-entrega-1.md).
 
-Cada tarea se da por terminada solo con pruebas automáticas que la demuestren, incluidas solicitudes
-directas al servidor para los permisos. Todo con datos ficticios hasta tener aviso de privacidad,
-respaldos y restauración probada.
+## Alcance
 
-## Cambios en el modelo de datos
+**Primera versión (alcance original, se conserva):** visitas y cobros, caja y turnos, cierres, gastos y
+autorizaciones, con reportes administrativos por sucursal. Open Desk sigue operando socios, membresías y accesos.
 
-| Entidad | Para qué | Notas clave |
-|---|---|---|
-| `visitante` | Expediente único para toda Fitnessland | Nombre completo, nombre normalizado para buscar, teléfono normalizado (no único), estado de procedencia, sucursal y usuario de alta, estado (activo o fusionado en otro). |
-| `visitante_cambio` | Historial de correcciones | Campo, valor anterior, valor nuevo, motivo, quién y cuándo. |
-| `visitante_fusion` | Fusiones manuales autorizadas | Origen, destino, motivo, quién autorizó. Nunca automáticas. |
-| `visitante_distinto` | «Es otra persona» confirmado por recepción | Evita volver a sugerir la misma coincidencia. |
-| `operacion_visita` | Una operación con uno o varios visitantes | Folio, sucursal, turno, usuario, forma de pago, estado del cobro, total, recibido y cambio, identificador de solicitud (contra duplicados). Total $0 sin forma de pago ni movimiento de caja. |
-| `pase_visita` | Derecho a una visita de una persona | Operación, visitante, tarifa original, descuento, total, versión de promoción o pase de cortesía aplicado, estado (generado, autorizado, utilizado, vencido, cancelado), vigencia, sucursales permitidas. |
-| `credencial_qr` | Código del pase | Huella del código opaco, versión, revocada sí/no. Sin datos personales. |
-| `envio_pase` | Intentos de envío | Canal, destino, estado (pendiente, enviado, fallido). Ligado al pase: reenviar no crea otro pase. |
-| `evento_acceso` | Lo que pasó en la puerta | Tipo (apertura manual, entrada confirmada, intento rechazado), fuente (recepción, lector, Open Desk), confiable sí/no, pase y visitante si se conocen. |
-| `promocion` y `promocion_version` | Promociones configurables | Cada cambio es una versión nueva e inmutable. Vigencia, sucursales, reglas, combinable, activa, responsable. |
-| `beneficio_pronto_pago` | Beneficio generado por un pago | Fuente y número del pago (únicos juntos), socio (referencia externa), fecha efectiva, día, pases otorgados, estado. |
-| `pase_cortesia` | Cada pase de cortesía | Disponible, canjeado, vencido o anulado; ligado como máximo a un `pase_visita`. |
-| `cobertura_historial` | De dónde y desde cuándo hay datos | Sucursal, fuente (plataforma, libreta, Open Desk), desde, hasta, completo sí/no. |
-| Permisos nuevos | Catálogo | `visitante.buscar`, `visitante.ver`, `visitante.corregir`, `visitante.fusionar`, `visitante.historial_general`, `promocion.administrar`, `beneficio.registrar`, `pase.cancelar`, `reporte.visitantes`. |
+**Ampliación (se suma, no sustituye):** expediente de visitantes con historial entre sucursales, promociones
+y beneficios, y pases QR individuales.
 
-Base ya planeada en la entrega 1: `sucursal`, `usuario`, `rol`, `permiso`, `asignacion`, historial de cambios.
+## Reglas para todo el plan
 
-## Cambios en pantallas
-
-- **Registrar visita**: en cada visitante, buscar expediente por nombre o teléfono, elegir o crear; aviso de posibles coincidencias. Por visitante, promoción aplicable con motivo y total. Si el total es $0, no se pide forma de pago.
-- **Resultado**: pase por visitante con su estado y QR para mostrar en pantalla. Envío deshabilitado hasta elegir canal.
-- **Expediente del visitante**: datos, primera y última visita, visitas por sucursal y total, lista de visitas con promoción y estados; registros de visita, aperturas manuales y entradas confirmadas por separado; aviso de historial incompleto. Lo que se ve depende del perfil.
-- **Promociones** (Dirección o autorizado): lista, crear, nueva versión, activar o desactivar, historial.
-- **Beneficios de pronto pago**: por socio, pases otorgados, usados y disponibles; origen del pago; canjes.
-- **Reportes de visitantes**: filtros de sucursal y fechas; día, semana, mes; cobertura visible.
-- **Configuración**: cobertura del historial por sucursal.
-
-## Qué se puede construir sin Open Desk ni el lector
-
-| Sin dependencias externas | Depende de Open Desk | Depende del lector o su proveedor | Depende de un canal de envío |
-|---|---|---|---|
-| Expedientes, búsqueda, coincidencias y fusión manual | Pagos de mensualidad como fuente del beneficio de pronto pago | Validar el QR en el torniquete | WhatsApp, correo o SMS |
-| Historial entre sucursales dentro de la plataforma, con cobertura | Saber si una persona es o fue socio | Revocar pases en el lector | |
-| Promociones, versiones y cálculo de elegibilidad con motivo | Historial previo de visitas o accesos | Eventos de entrada confirmada e intentos rechazados | |
-| Pases gratuitos sin cobro ficticio | Entradas confirmadas, si llegan por Open Desk | Comportamiento sin conexión | |
-| Libro de pases de cortesía y canje único (con datos de prueba) | | | |
-| Generación del QR opaco, estados y presentación en pantalla | | | |
-| Apertura manual por pase | | | |
-| Reportes de visitantes con la cobertura de la plataforma | | | |
+- Cada bloque incluye sus **reportes básicos y sus pruebas automáticas**. Los totales se comprueban en
+  cada bloque, no al final. Los reportes avanzados pueden llegar después.
+- Las pruebas de permisos incluyen **solicitudes directas al servidor**.
+- **No se registran cobros reales** hasta que cada movimiento quede relacionado con caja, turno y responsable.
+- El **cajón de mensualidades** se muestra **no conciliado** mientras falten los datos de Open Desk.
+- Una decisión pendiente solo frena el bloque que depende de ella. Se resuelven primero las del bloque que
+  sigue.
+- Todo con datos ficticios hasta tener aviso de privacidad, respaldos y restauración probada.
 
 ## Orden de implementación
 
-### Entrega 1. Usuarios, permisos y sucursales (en curso)
-1. ~~Repositorio y entorno~~ (hecho; falta confirmar el sitio en Vercel).
+### Bloque 1. Usuarios, permisos y sucursales (en curso)
+1. ~~Repositorio y entorno.~~ Hecho en GitHub. **Falta publicar el sitio de pruebas en Vercel.**
 2. Base de datos y migraciones.
-3. Inicio y cierre de sesión; recuperación con enlace de un solo uso.
-4. Permisos y asignación de sucursales. El catálogo incluye desde ahora los permisos nuevos, sin asignarlos a nadie.
+3. Inicio y cierre de sesión; recuperación con enlace de un solo uso para que el usuario fije su contraseña.
+4. Permisos y asignación de sucursales. El catálogo incluye los permisos de todos los bloques, sin asignarlos a nadie.
 5. Catálogo persistente de sucursales.
 6. Pruebas de acceso permitido y denegado.
+- **Reporte básico:** usuarios y sus asignaciones por sucursal.
+- **Decisiones que necesita:** ninguna nueva.
 
-### Entrega 2. Expediente de visitantes y visitas
-1. Expediente: alta, corrección con historial, búsqueda por nombre o teléfono. Pruebas con homónimos, errores de escritura y teléfono compartido.
-2. Coincidencias y fusión manual autorizada.
-3. Turno mínimo de recepción para registrar operaciones (requiere decidir fondo y entrega entre turnos, ya descritos).
-4. Operación de visita individual y grupal: cobro único, pase por visitante, protección contra duplicados.
-5. Historial entre sucursales con cobertura e «incompleto»; vistas por perfil. Prueba: recepción no recibe datos financieros de otra sucursal por solicitud directa.
-6. Apertura manual por pase, separada de entradas confirmadas.
+### Bloque 2. Expedientes de visitantes y búsqueda
+1. Expediente: alta, corrección con historial y motivo, búsqueda por nombre o teléfono. Pruebas con homónimos, errores de escritura y teléfono compartido.
+2. Coincidencias al crear y fusión manual autorizada.
+3. Vistas del expediente por perfil y cobertura del historial.
+- **Reporte básico:** expedientes creados por sucursal y periodo; posibles duplicados pendientes.
+- **Decisiones que necesita:** privacidad del expediente (decisión 3) antes de cualquier dato real; qué ve recepción de otras sucursales.
 
-### Entrega 3. Promociones
+### Bloque 3. Apertura de turno y lugares de efectivo
+1. Turno de recepción por sucursal y usuario.
+2. **Bolsa de visitas** y **cajón de mensualidades** como lugares de efectivo separados, con responsable por periodo (pueden ser la misma persona o distintas).
+3. Apertura con importe contado y relación con la entrega del turno anterior.
+4. Cajón de mensualidades marcado **«no conciliado: faltan datos de Open Desk»**.
+- **Reporte básico:** turnos abiertos y responsables de cada lugar de efectivo.
+- **Decisiones que necesita:** si una misma recepcionista custodia siempre ambos lugares (el diseño admite las dos opciones).
+
+### Bloque 4. Visitas, cobros y movimientos de efectivo
+1. Operación individual y grupal: un cobro, un pase por visitante, cada uno ligado a su expediente.
+2. Formas de pago con los estados acordados; el efectivo entra a la bolsa del turno; tarjeta y transferencia no aumentan el efectivo.
+3. Protección contra duplicados por doble clic o reintento.
+4. Apertura manual por pase, separada de las entradas confirmadas.
+5. Historial del visitante entre sucursales con la marca de incompleto.
+- **Reporte básico:** operaciones, pases, cobros confirmados por forma de pago, transferencias pendientes aparte y efectivo esperado de la bolsa. Pruebas: tres personas = una operación, un cobro y tres pases.
+- **Decisiones que necesita:** referencias mínimas de tarjeta y transferencia; comprobante para el visitante.
+
+### Bloque 5. Conteos, entregas, retiros, cierre y revisión
+1. Conteo con diferencia conservada; entrega entre recepcionistas con confirmación de quien recibe.
+2. Retiros que recoge Gloria como salida del lugar de efectivo, con seguimiento bajo su responsabilidad.
+3. Cierre de turno y revisión por una persona distinta de quien cerró.
+4. Cierre del cajón como conteo registrado sin conciliar mientras falten datos de Open Desk.
+- **Reporte básico:** cierres con efectivo esperado, contado, diferencia y entregas; diferencias pendientes de revisión.
+- **Decisiones que necesita:** quién revisa diferencias; evidencia de entrega a Gloria; responsable al final del día.
+
+### Bloque 6. Gastos y autorizaciones
+1. Solicitud, autorización, pago desde un lugar de efectivo y comprobación.
+2. Bandeja de autorizaciones. Mientras no haya límites ni delegaciones configurados, todo va a Dirección.
+3. Sucursal que paga y sucursal beneficiada.
+- **Reporte básico:** gastos por estado, sucursal, lugar de efectivo y autorizador.
+- **Decisiones que necesita:** cómo aprobará Gloria dentro del programa; límites y suplentes; comprobantes y plazos.
+
+### Bloque 7. Promociones y beneficios
 1. Catálogo de promociones con versiones, historial y permiso de administración.
-2. Cálculo de elegibilidad con motivo, como función probada aparte. Incluye «visitante nuevo» cuando se confirme la definición.
-3. Aplicación en el registro: tarifa original, descuento, total y versión; pases gratuitos sin cobro.
-4. Pronto pago: libro de beneficios y pases de cortesía, tabla de días, unicidad por pago, canje único. Solo con datos de prueba hasta decidir la fuente del pago.
+2. Cálculo de elegibilidad con motivo, como función probada aparte.
+3. Aplicación en el registro: tarifa original, descuento, total y versión; pases gratuitos sin cobro ficticio.
+4. Pronto pago: beneficios y pases de cortesía con canje único; solo datos de prueba hasta decidir la fuente del pago.
+- **Reporte básico:** pases por promoción; pases de cortesía otorgados, usados y disponibles.
+- **Decisiones que necesita:** definición comercial de visitante nuevo (decisión 1); fuente del pago (decisión 2); historial anterior (decisión 4).
 
-### Entrega 4. Pases QR
+### Bloque 8. Pases QR e integraciones
 1. Generación del código opaco, estados, vigencia, sucursales y cancelación; presentación en pantalla; reintentos sin duplicar.
 2. Envío por el canal elegido.
-3. Integración con el lector, cuando el proveedor confirme compatibilidad.
+3. Integración con el lector solo cuando el proveedor confirme compatibilidad.
+- **Reporte básico:** pases por estado (generado, autorizado, utilizado, vencido, cancelado).
+- **Decisiones que necesita:** canal de envío (decisión 5); respuestas del proveedor del lector; regla de acceso con transferencia sin abono verificado.
 
-### Entrega 5. Reportes de visitantes
-1. Personas únicas, nuevos y recurrentes, visitas, frecuencia, pases pagados y gratuitos, promociones.
-2. Cobros por forma de pago con transferencias pendientes separadas.
+### Después
+Reportes avanzados de visitantes (nuevos y recurrentes, frecuencia, comparaciones), contabilidad y los demás módulos de la visión completa.
 
-Antes de cualquier dato real: aviso de privacidad, respaldos y restauración probada.
+## Las cinco decisiones pendientes
+
+| # | Decisión | Bloque que la necesita |
+|---|---|---|
+| 1 | Definición comercial de «visitante nuevo» | 7 (también reportes avanzados) |
+| 2 | Fuente válida del pago para el beneficio de pronto pago | 7 |
+| 3 | Privacidad del expediente: aviso, campos obligatorios, conservación, qué ve cada perfil | 2 (antes de datos reales) |
+| 4 | Historial anterior: libreta, Open Desk o empezar desde una fecha declarada | 7 y reportes de nuevos |
+| 5 | Canal de entrega del QR | 8 |
+
+## Cambios en el modelo de datos
+
+| Entidad | Bloque | Para qué |
+|---|---|---|
+| `sucursal`, `usuario`, `rol`, `permiso`, `asignacion`, historial | 1 | Base de acceso. |
+| `visitante`, `visitante_cambio`, `visitante_fusion`, `visitante_distinto`, `cobertura_historial` | 2 | Expediente único, correcciones, fusiones manuales, cobertura del historial. |
+| `turno`, `lugar_efectivo`, `sesion_responsable` | 3 | Turno; bolsa y cajón con responsable por periodo. |
+| `operacion_visita`, `pase_visita`, `movimiento_efectivo`, `evento_acceso` | 4 | Un cobro por operación, un pase por visitante, efectivo ligado a lugar, turno y responsable; aperturas manuales y entradas por separado. |
+| `conteo`, `entrega`, `retiro`, `cierre`, `revision` | 5 | Conteos, entregas entre responsables, retiros, cierres y revisión. |
+| `gasto`, `solicitud_autorizacion` | 6 | Gastos y autorizaciones. |
+| `promocion`, `promocion_version`, `beneficio_pronto_pago`, `pase_cortesia` | 7 | Promociones versionadas y pases de cortesía con canje único. |
+| `credencial_qr`, `envio_pase` | 8 | Código opaco sin datos personales y envíos sin duplicar. |
