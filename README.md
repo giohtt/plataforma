@@ -4,7 +4,7 @@ Aplicación web para la operación y administración de las sucursales de Fitnes
 Se construye por etapas. Open Desk sigue gestionando socios, membresías y accesos.
 
 **Estado actual:** tarea 1 de la primera entrega (base técnica). Todavía no hay usuarios,
-sucursales ni datos. Ver [`docs/plan-entrega-1.md`](docs/plan-entrega-1.md).
+sucursales ni datos. Ver [`docs/plan-entrega-1.md`](docs/plan-entrega-1.md) y el [plan general](docs/plan-general.md).
 
 ## Entornos
 
