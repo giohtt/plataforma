@@ -241,6 +241,47 @@ describe.skipIf(!URL_ADMIN)("inicio de sesión y recuperación de cuenta", () =>
         values (${"c".repeat(64)}, ${u.id}, now() + interval '30 minutes')`).rejects.toThrow();
     });
 
+    /** Estado final que debe quedar tras cruzar una solicitud nueva con el uso del enlace anterior. */
+    async function revisarCruce(u: { id: string; correo: string }, viejo: string) {
+      expect(await consultarEnlace(sql, viejo)).toEqual({ estado: "invalidado" });
+      expect(await enlacesValidos(u.id)).toBe(1);
+      const [{ hash }] = await sql<{ hash: string | null }[]>`select hash_contrasena as hash from usuario where id = ${u.id}`;
+      expect(hash).toBeNull(); // el enlace reemplazado no llegó a cambiar la contraseña
+      const nuevo = await sql<{ enlace: string }[]>`select enlace from buzon_prueba where para = ${u.correo} order by id desc limit 1`;
+      const token = nuevo[0].enlace.split("/recuperar/")[1];
+      expect(await establecerContrasena(sql, token, CLAVE, CLAVE)).toEqual({ ok: true });
+    }
+
+    it("cruce: se usa el enlace anterior y, a mitad del uso, se pide uno nuevo", async () => {
+      const u = await crearUsuario();
+      const viejo = await obtenerEnlace(u.correo);
+      let solicitud: Promise<unknown> = Promise.resolve();
+      const uso = await establecerContrasena(sql, viejo, CLAVE, CLAVE, {
+        antesDeBloquearUsuario: async () => {
+          solicitud = solicitarEnlace(sql, u.correo, PRUEBAS);
+          await new Promise((listo) => setTimeout(listo, 300));
+        },
+      });
+      expect(await solicitud).toEqual({ creado: true, destino: "buzon_prueba" });
+      expect(uso).toMatchObject({ ok: false, estado: "invalidado" });
+      await revisarCruce(u, viejo);
+    });
+
+    it("cruce: se pide un enlace nuevo y, a mitad de la solicitud, se usa el anterior", async () => {
+      const u = await crearUsuario();
+      const viejo = await obtenerEnlace(u.correo);
+      let uso: Promise<unknown> = Promise.resolve();
+      const solicitud = await solicitarEnlace(sql, u.correo, PRUEBAS, {
+        trasBloquearUsuario: async () => {
+          uso = establecerContrasena(sql, viejo, CLAVE, CLAVE);
+          await new Promise((listo) => setTimeout(listo, 300));
+        },
+      });
+      expect(solicitud).toEqual({ creado: true, destino: "buzon_prueba" });
+      expect(await uso).toMatchObject({ ok: false, estado: "invalidado" });
+      await revisarCruce(u, viejo);
+    });
+
     it("si la contraseña cambia mientras se verifica la anterior, no queda sesión válida", async () => {
       const u = await crearUsuario({ contrasena: CLAVE });
       const nueva = "contraseña nueva durante el inicio 1";

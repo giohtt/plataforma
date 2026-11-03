@@ -55,6 +55,8 @@ PostgreSQL local para desarrollo y pruebas: `scripts/db-local.sh iniciar | deten
 - Concurrencia: las solicitudes de enlace de una misma cuenta se atienden una por una (bloqueo de fila), así que
   el límite de 3 por hora se respeta y la base garantiza un solo enlace pendiente por cuenta. Un inicio de sesión
   solo crea la sesión si la contraseña verificada sigue vigente; si cambia al mismo tiempo, esa sesión no queda válida.
+- Orden de bloqueos, igual en todos los flujos: primero el usuario, después sus enlaces y sesiones. Así pedir un
+  enlace nuevo mientras se usa el anterior nunca produce un bloqueo mutuo: una operación termina y la otra la ve.
 - **Buzón de pruebas** (`/pruebas/buzon`): mientras no haya servicio de correo, los enlaces de usuarios ficticios
   aparecen ahí. No existe en producción y no se envía nada.
 - Todo lo que está en `src/app/(privado)` exige sesión, comprobada en el servidor.

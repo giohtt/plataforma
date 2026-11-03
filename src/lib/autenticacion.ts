@@ -36,6 +36,8 @@ export type ResultadoInicio =
 export type PausasPrueba = {
   trasVerificar?: () => Promise<void>;
   dentroDeTransaccion?: () => Promise<void>;
+  trasBloquearUsuario?: () => Promise<void>;
+  antesDeBloquearUsuario?: () => Promise<void>;
 };
 
 export async function iniciarSesion(
@@ -133,6 +135,7 @@ export async function solicitarEnlace(
   sql: Sql,
   correoEscrito: string,
   { entorno, urlBase }: { entorno: Entorno; urlBase: string },
+  pausas: PausasPrueba = {},
 ): Promise<ResultadoSolicitud> {
   const correo = normalizarCorreo(correoEscrito);
   const [usuario] = await sql<{ id: string; nombre: string; activo: boolean; es_prueba: boolean }[]>`
@@ -146,6 +149,7 @@ export async function solicitarEnlace(
   // se atienden una por una, así que el límite por hora se cuenta bien y queda un solo enlace pendiente.
   return sql.begin(async (tx): Promise<ResultadoSolicitud> => {
     await tx`select id from usuario where id = ${usuario.id} for update`;
+    await pausas.trasBloquearUsuario?.();
     const [{ recientes }] = await tx<{ recientes: number }[]>`
       select count(*)::int as recientes from enlace_recuperacion
       where usuario_id = ${usuario.id} and creado_en > now() - interval '1 hour'`;
@@ -195,31 +199,58 @@ export type ResultadoContrasena =
   | { ok: false; error: string; estado?: Exclude<EstadoEnlace["estado"], "valido"> };
 
 /**
- * Usa el enlace para fijar la contraseña. Todo ocurre en una transacción que bloquea el enlace:
- * si dos personas lo usan a la vez, solo una lo consigue. Al terminar, se cierran todas las
- * sesiones abiertas del usuario y se invalidan sus demás enlaces.
+ * Usa el enlace para fijar la contraseña.
+ *
+ * Orden de bloqueos (el mismo en todo este archivo): primero el usuario, después sus enlaces y
+ * sus sesiones. Así una solicitud de enlace nuevo y el uso del anterior nunca se esperan
+ * mutuamente: una termina primero y la otra ve su resultado.
+ *
+ * 1. Se lee el enlace sin bloquear, solo para saber de quién es y responder rápido si ya no sirve.
+ * 2. La contraseña se revisa y se cifra fuera de la transacción, para no retener bloqueos.
+ * 3. En la transacción se bloquea al usuario, se vuelve a validar el enlace (pudo ser usado o
+ *    reemplazado mientras tanto) y solo entonces se cambia la contraseña.
+ * Si dos personas usan el mismo enlace a la vez, solo una lo consigue. Al terminar, se cierran
+ * todas las sesiones abiertas del usuario y se invalidan sus demás enlaces.
  */
 export async function establecerContrasena(
   sql: Sql,
   token: string,
   contrasena: string,
   confirmacion: string,
+  pausas: PausasPrueba = {},
 ): Promise<ResultadoContrasena> {
   if (!formatoTokenValido(token)) return { ok: false, error: "El enlace no es válido.", estado: "inexistente" };
-  return sql.begin(async (tx) => {
-    const [fila] = await tx<{ id: string; usuario_id: string; correo: string; activo: boolean; vencido: boolean; usado_en: Date | null; invalidado_en: Date | null }[]>`
-      select e.id, e.usuario_id, u.correo, u.activo, e.expira_en <= now() as vencido, e.usado_en, e.invalidado_en
-      from enlace_recuperacion e join usuario u on u.id = e.usuario_id
-      where e.token_hash = ${huellaToken(token)}
-      for update of e`;
-    const estado = clasificar(fila);
-    if (estado.estado !== "valido" || !fila) {
-      return { ok: false as const, error: "Este enlace ya no se puede usar.", estado: estado.estado as Exclude<EstadoEnlace["estado"], "valido"> };
-    }
-    const problema = revisarContrasena(contrasena, confirmacion, fila.correo);
-    if (problema) return { ok: false as const, error: problema };
+  const tokenHash = huellaToken(token);
+  type FilaEnlace = { id: string; usuario_id: string; correo: string; activo: boolean; vencido: boolean; usado_en: Date | null; invalidado_en: Date | null };
+  const consulta = (db: Sql | postgres.TransactionSql, bloquear: boolean) => db<FilaEnlace[]>`
+    select e.id, e.usuario_id, u.correo, u.activo, e.expira_en <= now() as vencido, e.usado_en, e.invalidado_en
+    from enlace_recuperacion e join usuario u on u.id = e.usuario_id
+    where e.token_hash = ${tokenHash}
+    ${bloquear ? db`for update of e` : db``}`;
+  const noSirve = (estado: EstadoEnlace["estado"]) => ({
+    ok: false as const,
+    error: "Este enlace ya no se puede usar.",
+    estado: estado as Exclude<EstadoEnlace["estado"], "valido">,
+  });
 
-    const hash = await cifrarContrasena(contrasena);
+  // 1. Lectura sin bloqueo.
+  const [previa] = await consulta(sql, false);
+  const estadoPrevio = clasificar(previa);
+  if (estadoPrevio.estado !== "valido" || !previa) return noSirve(estadoPrevio.estado);
+
+  // 2. Revisar y cifrar sin bloqueos.
+  const problema = revisarContrasena(contrasena, confirmacion, previa.correo);
+  if (problema) return { ok: false, error: problema };
+  const hash = await cifrarContrasena(contrasena);
+  await pausas.antesDeBloquearUsuario?.();
+
+  // 3. Usuario primero, luego el enlace, que se vuelve a validar.
+  return sql.begin(async (tx): Promise<ResultadoContrasena> => {
+    await tx`select id from usuario where id = ${previa.usuario_id} for update`;
+    const [fila] = await consulta(tx, true);
+    const estado = clasificar(fila);
+    if (estado.estado !== "valido" || !fila) return noSirve(estado.estado);
+
     await tx`update usuario set hash_contrasena = ${hash}, contrasena_actualizada_en = now(), actualizado_en = now()
              where id = ${fila.usuario_id}`;
     await tx`update enlace_recuperacion set usado_en = now() where id = ${fila.id}`;
@@ -229,6 +260,6 @@ export async function establecerContrasena(
              where usuario_id = ${fila.usuario_id} and cerrada_en is null`;
     await tx`insert into historial_cambio (entidad, entidad_id, accion, motivo, usuario_id)
              values ('usuario', ${fila.usuario_id}, 'establecer_contrasena', 'Enlace de recuperación de un solo uso', ${fila.usuario_id})`;
-    return { ok: true as const };
+    return { ok: true };
   });
 }
