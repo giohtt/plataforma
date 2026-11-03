@@ -5,7 +5,7 @@ Solo datos ficticios. Sitio de pruebas privado, separado de producción.
 
 | # | Tarea | Terminada cuando… |
 |---|---|---|
-| 1 | Repositorio y entorno | Proyecto base, prototipo guardado, pruebas automáticas en GitHub y sitio de pruebas protegido que muestra «Entorno de pruebas» sin datos. |
+| 1 | Repositorio y entorno ✅ | Proyecto base, prototipo guardado, pruebas automáticas en GitHub y sitio de pruebas protegido que muestra «Entorno de pruebas» sin datos. **Hecho:** publicado en Vercel (Hobby) y protegido para todas las versiones. |
 | 2 | Base de datos y migraciones | Tablas creadas por migraciones versionadas: sucursales, usuarios, roles, permisos, asignaciones e historial. Comando de datos ficticios. |
 | 3 | Inicio y cierre de sesión | Usuarios individuales de prueba. Recuperación con enlace de un solo uso con el que el propio usuario establece su contraseña. |
 | 4 | Permisos y asignación de sucursales | Modelo con todos los perfiles de los manuales; activos solo los necesarios. Sin acceso global ni facultades de autorización por omisión. Dirección se configura de forma explícita. El catálogo incluye los permisos de todos los bloques del [plan general](plan-general.md), sin asignarlos a nadie. |

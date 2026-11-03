@@ -26,7 +26,7 @@ y beneficios, y pases QR individuales.
 ## Orden de implementación
 
 ### Bloque 1. Usuarios, permisos y sucursales (en curso)
-1. ~~Repositorio y entorno.~~ Hecho en GitHub. **Falta publicar el sitio de pruebas en Vercel.**
+1. ~~Repositorio y entorno.~~ Hecho. Sitio de pruebas publicado en Vercel (proyecto `plataforma-pruebas`, plan Hobby, `APP_ENV=pruebas`), protegido con Vercel Authentication para todas las versiones, incluida la dirección principal. Verificado el 3 nov 2026: sin sesión, el sitio redirige al inicio de sesión de Vercel.
 2. Base de datos y migraciones.
 3. Inicio y cierre de sesión; recuperación con enlace de un solo uso para que el usuario fije su contraseña.
 4. Permisos y asignación de sucursales. El catálogo incluye los permisos de todos los bloques, sin asignarlos a nadie.
