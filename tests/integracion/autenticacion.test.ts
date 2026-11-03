@@ -41,7 +41,7 @@ async function obtenerEnlace(correo: string): Promise<string> {
 
 describe.skipIf(!URL_ADMIN)("inicio de sesión y recuperación de cuenta", () => {
   beforeAll(async () => {
-    ({ sql, cerrar } = await crearBaseTemporal({ conexiones: 3 }));
+    ({ sql, cerrar } = await crearBaseTemporal({ conexiones: 8 }));
   });
   afterAll(async () => cerrar?.());
 
@@ -205,6 +205,74 @@ describe.skipIf(!URL_ADMIN)("inicio de sesión y recuperación de cuenta", () =>
       expect(await consultarEnlace(sql, "abc")).toEqual({ estado: "inexistente" });
       expect(await consultarEnlace(sql, "B".repeat(43))).toEqual({ estado: "inexistente" });
       expect(await establecerContrasena(sql, "abc", CLAVE, CLAVE)).toMatchObject({ ok: false, estado: "inexistente" });
+    });
+  });
+
+  describe("concurrencia", () => {
+    /** Enlaces que hoy servirían: ni usados, ni reemplazados, ni vencidos. */
+    async function enlacesValidos(usuarioId: string) {
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from enlace_recuperacion
+        where usuario_id = ${usuarioId} and usado_en is null and invalidado_en is null and expira_en > now()`;
+      return n;
+    }
+
+    it("solicitudes simultáneas dejan como máximo un enlace válido y respetan el límite por hora", async () => {
+      const u = await crearUsuario();
+      const resultados = await Promise.all(
+        Array.from({ length: 6 }, () => solicitarEnlace(sql, u.correo, PRUEBAS)),
+      );
+      const creados = resultados.filter((r) => r.creado).length;
+      expect(creados).toBe(MAX_ENLACES_POR_HORA);
+      expect(resultados.filter((r) => !r.creado)).toEqual(
+        Array.from({ length: 6 - MAX_ENLACES_POR_HORA }, () => ({ creado: false, motivo: "limite" })),
+      );
+      const [{ total }] = await sql<{ total: number }[]>`
+        select count(*)::int as total from enlace_recuperacion where usuario_id = ${u.id}`;
+      expect(total).toBe(MAX_ENLACES_POR_HORA);
+      expect(await enlacesValidos(u.id)).toBe(1);
+    });
+
+    it("la base impide dos enlaces válidos para la misma cuenta aunque falle la aplicación", async () => {
+      const u = await crearUsuario();
+      await obtenerEnlace(u.correo);
+      await expect(sql`
+        insert into enlace_recuperacion (token_hash, usuario_id, expira_en)
+        values (${"c".repeat(64)}, ${u.id}, now() + interval '30 minutes')`).rejects.toThrow();
+    });
+
+    it("si la contraseña cambia mientras se verifica la anterior, no queda sesión válida", async () => {
+      const u = await crearUsuario({ contrasena: CLAVE });
+      const nueva = "contraseña nueva durante el inicio 1";
+      const r = await iniciarSesion(sql, u.correo, CLAVE, {
+        trasVerificar: async () => {
+          const token = await obtenerEnlace(u.correo);
+          expect(await establecerContrasena(sql, token, nueva, nueva)).toEqual({ ok: true });
+        },
+      });
+      expect(r).toEqual({ ok: false, motivo: "credenciales" });
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from sesion where usuario_id = ${u.id} and cerrada_en is null`;
+      expect(n).toBe(0);
+      expect((await iniciarSesion(sql, u.correo, nueva)).ok).toBe(true);
+    });
+
+    it("si el cambio de contraseña llega mientras se crea la sesión, esa sesión queda cerrada", async () => {
+      const u = await crearUsuario({ contrasena: CLAVE });
+      const nueva = "contraseña nueva durante la creación 2";
+      const token = await obtenerEnlace(u.correo);
+      let cambio: Promise<unknown> | null = null;
+      const r = await iniciarSesion(sql, u.correo, CLAVE, {
+        dentroDeTransaccion: async () => {
+          cambio = establecerContrasena(sql, token, nueva, nueva);
+          await new Promise((listo) => setTimeout(listo, 300)); // el cambio debe esperar al inicio en curso
+        },
+      });
+      await cambio;
+      if (r.ok) expect(await validarSesion(sql, r.token)).toBeNull();
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from sesion where usuario_id = ${u.id} and cerrada_en is null`;
+      expect(n).toBe(0);
     });
   });
 

@@ -32,7 +32,18 @@ export type ResultadoInicio =
   | { ok: true; token: string; expiraEn: Date }
   | { ok: false; motivo: "credenciales" | "bloqueado" };
 
-export async function iniciarSesion(sql: Sql, correoEscrito: string, contrasena: string): Promise<ResultadoInicio> {
+/** Puntos de espera solo para pruebas de concurrencia. La aplicación nunca los usa. */
+export type PausasPrueba = {
+  trasVerificar?: () => Promise<void>;
+  dentroDeTransaccion?: () => Promise<void>;
+};
+
+export async function iniciarSesion(
+  sql: Sql,
+  correoEscrito: string,
+  contrasena: string,
+  pausas: PausasPrueba = {},
+): Promise<ResultadoInicio> {
   const correo = normalizarCorreo(correoEscrito);
 
   const [{ fallos }] = await sql<{ fallos: number }[]>`
@@ -58,12 +69,30 @@ export async function iniciarSesion(sql: Sql, correoEscrito: string, contrasena:
     return { ok: false, motivo: "credenciales" };
   }
 
+  await pausas.trasVerificar?.();
+
+  // La sesión solo se crea si la contraseña verificada sigue siendo la vigente. El bloqueo compartido
+  // sobre el usuario hace que un cambio de contraseña simultáneo espere a que esta transacción termine
+  // y, al aplicarse, cierre también esta sesión; o que esta transacción vea la contraseña nueva y no cree nada.
   const token = generarToken();
-  const [sesion] = await sql<{ expira_en: Date }[]>`
-    insert into sesion (token_hash, usuario_id, expira_en)
-    values (${huellaToken(token)}, ${usuario.id}, now() + make_interval(hours => ${DURACION_SESION_HORAS}))
-    returning expira_en`;
-  await sql`insert into intento_acceso (correo, exito, motivo) values (${correo}, true, 'ok')`;
+  const sesion = await sql.begin(async (tx) => {
+    const [vigente] = await tx`
+      select id from usuario
+      where id = ${usuario.id} and activo and hash_contrasena = ${usuario.hash_contrasena}
+      for share`;
+    await pausas.dentroDeTransaccion?.();
+    if (!vigente) return null;
+    const [creada] = await tx<{ expira_en: Date }[]>`
+      insert into sesion (token_hash, usuario_id, expira_en)
+      values (${huellaToken(token)}, ${usuario.id}, now() + make_interval(hours => ${DURACION_SESION_HORAS}))
+      returning expira_en`;
+    await tx`insert into intento_acceso (correo, exito, motivo) values (${correo}, true, 'ok')`;
+    return creada;
+  });
+  if (!sesion) {
+    await sql`insert into intento_acceso (correo, exito, motivo) values (${correo}, false, 'credenciales')`;
+    return { ok: false, motivo: "credenciales" };
+  }
   return { ok: true, token, expiraEn: sesion.expira_en };
 }
 
@@ -111,14 +140,17 @@ export async function solicitarEnlace(
   if (!usuario || !usuario.activo) return { creado: false, motivo: "desconocido" };
   if (entorno === "produccion" || !usuario.es_prueba) return { creado: false, motivo: "sin_canal" };
 
-  const [{ recientes }] = await sql<{ recientes: number }[]>`
-    select count(*)::int as recientes from enlace_recuperacion
-    where usuario_id = ${usuario.id} and creado_en > now() - interval '1 hour'`;
-  if (recientes >= MAX_ENLACES_POR_HORA) return { creado: false, motivo: "limite" };
-
   const token = generarToken();
   const enlace = `${urlBase}/recuperar/${token}`;
-  await sql.begin(async (tx) => {
+  // Todo en una transacción que bloquea al usuario: las solicitudes simultáneas de la misma cuenta
+  // se atienden una por una, así que el límite por hora se cuenta bien y queda un solo enlace pendiente.
+  return sql.begin(async (tx): Promise<ResultadoSolicitud> => {
+    await tx`select id from usuario where id = ${usuario.id} for update`;
+    const [{ recientes }] = await tx<{ recientes: number }[]>`
+      select count(*)::int as recientes from enlace_recuperacion
+      where usuario_id = ${usuario.id} and creado_en > now() - interval '1 hour'`;
+    if (recientes >= MAX_ENLACES_POR_HORA) return { creado: false, motivo: "limite" };
+
     await tx`
       update enlace_recuperacion set invalidado_en = now()
       where usuario_id = ${usuario.id} and usado_en is null and invalidado_en is null`;
@@ -131,8 +163,8 @@ export async function solicitarEnlace(
         'Establece tu contraseña de Fitnessland',
         ${`Hola, ${usuario.nombre}. Usa este enlace para establecer tu contraseña. Caduca en ${DURACION_ENLACE_MINUTOS} minutos y solo funciona una vez. Si no lo pediste, ignóralo.`},
         ${enlace})`;
+    return { creado: true, destino: "buzon_prueba" };
   });
-  return { creado: true, destino: "buzon_prueba" };
 }
 
 export type EstadoEnlace =

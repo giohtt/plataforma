@@ -36,6 +36,9 @@ create table enlace_recuperacion (
 );
 create unique index enlace_token_unico on enlace_recuperacion (token_hash);
 create index enlace_usuario on enlace_recuperacion (usuario_id, creado_en);
+-- Como máximo un enlace pendiente por cuenta: lo garantiza la base aunque la aplicación falle.
+create unique index enlace_un_pendiente_por_usuario on enlace_recuperacion (usuario_id)
+  where usado_en is null and invalidado_en is null;
 
 -- Intentos de inicio de sesión, para limitar intentos fallidos y dejar rastro.
 create table intento_acceso (

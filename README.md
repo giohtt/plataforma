@@ -52,6 +52,9 @@ PostgreSQL local para desarrollo y pruebas: `scripts/db-local.sh iniciar | deten
 - Cinco intentos fallidos en 15 minutos bloquean el correo durante ese tiempo. El mensaje de error no revela si el correo existe.
 - Nadie asigna contraseñas: cada persona la fija con un enlace de un solo uso que caduca en 30 minutos. Pedir otro
   invalida el anterior; usarlo cierra las sesiones abiertas de esa cuenta.
+- Concurrencia: las solicitudes de enlace de una misma cuenta se atienden una por una (bloqueo de fila), así que
+  el límite de 3 por hora se respeta y la base garantiza un solo enlace pendiente por cuenta. Un inicio de sesión
+  solo crea la sesión si la contraseña verificada sigue vigente; si cambia al mismo tiempo, esa sesión no queda válida.
 - **Buzón de pruebas** (`/pruebas/buzon`): mientras no haya servicio de correo, los enlaces de usuarios ficticios
   aparecen ahí. No existe en producción y no se envía nada.
 - Todo lo que está en `src/app/(privado)` exige sesión, comprobada en el servidor.
