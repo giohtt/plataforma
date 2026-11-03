@@ -45,6 +45,17 @@ npm run build && npm run test:e2e
 
 PostgreSQL local para desarrollo y pruebas: `scripts/db-local.sh iniciar | detener | estado`.
 
+## Sesiones y recuperación de cuenta
+
+- Cada persona entra con su correo y su contraseña. Las contraseñas se guardan con scrypt; las sesiones y los
+  enlaces, solo como huella SHA-256. La cookie de sesión es `__Host-`, `HttpOnly`, `Secure` y `SameSite=Lax`, y dura 12 horas.
+- Cinco intentos fallidos en 15 minutos bloquean el correo durante ese tiempo. El mensaje de error no revela si el correo existe.
+- Nadie asigna contraseñas: cada persona la fija con un enlace de un solo uso que caduca en 30 minutos. Pedir otro
+  invalida el anterior; usarlo cierra las sesiones abiertas de esa cuenta.
+- **Buzón de pruebas** (`/pruebas/buzon`): mientras no haya servicio de correo, los enlaces de usuarios ficticios
+  aparecen ahí. No existe en producción y no se envía nada.
+- Todo lo que está en `src/app/(privado)` exige sesión, comprobada en el servidor.
+
 ## Base de datos
 
 - Migraciones en `db/migraciones/`, en SQL, numeradas. **Una migración aplicada no se edita**: los cambios van en una nueva.

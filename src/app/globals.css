@@ -108,3 +108,127 @@ h3 {
     animation: none !important;
   }
 }
+
+/* --- Cabecera con marca --- */
+.cabecera-marca {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.cabecera-logo {
+  height: 56px;
+  width: auto;
+}
+.cabecera-titulo {
+  font-size: 24px;
+  font-weight: 800;
+}
+.titulo-seccion {
+  font-size: 18px;
+  font-weight: 800;
+}
+.contenedor-angosto {
+  max-width: 480px;
+}
+
+/* --- Formularios --- */
+.formulario {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.campo {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.campo label {
+  font-weight: 600;
+  font-size: 14px;
+}
+.campo input {
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid #cfd5dc;
+  border-radius: 10px;
+  padding: 11px 12px;
+  width: 100%;
+}
+.boton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 15px var(--f-body);
+  border-radius: 11px;
+  padding: 11px 16px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--fg);
+  text-decoration: none;
+}
+.boton-principal {
+  background: var(--brand);
+  color: var(--brand-ink);
+  border-color: var(--brand);
+}
+.boton[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.aviso {
+  margin: 0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14.5px;
+}
+.aviso-error {
+  background: #fdecea;
+  border: 1px solid #f1b6b0;
+  color: var(--bad);
+}
+.aviso-ok {
+  background: var(--ok-soft);
+  border: 1px solid #9ccfae;
+}
+.aviso-info {
+  background: var(--info-soft);
+  border: 1px solid #a7c3e6;
+}
+
+/* --- Barra de sesión --- */
+.barra-sesion {
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.barra-sesion-interior {
+  max-width: 1080px;
+  margin-inline: auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.barra-correo {
+  display: inline;
+}
+
+/* --- Buzón de pruebas --- */
+.lista-mensajes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lista-mensajes p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

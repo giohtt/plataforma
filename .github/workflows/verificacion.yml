@@ -56,4 +56,8 @@ jobs:
       - name: Instalar navegador de pruebas
         run: npx playwright install --with-deps chromium
       - name: Pruebas de extremo a extremo
-        run: npm run test:e2e
+        run: |
+          psql "$TEST_DATABASE_URL" -c "create database e2e"
+          npm run test:e2e
+        env:
+          E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/e2e
