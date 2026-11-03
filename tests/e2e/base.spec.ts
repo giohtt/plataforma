@@ -30,8 +30,20 @@ test("/api/estado responde sin datos de operación", async ({ request }) => {
   expect(res.status()).toBe(200);
   expect(res.headers()["cache-control"]).toContain("no-store");
   const cuerpo = await res.json();
-  expect(cuerpo).toMatchObject({ estado: "ok", entorno: "pruebas" });
-  expect(Object.keys(cuerpo).sort()).toEqual(["entorno", "estado", "hora", "version"]);
+  expect(cuerpo).toMatchObject({
+    estado: "ok",
+    entorno: "pruebas",
+    baseDatos: "sin_configurar",
+    migracionesAplicadas: null,
+  });
+  expect(Object.keys(cuerpo).sort()).toEqual([
+    "baseDatos",
+    "entorno",
+    "estado",
+    "hora",
+    "migracionesAplicadas",
+    "version",
+  ]);
 });
 
 test("el sitio de pruebas pide no aparecer en buscadores y envía encabezados de seguridad", async ({
