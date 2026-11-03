@@ -9,12 +9,16 @@
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "vercel-build": "node scripts/migrar.mjs && node scripts/datos-prueba.mjs --solo-pruebas && next build",
+    "db:migrar": "node scripts/migrar.mjs",
+    "db:datos-prueba": "node scripts/datos-prueba.mjs"
   },
   "dependencies": {
     "@fontsource-variable/figtree": "5.2.10",
     "@fontsource/ibm-plex-mono": "5.2.7",
     "next": "16.4.3",
+    "postgres": "3.4.9",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },

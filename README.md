@@ -21,7 +21,7 @@ visible y el sitio pide no aparecer en buscadores.
 ## Herramientas
 
 - Next.js 16 con TypeScript (interfaz y servidor).
-- PostgreSQL (a partir de la tarea 2).
+- PostgreSQL con migraciones en SQL y el cliente `postgres`.
 - Vitest (pruebas unitarias) y Playwright (pruebas de extremo a extremo).
 
 ## Uso local
@@ -44,6 +44,16 @@ npm run build && npm run test:e2e
 ```
 
 PostgreSQL local para desarrollo y pruebas: `scripts/db-local.sh iniciar | detener | estado`.
+
+## Base de datos
+
+- Migraciones en `db/migraciones/`, en SQL, numeradas. **Una migración aplicada no se edita**: los cambios van en una nueva.
+- `npm run db:migrar` aplica las pendientes (requiere `DATABASE_URL`).
+- `npm run db:datos-prueba` carga sucursales y usuarios ficticios, sin asignar roles ni sucursales. Se niega a correr en producción.
+- Al publicar en Vercel (`vercel-build`) se aplican las migraciones y, solo si `APP_ENV=pruebas`, los datos ficticios.
+  Sin `DATABASE_URL`, las versiones de vista previa no tocan ninguna base; la producción de Vercel no se publica.
+- `/api/estado` indica si la base está conectada y cuántas migraciones tiene, sin datos de operación.
+- Las pruebas de base de datos usan `TEST_DATABASE_URL` y crean y borran una base temporal en cada ejecución.
 
 ## Estructura
 
