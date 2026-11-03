@@ -75,6 +75,10 @@ Tres concesiones distintas, que se otorgan por separado y nunca por omisión:
 - `tiene_permiso(usuario, permiso, sucursal)` en la base es la única definición; la aplicación no decide por su cuenta.
 - Sin permiso, páginas y API responden lo mismo que si la sucursal no existiera (404).
 - Los perfiles solo tienen por ahora los permisos del bloque 1; cada bloque agrega los suyos.
+- `tiene_permiso` no compara importes. Al implementar gastos (bloque 6), aprobar deberá comprobar en el servidor,
+  en la misma transacción, la sucursal, la vigencia de la facultad y que el importe no supere su límite.
+  Ver [plan general, bloque 6](docs/plan-general.md).
+- Los identificadores en rutas y API se validan con formato exacto antes de consultar la base.
 
 ## Base de datos
 

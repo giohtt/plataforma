@@ -71,6 +71,19 @@ y beneficios, y pases QR individuales.
 1. Solicitud, autorización, pago desde un lugar de efectivo y comprobación.
 2. Bandeja de autorizaciones. Mientras no haya límites ni delegaciones configurados, todo va a Dirección.
 3. Sucursal que paga y sucursal beneficiada.
+4. **Regla obligatoria para autorizar un gasto**, comprobada en el servidor en el momento de aprobar,
+   dentro de la misma transacción que registra la aprobación (no basta con ocultar el botón):
+   - **Sucursal:** la facultad `autorizacion.gasto` de quien aprueba cubre la sucursal del gasto
+     (otorgada para esa sucursal o para todas).
+   - **Vigencia:** la facultad está vigente en ese momento (no vencida, no futura, no revocada) y la
+     persona sigue activa.
+   - **Importe:** el importe del gasto es menor o igual que el `limite_monto` de esa facultad. Si supera
+     el límite, la solicitud se escala; nunca se aprueba parcialmente.
+   - **Separación:** quien solicita o paga un gasto no lo aprueba.
+   - Si el importe u otra condición cambia después de aprobar, la aprobación deja de valer y se pide de nuevo.
+   - `tiene_permiso` solo responde si la persona tiene la facultad en la sucursal; **no compara importes**.
+     La comparación con el límite se agrega en el bloque 6, con pruebas de importe igual al límite,
+     superior al límite, facultad vencida, facultad de otra sucursal y solicitud directa al servidor.
 - **Reporte básico:** gastos por estado, sucursal, lugar de efectivo y autorizador.
 - **Decisiones que necesita:** cómo aprobará Gloria dentro del programa; límites y suplentes; comprobantes y plazos.
 

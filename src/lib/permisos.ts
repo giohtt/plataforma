@@ -40,9 +40,18 @@ export async function sucursalAccesiblePorCodigo(sql: Sql, usuarioId: string, co
   return lista[0] ?? null;
 }
 
-/** Igual que la anterior, por identificador. */
+/**
+ * Formato exacto de un identificador (UUID: 8-4-4-4-12 dígitos hexadecimales).
+ * Se valida antes de consultar la base: un valor mal formado nunca llega a PostgreSQL.
+ */
+const FORMATO_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function esIdentificadorValido(id: string): boolean {
+  return FORMATO_ID.test(id);
+}
+
+/** Igual que la anterior, por identificador. Formato inválido: null, igual que sin permiso. */
 export async function sucursalAccesiblePorId(sql: Sql, usuarioId: string, id: string): Promise<SucursalAccesible | null> {
-  if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+  if (!esIdentificadorValido(id)) return null;
   const lista = await sql<SucursalAccesible[]>`
     select s.id, s.codigo, s.nombre, s.color, s.estado_operativo as "estadoOperativo", s.zona_horaria as "zonaHoraria",
            coalesce(array(select r from perfiles_en_sucursal(${usuarioId}, s.id) r order by r), '{}') as perfiles
@@ -51,6 +60,11 @@ export async function sucursalAccesiblePorId(sql: Sql, usuarioId: string, id: st
   return lista[0] ?? null;
 }
 
+/**
+ * ¿Tiene el usuario el permiso en la sucursal? Para facultades de autorización solo dice si la tiene
+ * vigente para esa sucursal; NO compara importes. Al aprobar un gasto (bloque 6) hay que comprobar
+ * además, en el servidor y en la misma transacción, que el importe no supere limite_monto.
+ */
 export async function tienePermiso(sql: Sql, usuarioId: string, permiso: string, sucursalId: string | null = null): Promise<boolean> {
   const [{ ok }] = await sql<{ ok: boolean }[]>`select tiene_permiso(${usuarioId}, ${permiso}, ${sucursalId}) as ok`;
   return ok;

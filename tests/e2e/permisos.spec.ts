@@ -100,6 +100,26 @@ test("Recepción de Tenango: el servidor rechaza solicitudes directas a otra suc
   expect((await pedir(page, `/api/sucursales/${randomUUID()}`)).status).toBe(404);
 });
 
+test("API: un identificador de sucursal mal formado responde 404, nunca un error del servidor", async ({ page }) => {
+  await entrar(page, await crearCuenta([["recepcion", "TEN"]], { general: "direccion" }));
+  const ten = await idSucursal("TEN");
+  // Incluso con acceso a todas las sucursales, un formato inválido no llega a la base.
+  for (const malo of [
+    "abc",
+    "TEN",
+    "-".repeat(36),
+    "g".repeat(36),
+    `${ten}0`,
+    ten.replaceAll("-", ""),
+    "%27%20or%20%271%27%3D%271",
+    "..%2F..%2Fapi%2Festado",
+  ]) {
+    expect(await pedir(page, `/api/sucursales/${malo}`), malo).toEqual({ status: 404, cuerpo: { error: "No encontrada" } });
+  }
+  // El mismo identificador, bien formado, sí responde.
+  expect((await pedir(page, `/api/sucursales/${ten}`)).status).toBe(200);
+});
+
 test("Dirección con alcance general: ve todas las sucursales", async ({ page }) => {
   await entrar(page, await crearCuenta([["direccion", "TEN"]], { general: "direccion" }));
   const [{ total }] = await sql<{ total: number }[]>`select count(*)::int as total from sucursal`;

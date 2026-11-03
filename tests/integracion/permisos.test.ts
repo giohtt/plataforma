@@ -57,6 +57,10 @@ describe.skipIf(!URL_ADMIN)("permisos y alcance por sucursal", () => {
     expect(await sucursalAccesiblePorCodigo(sql, u, "STG")).toBeNull();
     expect(await sucursalAccesiblePorId(sql, u, ids.STG)).toBeNull();
     expect((await sucursalAccesiblePorId(sql, u, ids.TEN))?.codigo).toBe("TEN");
+    // Un identificador mal formado no llega a la base: responde igual que sin permiso, sin error.
+    for (const malo of ["-".repeat(36), "g".repeat(36), "abc", `${ids.TEN}x`]) {
+      expect(await sucursalAccesiblePorId(sql, u, malo)).toBeNull();
+    }
     expect(await tienePermiso(sql, u, "sucursal.editar", ids.TEN)).toBe(false);
     expect(await tienePermiso(sql, u, "sucursal.crear")).toBe(false);
   });
