@@ -6,8 +6,8 @@ Solo datos ficticios. Sitio de pruebas privado, separado de producción.
 | # | Tarea | Terminada cuando… |
 |---|---|---|
 | 1 | Repositorio y entorno ✅ | Proyecto base, prototipo guardado, pruebas automáticas en GitHub y sitio de pruebas protegido que muestra «Entorno de pruebas» sin datos. **Hecho:** publicado en Vercel (Hobby) y protegido para todas las versiones. |
-| 2 | Base de datos y migraciones | Tablas creadas por migraciones versionadas: sucursales, usuarios, roles, permisos, asignaciones e historial. Comando de datos ficticios. |
-| 3 | Inicio y cierre de sesión | Usuarios individuales de prueba. Recuperación con enlace de un solo uso con el que el propio usuario establece su contraseña. |
+| 2 | Base de datos y migraciones ✅ | Tablas creadas por migraciones versionadas: sucursales, usuarios, roles, permisos, asignaciones e historial. Comando de datos ficticios. **Hecho:** Neon (plan gratuito, proyecto `fitnessland-pruebas`, separado de producción); `DATABASE_URL` solo en Vercel, secreta y solo para Production. Verificado el 3 nov 2026: `/api/estado` muestra `baseDatos: conectada` y `migracionesAplicadas: 2`. |
+| 3 | Inicio y cierre de sesión (en revisión) | Usuarios individuales de prueba. Recuperación con enlace de un solo uso con el que el propio usuario establece su contraseña. Mientras no haya servicio de correo, el enlace se entrega en el buzón de pruebas (solo fuera de producción y solo para usuarios ficticios). |
 | 4 | Permisos y asignación de sucursales | Modelo con todos los perfiles de los manuales; activos solo los necesarios. Sin acceso global ni facultades de autorización por omisión. Dirección se configura de forma explícita. El catálogo incluye los permisos de todos los bloques del [plan general](plan-general.md), sin asignarlos a nadie. |
 | 5 | Catálogo persistente de sucursales | Crear, editar y desactivar; nombre y código únicos; historial; crear no asigna a nadie. |
 | 6 | Pruebas de acceso permitido y denegado | Solicitudes directas al servidor: recepción no crea sucursales ni consulta otra sucursal. |

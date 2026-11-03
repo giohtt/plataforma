@@ -27,8 +27,8 @@ y beneficios, y pases QR individuales.
 
 ### Bloque 1. Usuarios, permisos y sucursales (en curso)
 1. ~~Repositorio y entorno.~~ Hecho. Sitio de pruebas publicado en Vercel (proyecto `plataforma-pruebas`, plan Hobby, `APP_ENV=pruebas`), protegido con Vercel Authentication para todas las versiones, incluida la dirección principal. Verificado el 3 nov 2026: sin sesión, el sitio redirige al inicio de sesión de Vercel.
-2. Base de datos y migraciones.
-3. Inicio y cierre de sesión; recuperación con enlace de un solo uso para que el usuario fije su contraseña.
+2. ~~Base de datos y migraciones.~~ Hecho. Neon (plan gratuito) conectado al sitio de pruebas; tablas iniciales y datos ficticios cargados al publicar. Sin respaldos programados: suficiente solo para datos ficticios.
+3. Inicio y cierre de sesión; recuperación con enlace de un solo uso para que el usuario fije su contraseña. En revisión. Envío por correo pendiente de elegir servicio.
 4. Permisos y asignación de sucursales. El catálogo incluye los permisos de todos los bloques, sin asignarlos a nadie.
 5. Catálogo persistente de sucursales.
 6. Pruebas de acceso permitido y denegado.

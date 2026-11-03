@@ -1,14 +1,17 @@
+import { readdirSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
-test("la portada muestra la franja de pruebas y el logo", async ({ page }) => {
-  await page.goto("/");
+const MIGRACIONES = readdirSync("db/migraciones").filter((a) => a.endsWith(".sql")).length;
+
+test("la pantalla de inicio de sesión muestra la franja de pruebas y el logo", async ({ page }) => {
+  await page.goto("/iniciar-sesion");
   await expect(page.getByTestId("franja-entorno")).toHaveText(/entorno de pruebas/i);
   await expect(page.getByRole("img", { name: /fitness land/i })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Plataforma administrativa" })).toBeVisible();
 });
 
 test("los estilos del diseño se aplican", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/iniciar-sesion");
   const estilos = await page.evaluate(() => {
     const s = getComputedStyle(document.body);
     return { fondo: s.backgroundColor, letra: s.fontFamily };
@@ -18,7 +21,7 @@ test("los estilos del diseño se aplican", async ({ page }) => {
 });
 
 test("la página no tiene desplazamiento horizontal", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/iniciar-sesion");
   const desborde = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );
@@ -33,8 +36,8 @@ test("/api/estado responde sin datos de operación", async ({ request }) => {
   expect(cuerpo).toMatchObject({
     estado: "ok",
     entorno: "pruebas",
-    baseDatos: "sin_configurar",
-    migracionesAplicadas: null,
+    baseDatos: "conectada",
+    migracionesAplicadas: MIGRACIONES,
   });
   expect(Object.keys(cuerpo).sort()).toEqual([
     "baseDatos",
@@ -49,7 +52,7 @@ test("/api/estado responde sin datos de operación", async ({ request }) => {
 test("el sitio de pruebas pide no aparecer en buscadores y envía encabezados de seguridad", async ({
   request,
 }) => {
-  const res = await request.get("/");
+  const res = await request.get("/iniciar-sesion");
   const h = res.headers();
   expect(h["x-robots-tag"]).toContain("noindex");
   expect(h["x-content-type-options"]).toBe("nosniff");

@@ -2,6 +2,10 @@ import { defineConfig, devices } from "@playwright/test";
 
 const PUERTO = Number(process.env.PUERTO_E2E ?? 3100);
 
+/** Base exclusiva para estas pruebas (se migra al arrancar). Obligatoria: el inicio de sesión la necesita. */
+const BASE_E2E = process.env.E2E_DATABASE_URL;
+if (!BASE_E2E) throw new Error("Falta E2E_DATABASE_URL para las pruebas de extremo a extremo.");
+
 /**
  * Pruebas de extremo a extremo contra la aplicación compilada (`npm run build`).
  * Se levanta un servidor local en modo "pruebas" con datos ficticios.
@@ -18,10 +22,10 @@ export default defineConfig({
     { name: "celular", use: { ...devices["Pixel 7"] } },
   ],
   webServer: {
-    command: `npx next start -p ${PUERTO} -H 127.0.0.1`,
+    command: `node scripts/migrar.mjs && npx next start -p ${PUERTO} -H 127.0.0.1`,
     url: `http://127.0.0.1:${PUERTO}/api/estado`,
     reuseExistingServer: false,
-    env: { APP_ENV: "pruebas" },
+    env: { APP_ENV: "pruebas", DATABASE_URL: BASE_E2E },
     timeout: 60_000,
   },
 });
