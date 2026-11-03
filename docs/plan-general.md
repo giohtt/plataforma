@@ -28,8 +28,8 @@ y beneficios, y pases QR individuales.
 ### Bloque 1. Usuarios, permisos y sucursales (en curso)
 1. ~~Repositorio y entorno.~~ Hecho. Sitio de pruebas publicado en Vercel (proyecto `plataforma-pruebas`, plan Hobby, `APP_ENV=pruebas`), protegido con Vercel Authentication para todas las versiones, incluida la dirección principal. Verificado el 3 nov 2026: sin sesión, el sitio redirige al inicio de sesión de Vercel.
 2. ~~Base de datos y migraciones.~~ Hecho. Neon (plan gratuito) conectado al sitio de pruebas; tablas iniciales y datos ficticios cargados al publicar. Sin respaldos programados: suficiente solo para datos ficticios.
-3. Inicio y cierre de sesión; recuperación con enlace de un solo uso para que el usuario fije su contraseña. En revisión. Envío por correo pendiente de elegir servicio.
-4. Permisos y asignación de sucursales. El catálogo incluye los permisos de todos los bloques, sin asignarlos a nadie.
+3. ~~Inicio y cierre de sesión; recuperación con enlace de un solo uso.~~ Hecho y probado en el sitio de pruebas. Envío por correo pendiente de elegir servicio.
+4. Permisos y asignación de sucursales: perfil por sucursal, alcance general y facultades con límite, otorgados por separado. En revisión.
 5. Catálogo persistente de sucursales.
 6. Pruebas de acceso permitido y denegado.
 - **Reporte básico:** usuarios y sus asignaciones por sucursal.
@@ -71,6 +71,19 @@ y beneficios, y pases QR individuales.
 1. Solicitud, autorización, pago desde un lugar de efectivo y comprobación.
 2. Bandeja de autorizaciones. Mientras no haya límites ni delegaciones configurados, todo va a Dirección.
 3. Sucursal que paga y sucursal beneficiada.
+4. **Regla obligatoria para autorizar un gasto**, comprobada en el servidor en el momento de aprobar,
+   dentro de la misma transacción que registra la aprobación (no basta con ocultar el botón):
+   - **Sucursal:** la facultad `autorizacion.gasto` de quien aprueba cubre la sucursal del gasto
+     (otorgada para esa sucursal o para todas).
+   - **Vigencia:** la facultad está vigente en ese momento (no vencida, no futura, no revocada) y la
+     persona sigue activa.
+   - **Importe:** el importe del gasto es menor o igual que el `limite_monto` de esa facultad. Si supera
+     el límite, la solicitud se escala; nunca se aprueba parcialmente.
+   - **Separación:** quien solicita o paga un gasto no lo aprueba.
+   - Si el importe u otra condición cambia después de aprobar, la aprobación deja de valer y se pide de nuevo.
+   - `tiene_permiso` solo responde si la persona tiene la facultad en la sucursal; **no compara importes**.
+     La comparación con el límite se agrega en el bloque 6, con pruebas de importe igual al límite,
+     superior al límite, facultad vencida, facultad de otra sucursal y solicitud directa al servidor.
 - **Reporte básico:** gastos por estado, sucursal, lugar de efectivo y autorizador.
 - **Decisiones que necesita:** cómo aprobará Gloria dentro del programa; límites y suplentes; comprobantes y plazos.
 

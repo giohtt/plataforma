@@ -61,6 +61,25 @@ PostgreSQL local para desarrollo y pruebas: `scripts/db-local.sh iniciar | deten
   aparecen ahí. No existe en producción y no se envía nada.
 - Todo lo que está en `src/app/(privado)` exige sesión, comprobada en el servidor.
 
+## Permisos y alcance
+
+Tres concesiones distintas, que se otorgan por separado y nunca por omisión:
+
+| Concesión | Tabla | Qué da |
+|---|---|---|
+| Perfil en una sucursal | `asignacion` | Los permisos del perfil en esa sucursal. Siempre con sucursal; nunca «todas». |
+| Alcance general | `alcance_general` | El perfil en todas las sucursales, incluidas las que se creen después. Es lo único que habilita permisos generales (crear sucursales o usuarios). |
+| Facultad expresa | `facultad_otorgada` | Un permiso puntual para una persona. Las de autorización exigen límite de monto y no pueden formar parte de un perfil. |
+
+- Todo con vigencia (desde, hasta, revocado), motivo y quién lo otorgó. Un usuario desactivado pierde todo.
+- `tiene_permiso(usuario, permiso, sucursal)` en la base es la única definición; la aplicación no decide por su cuenta.
+- Sin permiso, páginas y API responden lo mismo que si la sucursal no existiera (404).
+- Los perfiles solo tienen por ahora los permisos del bloque 1; cada bloque agrega los suyos.
+- `tiene_permiso` no compara importes. Al implementar gastos (bloque 6), aprobar deberá comprobar en el servidor,
+  en la misma transacción, la sucursal, la vigencia de la facultad y que el importe no supere su límite.
+  Ver [plan general, bloque 6](docs/plan-general.md).
+- Los identificadores en rutas y API se validan con formato exacto antes de consultar la base.
+
 ## Base de datos
 
 - Migraciones en `db/migraciones/`, en SQL, numeradas. **Una migración aplicada no se edita**: los cambios van en una nueva.

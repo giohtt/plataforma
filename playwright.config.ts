@@ -22,7 +22,7 @@ export default defineConfig({
     { name: "celular", use: { ...devices["Pixel 7"] } },
   ],
   webServer: {
-    command: `node scripts/migrar.mjs && npx next start -p ${PUERTO} -H 127.0.0.1`,
+    command: `node scripts/migrar.mjs && node scripts/datos-prueba.mjs && npx next start -p ${PUERTO} -H 127.0.0.1`,
     url: `http://127.0.0.1:${PUERTO}/api/estado`,
     reuseExistingServer: false,
     env: { APP_ENV: "pruebas", DATABASE_URL: BASE_E2E },

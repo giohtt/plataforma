@@ -9,7 +9,14 @@ import path from "node:path";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { aplicarMigraciones, DIRECTORIO_MIGRACIONES } from "../../scripts/migrar.mjs";
-import { cargarDatosPrueba, SUCURSALES_PRUEBA, USUARIOS_PRUEBA } from "../../scripts/datos-prueba.mjs";
+import {
+  ALCANCES_PRUEBA,
+  ASIGNACIONES_PRUEBA,
+  cargarDatosPrueba,
+  FACULTADES_PRUEBA,
+  SUCURSALES_PRUEBA,
+  USUARIOS_PRUEBA,
+} from "../../scripts/datos-prueba.mjs";
 
 const URL_ADMIN = process.env.TEST_DATABASE_URL;
 if (!URL_ADMIN && process.env.CI) {
@@ -106,11 +113,20 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       ]);
     });
 
-    it("ningún rol tiene permisos ni nadie tiene asignaciones al terminar las migraciones", async () => {
-      const [{ n: rp }] = await sql`select count(*)::int as n from rol_permiso`;
+    it("al terminar las migraciones nadie tiene asignaciones, alcance general ni facultades", async () => {
       const [{ n: as }] = await sql`select count(*)::int as n from asignacion`;
+      const [{ n: ag }] = await sql`select count(*)::int as n from alcance_general`;
       const [{ n: fa }] = await sql`select count(*)::int as n from facultad_otorgada`;
-      expect([rp, as, fa]).toEqual([0, 0, 0]);
+      expect([as, ag, fa]).toEqual([0, 0, 0]);
+    });
+
+    it("los perfiles solo tienen permisos del bloque 1 y ninguno de autorización", async () => {
+      const filas = await sql`
+        select rp.rol, rp.permiso, p.bloque, p.es_autorizacion from rol_permiso rp join permiso p on p.clave = rp.permiso`;
+      expect(filas.length).toBeGreaterThan(0);
+      expect(filas.every((f) => f.bloque === 1 && !f.es_autorizacion)).toBe(true);
+      const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso);
+      expect(recepcion).toEqual(["sucursal.consultar"]);
     });
 
     it("una facultad de autorización no puede formar parte de un rol", async () => {
@@ -122,7 +138,7 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       await sql`delete from rol_permiso where rol = 'recepcion'`;
     });
 
-    it("una asignación exige sucursal o «todas» explícito, nunca ambas ni ninguna", async () => {
+    it("una asignación de perfil es siempre para una sucursal; «todas» se otorga aparte", async () => {
       const [u] = await sql`insert into usuario (nombre, correo) values ('Ana Prueba', 'ana@prueba.invalid') returning id`;
       const [s] = await sql`select id from sucursal where codigo = 'UNI'`;
       await debeFallar(
@@ -134,8 +150,12 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       );
       await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo)
                 values (${u.id}, 'recepcion', ${s.id}, 'Asignación de prueba')`;
-      await sql`insert into asignacion (usuario_id, rol, todas_las_sucursales, motivo)
-                values (${u.id}, 'direccion', true, 'Alcance general explícito de prueba')`;
+      await debeFallar(
+        (tx) => tx`insert into asignacion (usuario_id, rol, todas_las_sucursales, motivo)
+                   values (${u.id}, 'direccion', true, 'todas por asignación')`,
+      );
+      await sql`insert into alcance_general (usuario_id, rol, motivo)
+                values (${u.id}, 'direccion', 'Alcance general explícito de prueba')`;
     });
 
     it("una asignación exige motivo", async () => {
@@ -165,18 +185,24 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
   });
 
   describe("datos ficticios", () => {
-    it("se cargan sin asignar nada y se pueden repetir sin duplicar", async () => {
+    it("se cargan con sus accesos y se pueden repetir sin duplicar", async () => {
       const primera = await cargarDatosPrueba(sql, { entorno: "pruebas" });
-      expect(primera).toEqual({ sucursales: SUCURSALES_PRUEBA.length, usuarios: USUARIOS_PRUEBA.length });
+      expect(primera).toEqual({
+        sucursales: SUCURSALES_PRUEBA.length,
+        usuarios: USUARIOS_PRUEBA.length,
+        asignaciones: ASIGNACIONES_PRUEBA.length,
+        alcances: ALCANCES_PRUEBA.length,
+        facultades: FACULTADES_PRUEBA.length,
+      });
       const segunda = await cargarDatosPrueba(sql, { entorno: "pruebas" });
-      expect(segunda).toEqual({ sucursales: 0, usuarios: 0 });
+      expect(segunda).toEqual({ sucursales: 0, usuarios: 0, asignaciones: 0, alcances: 0, facultades: 0 });
 
       const [{ n }] = await sql`select count(*)::int as n from usuario where es_prueba`;
       expect(n).toBe(USUARIOS_PRUEBA.length);
-      const sinAsignar = await sql`
-        select u.correo from usuario u
-        where u.es_prueba and exists (select 1 from asignacion a where a.usuario_id = u.id)`;
-      expect(sinAsignar).toEqual([]);
+      const [sin] = await sql`
+        select count(*)::int as n from asignacion a join usuario u on u.id = a.usuario_id
+        where u.correo = 'sin.asignaciones@prueba.fitnessland.invalid'`;
+      expect(sin.n).toBe(0);
     });
 
     it("todos los correos de prueba usan el dominio reservado .invalid", () => {
