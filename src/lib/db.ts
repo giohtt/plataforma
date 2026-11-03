@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { prepararUrlConexion } from "../../scripts/conexion.mjs";
 
 /**
  * Conexión a PostgreSQL. La dirección viene de DATABASE_URL, que se configura en el
@@ -9,7 +10,7 @@ let cliente: postgres.Sql | null = null;
 export function obtenerBaseDatos(): postgres.Sql | null {
   const url = process.env.DATABASE_URL;
   if (!url) return null;
-  cliente ??= postgres(url, {
+  cliente ??= postgres(prepararUrlConexion(url), {
     prepare: false, // compatible con el agrupador de conexiones de Neon
     max: 1,
     idle_timeout: 20,

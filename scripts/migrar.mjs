@@ -14,6 +14,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import postgres from "postgres";
+import { prepararUrlConexion } from "./conexion.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 export const DIRECTORIO_MIGRACIONES = path.resolve(AQUI, "..", "db", "migraciones");
@@ -72,7 +73,7 @@ export async function aplicarMigraciones(sql, { directorio = DIRECTORIO_MIGRACIO
 
 /** Opciones de conexión. prepare:false permite usar el agrupador de conexiones de Neon. */
 export function conectar(url) {
-  return postgres(url, { prepare: false, max: 1, connect_timeout: 10, onnotice: () => {} });
+  return postgres(prepararUrlConexion(url), { prepare: false, max: 1, connect_timeout: 10, onnotice: () => {} });
 }
 
 async function principal() {
