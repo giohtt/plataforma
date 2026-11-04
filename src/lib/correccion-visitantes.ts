@@ -130,10 +130,17 @@ export type Correccion = {
   en: Date;
 };
 
-/** Correcciones de un expediente, más recientes primero. El teléfono, enmascarado. */
+/**
+ * Correcciones de un expediente, más recientes primero, con el teléfono enmascarado.
+ * Solo para quien puede corregir ese expediente (permiso visitante.corregir en la sucursal donde se
+ * creó). Para cualquier otra cuenta devuelve null: ni datos anteriores ni motivos salen del servidor.
+ */
 export async function correccionesDeVisitante(sql: Sql, usuarioId: string, codigo: string, id: string): Promise<Correccion[] | null> {
   if (!esIdentificadorValido(id)) return null;
   if (!(await sucursalConPermiso(sql, usuarioId, codigo, "visitante.consultar"))) return null;
+  const [permitido] = await sql<{ ok: boolean }[]>`
+    select tiene_permiso(${usuarioId}, 'visitante.corregir', sucursal_alta_id) as ok from visitante where id = ${id}`;
+  if (!permitido?.ok) return null;
   const filas = await sql<Correccion[]>`
     select c.id::text, c.campo, c.valor_anterior as anterior, c.valor_nuevo as nuevo, c.motivo,
            u.nombre as usuario, s.nombre as sucursal, c.en

@@ -74,8 +74,11 @@ export function FormularioCorreccion({ codigo, id, version, inicial, estados }: 
       <div className="campo">
         <label htmlFor="motivo">Motivo de la corrección</label>
         <textarea id="motivo" name="motivo" rows={2} maxLength={300} defaultValue={v?.motivo ?? ""}
-          aria-invalid={estado?.errores?.motivo ? true : undefined} />
-        <span className="sub">Obligatorio. Queda en el historial junto con el dato anterior, el nuevo, quién y cuándo.</span>
+          aria-describedby="motivo-ayuda" aria-invalid={estado?.errores?.motivo ? true : undefined} />
+        <span className="sub" id="motivo-ayuda">
+          Obligatorio. Describe la corrección sin escribir teléfonos completos; por ejemplo, «El visitante cambió de número» o
+          «Error al escribir el apellido». Queda en el historial con el dato anterior, el nuevo, quién y cuándo.
+        </span>
         <MensajeCampo estado={estado} campo="motivo" />
       </div>
       <button className="boton boton-principal" type="submit" disabled={enviando}>

@@ -58,7 +58,6 @@ significa que la persona nunca haya asistido.
 
 - **Quién puede buscar, consultar y crear:** Recepción, Encargado y Dirección buscan, consultan y crean;
   Administración solo busca y consulta. Fusionar e historial general no están asignados a nadie.
-- **Quién ve las correcciones de un expediente:** quien puede consultarlo, con el teléfono enmascarado.
 
 ## Indicado para la primera entrega de correcciones (4 nov 2026)
 
@@ -67,5 +66,9 @@ significa que la persona nunca haya asistido.
 - Se corrigen nombre, teléfono y estado de procedencia, con **motivo obligatorio**. Se conserva el dato anterior,
   el nuevo, quién, desde qué sucursal y cuándo; el teléfono se muestra enmascarado.
 - Si la corrección produce coincidencias, se avisa y las fichas siguen separadas (unirlas será la fusión).
+- **El historial de correcciones (datos anteriores y motivos) solo lo ve quien puede corregir ese expediente**,
+  según la sucursal donde se creó. Recepción, Administración y quien no tiene el permiso en esa sucursal ven
+  solo la ficha actual; el servidor no les envía el historial.
+- El formulario pide que el motivo describa la corrección **sin incluir teléfonos completos**.
 - **Búsqueda por teléfono:** solo con los 10 dígitos; no se aceptan pedazos, para que no se puedan adivinar números.
 - **El historial de cambios no repite el teléfono:** solo registra si se capturó.

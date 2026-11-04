@@ -181,6 +181,34 @@ describe.skipIf(!URL_ADMIN)("corrección de expedientes", () => {
     });
   });
 
+  describe("quién ve el historial de correcciones", () => {
+    it("solo quien puede corregir ese expediente; Recepción y Administración ven la ficha actual, sin datos anteriores ni motivos", async () => {
+      const anterior = unico();
+      const id = await visitante(anterior, "TEN", "0000000621");
+      const actual = unico();
+      expect(await corregir(encargadoTen, "TEN", id, datos({ nombre: actual, telefono: { accion: "cambiar", telefono: "0000000622" } }), "Motivo secreto de prueba"))
+        .toEqual({ ok: true });
+
+      // Pueden corregirlo: ven el historial.
+      expect((await correccionesDeVisitante(sql, encargadoTen, "TEN", id))?.length).toBe(2);
+      const general = await cuenta([], { general: "direccion" });
+      expect((await correccionesDeVisitante(sql, general, "STG", id))?.length).toBe(2);
+
+      // No pueden corregirlo: el servidor no les entrega el historial, pero sí la ficha actual.
+      const { consultarVisitante } = await import("@/lib/visitantes");
+      for (const [rol, codigo] of [["recepcion", "TEN"], ["administracion", "TEN"], ["encargado", "STG"], ["direccion", "STG"]] as const) {
+        const u = await cuenta([[rol, codigo]]);
+        expect(await correccionesDeVisitante(sql, u, codigo, id), `${rol} ${codigo}`).toBeNull();
+        const ficha = await consultarVisitante(sql, u, codigo, id);
+        expect(ficha?.nombre, `${rol} ${codigo}`).toBe(actual);
+        expect(JSON.stringify(ficha)).not.toContain(anterior);
+        expect(JSON.stringify(ficha)).not.toContain("Motivo secreto");
+      }
+      // Sin permiso en la sucursal: nada.
+      expect(await correccionesDeVisitante(sql, await cuenta([]), "TEN", id)).toBeNull();
+    });
+  });
+
   describe("validación del formulario", () => {
     it("teléfono vacío no cambia; con dígitos cambia; la casilla lo quita; no se permiten ambos", () => {
       expect(validarCorreccion({ nombre: "Nombre Valido", telefono: "" })).toMatchObject({ ok: true, datos: { telefono: { accion: "mantener" } } });

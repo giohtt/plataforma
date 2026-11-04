@@ -185,3 +185,50 @@ test("si la corrección produce coincidencias, avisa y al confirmar guarda con l
   expect((await fila(a.id)).nombre).toBe(a.nombre);
   expect(await total()).toBe(antes);
 });
+
+test("el historial de correcciones solo lo recibe quien puede corregir; Recepción y Administración ven la ficha actual", async ({ page }) => {
+  const anterior = nombreUnico();
+  const actual = nombreUnico();
+  const [v] = await sql<{ id: string }[]>`
+    insert into visitante (nombre, sucursal_alta_id) select ${actual}, id from sucursal where codigo = 'TEN' returning id`;
+  await sql`
+    insert into visitante_cambio (visitante_id, campo, valor_anterior, valor_nuevo, motivo, usuario_id, sucursal_id)
+    select ${v.id}, 'nombre', ${anterior}, ${actual}, 'Motivo reservado de prueba', u.id, s.id
+    from usuario u, sucursal s where u.correo = 'encargado.tenango@prueba.fitnessland.invalid' and s.codigo = 'TEN'`;
+  const ruta = `/sucursales/TEN/visitantes/${v.id}`;
+  /** Lo que el servidor envía al navegador para esa página, tal cual. */
+  const respuesta = () => page.evaluate(async (r) => (await fetch(r, { credentials: "same-origin" })).text(), ruta);
+
+  for (const rol of ["recepcion", "administracion"]) {
+    await entrar(page, (await crearCuenta([[rol, "TEN"]])).correo);
+    await page.goto(ruta);
+    await expect(page.getByTestId("nombre-visitante"), rol).toHaveText(actual);
+    await expect(page.getByTestId("correcciones"), rol).toHaveCount(0);
+    const html = await respuesta();
+    expect(html, rol).toContain(actual);
+    expect(html, rol).not.toContain(anterior);
+    expect(html, rol).not.toContain("Motivo reservado de prueba");
+  }
+
+  // Encargado de Santiago puede consultar desde Santiago, pero el expediente es de Tenango: tampoco lo recibe.
+  await entrar(page, (await crearCuenta([["encargado", "STG"]])).correo);
+  await page.goto(`/sucursales/STG/visitantes/${v.id}`);
+  await expect(page.getByTestId("nombre-visitante")).toHaveText(actual);
+  const html = await page.evaluate(async (r) => (await fetch(r, { credentials: "same-origin" })).text(), `/sucursales/STG/visitantes/${v.id}`);
+  expect(html).not.toContain(anterior);
+  expect(html).not.toContain("Motivo reservado de prueba");
+
+  // Encargado de Tenango sí puede corregirlo: ve el historial.
+  await entrar(page, (await crearCuenta([["encargado", "TEN"]])).correo);
+  await page.goto(ruta);
+  await expect(page.getByTestId("correcciones")).toContainText(`Nombre: ${anterior} → ${actual}`);
+  await expect(page.getByTestId("correcciones")).toContainText("Motivo reservado de prueba");
+});
+
+test("el formulario indica que el motivo no debe incluir teléfonos completos", async ({ page }) => {
+  const v = await expediente("TEN");
+  await entrar(page, (await crearCuenta([["encargado", "TEN"]])).correo);
+  await page.goto(`/sucursales/TEN/visitantes/${v.id}/corregir`);
+  await expect(page.locator("#motivo-ayuda")).toContainText("sin escribir teléfonos completos");
+  await expect(page.getByLabel("Motivo de la corrección")).toHaveAttribute("aria-describedby", "motivo-ayuda");
+});
