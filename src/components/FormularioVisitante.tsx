@@ -10,6 +10,7 @@ type Props = {
   estados: readonly string[];
   telefonoObligatorio: boolean;
   estadoObligatorio: boolean;
+  onVolver?: () => void;
 };
 
 function MensajeCampo({ estado, campo }: { estado: EstadoAltaVisitante; campo: "nombre" | "telefono" | "estadoProcedencia" }) {
@@ -17,7 +18,7 @@ function MensajeCampo({ estado, campo }: { estado: EstadoAltaVisitante; campo: "
   return t ? <span className="campo-error" id={`${campo}-error`}>{t}</span> : null;
 }
 
-export function FormularioVisitante({ codigo, inicial, estados, telefonoObligatorio, estadoObligatorio }: Props) {
+export function FormularioVisitante({ codigo, inicial, estados, telefonoObligatorio, estadoObligatorio, onVolver }: Props) {
   const [estado, accion, enviando] = useActionState(accionCrearVisitante, null);
   const v = estado?.valores;
   const coincidencias = estado?.coincidencias ?? [];
@@ -62,9 +63,12 @@ export function FormularioVisitante({ codigo, inicial, estados, telefonoObligato
         </select>
         <MensajeCampo estado={estado} campo="estadoProcedencia" />
       </div>
-      <button className="boton boton-principal" type="submit" disabled={enviando}>
-        {enviando ? "Guardando…" : coincidencias.length ? "Crear expediente nuevo" : "Crear expediente"}
-      </button>
+      <p className="fila-acciones">
+        <button className="boton boton-principal" type="submit" disabled={enviando}>
+          {enviando ? "Guardando…" : coincidencias.length ? "Crear expediente nuevo" : "Crear expediente"}
+        </button>
+        {onVolver ? <button className="boton" type="button" onClick={onVolver}>Volver a la búsqueda</button> : null}
+      </p>
     </form>
   );
 }
