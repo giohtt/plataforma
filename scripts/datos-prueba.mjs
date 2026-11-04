@@ -28,7 +28,7 @@ export const SUCURSALES_PRUEBA = [
   { codigo: "ATL", nombre: "Atlacomulco", color: "#f4c20d" },
   { codigo: "RAY", nombre: "Rayón", color: "#6a2c9e" },
   { codigo: "SAD", nombre: "San Andrés", color: "#161616" },
-  { codigo: "SCR", nombre: "San Cristóbal", color: null },
+  { codigo: "SCR", nombre: "San Cristóbal", color: "#161616" }, // Negra, como San Andrés (sucursales «Black»)
 ];
 
 /** Usuarios ficticios. El dominio .invalid está reservado y nunca recibe correo real. */

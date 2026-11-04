@@ -27,7 +27,7 @@ describe("datos de sucursal", () => {
     expect(validarDatosSucursal({ ...base, estadoOperativo: "inactiva" }).ok).toBe(false);
   });
 
-  it("sin color es válido (San Cristóbal aún no tiene color)", () => {
+  it("sin color es válido (sucursal nueva sin color definido)", () => {
     expect(validarDatosSucursal({ ...base, color: "" })).toMatchObject({ ok: true, datos: { color: null } });
   });
 

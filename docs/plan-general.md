@@ -32,7 +32,7 @@ y beneficios, y pases QR individuales.
 2. ~~Base de datos y migraciones.~~ Hecho. Neon (plan gratuito) conectado al sitio de pruebas; tablas iniciales y datos ficticios cargados al publicar. Sin respaldos programados: suficiente solo para datos ficticios.
 3. ~~Inicio y cierre de sesión; recuperación con enlace de un solo uso.~~ Hecho y probado en el sitio de pruebas. Envío por correo pendiente de elegir servicio.
 4. ~~Permisos y asignación de sucursales.~~ Hecho. Perfil por sucursal, alcance general y facultades con límite, otorgados por separado. Probado en el sitio de pruebas el 3 nov 2026: Recepción Tenango ve solo Tenango y al abrir `/sucursales/STG` recibe «No encontrada».
-5. Catálogo persistente de sucursales: crear, editar, desactivar y reactivar, con historial. En revisión.
+5. ~~Catálogo persistente de sucursales.~~ Hecho. Crear, editar, desactivar y reactivar, con historial. Probado en el sitio de pruebas el 3 y 4 nov 2026 con Dirección general (sucursal ficticia Santa Ana, SAA), incluido el rechazo de un nombre repetido.
 6. Pruebas de acceso permitido y denegado.
 - **Reporte básico:** usuarios y sus asignaciones por sucursal.
 - **Decisiones que necesita:** ninguna nueva.
