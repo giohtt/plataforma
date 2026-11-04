@@ -423,3 +423,95 @@ h3 {
   padding-left: 18px;
   font-size: 14.5px;
 }
+
+/* --- Reporte de usuarios y accesos --- */
+.filtros-reporte {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+}
+.filtros-reporte .campo {
+  min-width: 200px;
+}
+.cifra-reporte {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+.cifra-reporte strong {
+  font-size: 26px;
+  margin-right: 6px;
+}
+.tabla-desplazable {
+  overflow-x: auto;
+  margin: 0 -4px;
+}
+.tabla {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14.5px;
+}
+.tabla th,
+.tabla td {
+  text-align: left;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.tabla th {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.chip-estado {
+  display: inline-block;
+  font-size: 12.5px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 9px;
+  background: #eef0f3;
+  white-space: nowrap;
+}
+.chip-vigente {
+  background: var(--ok-soft);
+}
+.chip-vencida,
+.chip-revocada,
+.chip-cuenta_desactivada {
+  background: #fdecea;
+  color: var(--bad);
+}
+.chip-programada {
+  background: var(--info-soft);
+}
+.filtros-reporte {
+  flex-direction: row;
+  justify-content: flex-start;
+}
+/* En pantallas angostas, cada fila se muestra como ficha con la etiqueta de cada dato. */
+@media (max-width: 640px) {
+  .tabla thead {
+    display: none;
+  }
+  .tabla tr {
+    display: block;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .tabla td {
+    display: grid;
+    grid-template-columns: 104px 1fr;
+    gap: 8px;
+    border: 0;
+    padding: 2px 0;
+  }
+  .tabla td::before {
+    content: attr(data-etiqueta);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .tabla td[data-etiqueta="Nombre"] {
+    font-weight: 700;
+  }
+}
