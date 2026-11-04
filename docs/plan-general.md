@@ -29,7 +29,7 @@ y beneficios, y pases QR individuales.
 1. ~~Repositorio y entorno.~~ Hecho. Sitio de pruebas publicado en Vercel (proyecto `plataforma-pruebas`, plan Hobby, `APP_ENV=pruebas`), protegido con Vercel Authentication para todas las versiones, incluida la dirección principal. Verificado el 3 nov 2026: sin sesión, el sitio redirige al inicio de sesión de Vercel.
 2. ~~Base de datos y migraciones.~~ Hecho. Neon (plan gratuito) conectado al sitio de pruebas; tablas iniciales y datos ficticios cargados al publicar. Sin respaldos programados: suficiente solo para datos ficticios.
 3. ~~Inicio y cierre de sesión; recuperación con enlace de un solo uso.~~ Hecho y probado en el sitio de pruebas. Envío por correo pendiente de elegir servicio.
-4. Permisos y asignación de sucursales: perfil por sucursal, alcance general y facultades con límite, otorgados por separado. En revisión.
+4. ~~Permisos y asignación de sucursales.~~ Hecho. Perfil por sucursal, alcance general y facultades con límite, otorgados por separado. Probado en el sitio de pruebas el 3 nov 2026: Recepción Tenango ve solo Tenango y al abrir `/sucursales/STG` recibe «No encontrada».
 5. Catálogo persistente de sucursales.
 6. Pruebas de acceso permitido y denegado.
 - **Reporte básico:** usuarios y sus asignaciones por sucursal.
