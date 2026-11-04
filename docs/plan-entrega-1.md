@@ -1,6 +1,6 @@
-# Bloque 1: usuarios, permisos y sucursales ✅
+# Bloque 1: usuarios, permisos y sucursales
 
-**Cerrado el 4 nov 2026.** Las seis tareas están hechas y probadas en el sitio de pruebas, solo con datos ficticios.
+**Estado (4 nov 2026):** las seis tareas están hechas y probadas en el sitio de pruebas, solo con datos ficticios. Falta el reporte básico del bloque, «usuarios y sus asignaciones por sucursal», que el [plan general](plan-general.md) exige antes de cerrarlo.
 
 Base: los tres manuales de Fitnessland y las aclaraciones acordadas después.
 Solo datos ficticios. Sitio de pruebas privado, separado de producción.
