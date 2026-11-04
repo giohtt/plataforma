@@ -12,6 +12,17 @@ autorizaciones, con reportes administrativos por sucursal. Open Desk sigue opera
 **Ampliación (se suma, no sustituye):** expediente de visitantes con historial entre sucursales, promociones
 y beneficios, y pases QR individuales.
 
+## Datos de negocio confirmados
+Confirmados el 4 nov 2026.
+- **Visita:** $50 por persona, igual en todas las sucursales. Es la tarifa base; una promoción aprobada
+  puede reducirla (por ejemplo, un pase gratuito queda en $0 y conserva la tarifa original y el descuento).
+- **Mensualidades:** el precio puede variar por zona, sucursal y promoción, tanto en sucursales Black como
+  en las de color. Se siguen cobrando en **Open Desk**. Los precios exactos se definen al llegar a ese módulo;
+  mientras tanto la plataforma no guarda ni calcula precios de mensualidad.
+- **Membresía:** permite entrar a cualquier sucursal Fitnessland. El acceso lo sigue controlando Open Desk.
+- **Sucursales Black:** San Andrés y San Cristóbal. «Black» es por ahora solo una **etiqueta de marca**
+  (las dos usan el color negro); no cambia precios, permisos ni operación en la plataforma.
+
 ## Reglas para todo el plan
 
 - Cada bloque incluye sus **reportes básicos y sus pruebas automáticas**. Los totales se comprueban en

@@ -25,6 +25,7 @@ Aprobadas para el sitio de pruebas el 3 nov 2026. Antes de usar datos reales se 
 
 ## Datos confirmados de las sucursales
 - **San Cristóbal es negra**, como San Andrés (son sucursales «Black»). Confirmado el 4 nov 2026. En los datos ficticios usa el mismo negro que San Andrés (`#161616`).
+- «Black» es por ahora solo una etiqueta de marca: no se guarda como tipo de sucursal ni cambia permisos o precios. Ver «Datos de negocio confirmados» en el [plan general](plan-general.md).
 
 ## Reglas que no cambian
 - Cuentas individuales; nada de usuarios compartidos.
