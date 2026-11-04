@@ -38,14 +38,14 @@ Confirmados el 4 nov 2026.
 
 ## Orden de implementación
 
-### Bloque 1. Usuarios, permisos y sucursales (en curso)
+### Bloque 1. Usuarios, permisos y sucursales (tareas 1 a 6 hechas; falta el reporte básico)
 1. ~~Repositorio y entorno.~~ Hecho. Sitio de pruebas publicado en Vercel (proyecto `plataforma-pruebas`, plan Hobby, `APP_ENV=pruebas`), protegido con Vercel Authentication para todas las versiones, incluida la dirección principal. Verificado el 3 nov 2026: sin sesión, el sitio redirige al inicio de sesión de Vercel.
 2. ~~Base de datos y migraciones.~~ Hecho. Neon (plan gratuito) conectado al sitio de pruebas; tablas iniciales y datos ficticios cargados al publicar. Sin respaldos programados: suficiente solo para datos ficticios.
 3. ~~Inicio y cierre de sesión; recuperación con enlace de un solo uso.~~ Hecho y probado en el sitio de pruebas. Envío por correo pendiente de elegir servicio.
 4. ~~Permisos y asignación de sucursales.~~ Hecho. Perfil por sucursal, alcance general y facultades con límite, otorgados por separado. Probado en el sitio de pruebas el 3 nov 2026: Recepción Tenango ve solo Tenango y al abrir `/sucursales/STG` recibe «No encontrada».
 5. ~~Catálogo persistente de sucursales.~~ Hecho. Crear, editar, desactivar y reactivar, con historial. Probado en el sitio de pruebas el 3 y 4 nov 2026 con Dirección general (sucursal ficticia Santa Ana, SAA), incluido el rechazo de un nombre repetido.
-6. Pruebas de acceso permitido y denegado.
-- **Reporte básico:** usuarios y sus asignaciones por sucursal.
+6. ~~Pruebas de acceso permitido y denegado.~~ Hecho. Cobertura en el [plan del bloque 1](plan-entrega-1.md); comprobado en el sitio de pruebas el 4 nov 2026.
+- **Reporte básico:** usuarios y sus asignaciones por sucursal. **Pendiente**: es lo último antes de cerrar el bloque.
 - **Decisiones que necesita:** ninguna nueva.
 
 ### Bloque 2. Expedientes de visitantes y búsqueda
