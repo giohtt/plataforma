@@ -515,3 +515,77 @@ h3 {
     font-weight: 700;
   }
 }
+
+/* --- Visitantes --- */
+.buscador {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.buscador .campo {
+  flex: 1 1 260px;
+}
+.lista-visitantes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tarjeta-visitante {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.tarjeta-visitante-datos {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.motivos-coincidencia {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.coincidencias {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid #a7c3e6;
+  background: var(--info-soft);
+  border-radius: 12px;
+  padding: 14px;
+}
+.coincidencias .tarjeta-visitante {
+  background: var(--surface);
+}
+.datos-expediente {
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  gap: 8px 14px;
+  margin: 0;
+}
+.datos-expediente dt {
+  font-weight: 600;
+  color: var(--muted);
+}
+.datos-expediente dd {
+  margin: 0;
+}
+@media (max-width: 520px) {
+  .datos-expediente {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .datos-expediente dd {
+    margin-bottom: 8px;
+  }
+}

@@ -65,6 +65,20 @@ export const FACULTADES_PRUEBA = [
   { correo: `direccion.general${D}`, permiso: "autorizacion.gasto", limite: 1000 },
 ];
 
+/**
+ * Expedientes de visitantes ficticios para probar búsqueda y coincidencias: dos homónimas, un teléfono
+ * compartido, un nombre con acentos y uno sin teléfono. Los teléfonos empiezan con 0: ningún número
+ * de México empieza así, de modo que no pueden pertenecer a nadie.
+ */
+export const VISITANTES_PRUEBA = [
+  { nombre: "María Hernández García", telefono: "0000000101", estado: "Estado de México", codigo: "TEN" },
+  { nombre: "María Hernández García", telefono: "0000000102", estado: "Estado de México", codigo: "STG" },
+  { nombre: "Luis Martínez Ruiz", telefono: "0000000201", estado: "Estado de México", codigo: "TEN" },
+  { nombre: "Ana Martínez Ruiz", telefono: "0000000201", estado: "Estado de México", codigo: "TEN" },
+  { nombre: "José Ramírez Sánchez", telefono: "0000000301", estado: "Ciudad de México", codigo: "ATL" },
+  { nombre: "Fernanda López Torres", telefono: null, estado: "Michoacán", codigo: "TEN" },
+];
+
 const MOTIVO = "Datos ficticios de prueba";
 
 export async function cargarDatosPrueba(sql, { entorno }) {
@@ -149,7 +163,25 @@ export async function cargarDatosPrueba(sql, { entorno }) {
           values ('usuario', ${filas[0].usuario_id}, 'otorgar_facultad', ${tx.json(f)}, ${MOTIVO})`;
       }
     }
-    return { sucursales, usuarios, asignaciones, alcances, facultades };
+    let visitantes = 0;
+    for (const v of VISITANTES_PRUEBA) {
+      const filas = await tx`
+        insert into visitante (nombre, telefono, estado_procedencia, sucursal_alta_id)
+        select ${v.nombre}, ${v.telefono}, ${v.estado}, s.id from sucursal s
+        where s.codigo = ${v.codigo}
+          and not exists (select 1 from visitante x where x.nombre = ${v.nombre}
+                          and x.telefono is not distinct from ${v.telefono}::text and x.sucursal_alta_id = s.id)
+        returning id`;
+      if (filas.length) {
+        visitantes++;
+        await tx`
+          insert into historial_cambio (entidad, entidad_id, accion, cambios, motivo)
+          values ('visitante', ${filas[0].id}, 'crear',
+                  ${tx.json({ nombre: v.nombre, telefono_capturado: !!v.telefono, estado_procedencia: v.estado, sucursal: v.codigo })},
+                  ${MOTIVO})`;
+      }
+    }
+    return { sucursales, usuarios, asignaciones, alcances, facultades, visitantes };
   });
 }
 
@@ -179,7 +211,7 @@ async function principal() {
     const r = await cargarDatosPrueba(sql, { entorno });
     console.log(
       `Datos ficticios nuevos: ${r.sucursales} sucursales, ${r.usuarios} usuarios, ${r.asignaciones} asignaciones, ` +
-        `${r.alcances} alcances generales y ${r.facultades} facultades.`,
+        `${r.alcances} alcances generales, ${r.facultades} facultades y ${r.visitantes} expedientes de visitantes.`,
     );
   } catch (e) {
     console.error(`No se pudieron cargar los datos ficticios: ${e.message}`);

@@ -41,6 +41,7 @@ que no suma como cobro confirmado; apertura manual desde recepción; Open Desk o
 - Correcciones de datos: con motivo y valor anterior conservado. No modifican cobros ni pases.
 
 ### Qué ve cada perfil [Propuesta, no aprobada]
+Opciones para decidir (campos obligatorios, enmascaramiento y vista entre sucursales): [`decisiones-bloque-2.md`](decisiones-bloque-2.md).
 Esta tabla, incluido el enmascaramiento del teléfono, es una **propuesta pendiente de aprobación**
 (decisión 3). Hasta aprobarla, el bloque 2 se construye con estas reglas solo en el entorno de pruebas.
 

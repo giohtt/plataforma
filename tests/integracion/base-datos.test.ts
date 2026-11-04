@@ -14,6 +14,7 @@ import {
   ASIGNACIONES_PRUEBA,
   cargarDatosPrueba,
   FACULTADES_PRUEBA,
+  VISITANTES_PRUEBA,
   SUCURSALES_PRUEBA,
   USUARIOS_PRUEBA,
 } from "../../scripts/datos-prueba.mjs";
@@ -120,13 +121,15 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect([as, ag, fa]).toEqual([0, 0, 0]);
     });
 
-    it("los perfiles solo tienen permisos del bloque 1 y ninguno de autorización", async () => {
+    it("los perfiles solo tienen permisos de los bloques construidos (1 y 2) y ninguno de autorización", async () => {
       const filas = await sql`
         select rp.rol, rp.permiso, p.bloque, p.es_autorizacion from rol_permiso rp join permiso p on p.clave = rp.permiso`;
       expect(filas.length).toBeGreaterThan(0);
-      expect(filas.every((f) => f.bloque === 1 && !f.es_autorizacion)).toBe(true);
-      const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso);
-      expect(recepcion).toEqual(["sucursal.consultar"]);
+      expect(filas.every((f) => f.bloque <= 2 && !f.es_autorizacion)).toBe(true);
+      const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso).sort();
+      expect(recepcion).toEqual(["sucursal.consultar", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
+      // Corregir, fusionar e historial general entre sucursales no se asignan a ningún perfil todavía.
+      expect(filas.some((f) => ["visitante.corregir", "visitante.fusionar", "visitante.historial_general"].includes(f.permiso))).toBe(false);
     });
 
     it("una facultad de autorización no puede formar parte de un rol", async () => {
@@ -193,9 +196,10 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
         asignaciones: ASIGNACIONES_PRUEBA.length,
         alcances: ALCANCES_PRUEBA.length,
         facultades: FACULTADES_PRUEBA.length,
+        visitantes: VISITANTES_PRUEBA.length,
       });
       const segunda = await cargarDatosPrueba(sql, { entorno: "pruebas" });
-      expect(segunda).toEqual({ sucursales: 0, usuarios: 0, asignaciones: 0, alcances: 0, facultades: 0 });
+      expect(segunda).toEqual({ sucursales: 0, usuarios: 0, asignaciones: 0, alcances: 0, facultades: 0, visitantes: 0 });
 
       const [{ n }] = await sql`select count(*)::int as n from usuario where es_prueba`;
       expect(n).toBe(USUARIOS_PRUEBA.length);
