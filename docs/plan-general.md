@@ -22,6 +22,8 @@ y beneficios, y pases QR individuales.
 - Una decisión pendiente solo frena el bloque que depende de ella. Se resuelven primero las del bloque que
   sigue.
 - Todo con datos ficticios hasta tener aviso de privacidad, respaldos y restauración probada.
+- Una **sucursal inactiva** se puede consultar (incluidos su historial y reportes), pero el servidor rechaza
+  en ella **nuevos cobros y aperturas de turno**.
 
 ## Orden de implementación
 
@@ -47,6 +49,7 @@ y beneficios, y pases QR individuales.
 2. **Bolsa de visitas** y **cajón de mensualidades** como lugares de efectivo separados, con responsable por periodo (pueden ser la misma persona o distintas).
 3. Apertura con importe contado y relación con la entrega del turno anterior.
 4. Cajón de mensualidades marcado **«no conciliado: faltan datos de Open Desk»**.
+5. No se abre turno en una sucursal inactiva (comprobado en el servidor, también por solicitud directa).
 - **Reporte básico:** turnos abiertos y responsables de cada lugar de efectivo.
 - **Decisiones que necesita:** si una misma recepcionista custodia siempre ambos lugares (el diseño admite las dos opciones).
 
@@ -56,6 +59,7 @@ y beneficios, y pases QR individuales.
 3. Protección contra duplicados por doble clic o reintento.
 4. Apertura manual por pase, separada de las entradas confirmadas.
 5. Historial del visitante entre sucursales con la marca de incompleto.
+6. No se registran cobros nuevos en una sucursal inactiva (comprobado en el servidor, también por solicitud directa).
 - **Reporte básico:** operaciones, pases, cobros confirmados por forma de pago (incluidas las transferencias con abono verificado), transferencias pendientes aparte y efectivo esperado de la bolsa. Pruebas: tres personas = una operación, un cobro y tres pases; una transferencia que pasa de pendiente a verificada cambia de línea sin duplicar el importe.
 - **Decisiones que necesita:** referencias mínimas de tarjeta y transferencia; comprobante para el visitante.
 

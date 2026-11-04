@@ -12,11 +12,12 @@ Solo datos ficticios. Sitio de pruebas privado, separado de producción.
 | 5 | Catálogo persistente de sucursales (en revisión) | Crear, editar y desactivar; nombre y código únicos; historial; crear no asigna a nadie. Permiso comprobado en el servidor en la misma transacción que guarda el cambio; si dos personas editan a la vez, la segunda recibe aviso en vez de sobrescribir. |
 | 6 | Pruebas de acceso permitido y denegado | Solicitudes directas al servidor: recepción no crea sucursales ni consulta otra sucursal. |
 
-## Propuestas de la tarea 5 (pendientes de aprobación)
-Implementadas así para poder probarlas; ninguna es política aprobada y todas se pueden cambiar.
+## Decisiones de la tarea 5
+Aprobadas para el sitio de pruebas el 3 nov 2026. Antes de usar datos reales se confirman de nuevo.
 - **El código no cambia después de crear la sucursal.** Aparece en las direcciones de las páginas y servirá para relacionarla con otros datos. Solo se aplica en la plataforma, no en la base, para poder cambiar la regla si se decide otra cosa.
 - **Nombres únicos sin contar mayúsculas, acentos ni espacios repetidos** («Rayon» y «Rayón» cuentan como el mismo).
-- **Desactivar no quita accesos.** Las personas asignadas la siguen viendo, marcada como inactiva. Qué operaciones se bloquean en una sucursal inactiva se decide cuando existan (bloques 3 a 6).
+- **Desactivar no quita accesos.** Las personas asignadas la siguen viendo, marcada como inactiva.
+- **Una sucursal inactiva se puede consultar, pero no admite nuevos cobros ni aperturas de turno.** Se aplica en el servidor cuando existan esos módulos (bloques 3 y 4), con pruebas que lo intenten por solicitud directa.
 - **Se puede reactivar**, con el mismo permiso que desactivar, eligiendo si vuelve como «Próxima apertura» o «Activa».
 - **Motivo obligatorio** al editar, desactivar y reactivar; opcional al crear.
 - **El historial de la sucursal lo ve quien tiene el permiso general de consultar historial** (hoy, solo Dirección con alcance general). Dirección de una sola sucursal puede editarla, pero no ve su historial.
