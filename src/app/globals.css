@@ -315,3 +315,111 @@ h3 {
   font-weight: 700;
   color: var(--muted);
 }
+
+/* --- Catálogo de sucursales --- */
+.contenedor-medio {
+  max-width: 640px;
+}
+.campo select,
+.campo textarea {
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid #cfd5dc;
+  border-radius: 10px;
+  padding: 11px 12px;
+  width: 100%;
+}
+.campo textarea {
+  resize: vertical;
+}
+.campo [aria-invalid="true"] {
+  border-color: var(--bad);
+}
+.campo-etiqueta {
+  font-weight: 600;
+  font-size: 14px;
+}
+.campo-error {
+  color: var(--bad);
+  font-size: 14px;
+}
+.campo-grupo {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.campo-grupo legend {
+  font-weight: 600;
+  font-size: 14px;
+  padding: 0;
+  margin-bottom: 5px;
+}
+.fila-color {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.fila-color input[type="color"] {
+  width: 56px;
+  height: 40px;
+  padding: 2px;
+  border: 1px solid #cfd5dc;
+  border-radius: 8px;
+  background: var(--surface);
+}
+.fila-color input[type="color"]:disabled {
+  opacity: 0.35;
+}
+.casilla {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 15px;
+}
+.casilla input {
+  margin-top: 4px;
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+.boton-peligro {
+  background: var(--bad);
+  color: #fff;
+  border-color: var(--bad);
+}
+.zona-riesgo {
+  border-color: #f1b6b0;
+}
+.lista-explicacion {
+  margin: 0 0 14px;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fila-acciones {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 4px 0 0;
+}
+.historial {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.historial li {
+  border-left: 3px solid var(--line);
+  padding-left: 12px;
+}
+.historial-cambios {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 14.5px;
+}

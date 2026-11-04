@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import type { CSSProperties } from "react";
 import { temaSucursal } from "@/lib/color";
 import { obtenerBaseDatos } from "@/lib/db";
-import { NOMBRE_PERFIL, sucursalAccesiblePorCodigo, type Rol } from "@/lib/permisos";
+import { historialSucursal } from "@/lib/catalogo-sucursales";
+import { NOMBRE_PERFIL, sucursalAccesiblePorCodigo, tienePermiso, type Rol } from "@/lib/permisos";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
 const ESTADO: Record<string, string> = { activa: "Activa", proxima: "Próxima apertura", inactiva: "Inactiva" };
@@ -28,13 +29,38 @@ const VISTAS: Partial<Record<Rol, { descripcion: string; pendientes: string[] }>
   },
 };
 
-export default async function PaginaSucursal({ params }: PageProps<"/sucursales/[codigo]">) {
+const AVISOS: Record<string, string> = {
+  creada: "Sucursal creada. No se asignó a nadie: asigna a las personas que correspondan.",
+  guardada: "Cambios guardados.",
+  desactivada: "Sucursal desactivada. No se borró nada y se puede reactivar.",
+  reactivada: "Sucursal reactivada.",
+};
+
+const ACCIONES: Record<string, string> = { crear: "Creada", editar: "Editada", desactivar: "Desactivada", reactivar: "Reactivada" };
+const CAMPOS: Record<string, string> = {
+  nombre: "Nombre",
+  color: "Color",
+  direccion: "Dirección",
+  estado_republica: "Estado de la república",
+  estado_operativo: "Estado",
+};
+const fechaHora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
+const mostrar = (campo: string, v: unknown) =>
+  v === null || v === undefined || v === "" ? "(vacío)" : campo === "estado_operativo" ? (ESTADO[String(v)] ?? String(v)) : String(v);
+
+export default async function PaginaSucursal({ params, searchParams }: PageProps<"/sucursales/[codigo]">) {
   const sesion = await requerirSesion();
   const { codigo } = await params;
   const sql = obtenerBaseDatos()!;
   const sucursal = await sucursalAccesiblePorCodigo(sql, sesion.usuarioId, codigo);
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
+  const { aviso } = await searchParams;
+  const [puedeEditar, puedeDesactivar, historial] = await Promise.all([
+    tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
+    tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
+    historialSucursal(sql, sesion.usuarioId, sucursal.id),
+  ]);
 
   const permisos = await sql<{ clave: string; descripcion: string }[]>`
     select clave, descripcion from permiso
@@ -51,6 +77,17 @@ export default async function PaginaSucursal({ params }: PageProps<"/sucursales/
           <p className="sub">{ESTADO[sucursal.estadoOperativo]} · Código {sucursal.codigo}</p>
         </div>
       </header>
+      {typeof aviso === "string" && AVISOS[aviso] ? <p className="aviso aviso-ok" role="status">{AVISOS[aviso]}</p> : null}
+      {sucursal.estadoOperativo === "inactiva" ? (
+        <p className="aviso aviso-info" data-testid="sucursal-inactiva">Esta sucursal está desactivada.</p>
+      ) : null}
+      {puedeEditar || puedeDesactivar ? (
+        <p className="fila-acciones">
+          <Link className="boton" href={`/sucursales/${sucursal.codigo}/editar`} data-testid="editar-sucursal">
+            {puedeEditar ? "Editar sucursal" : sucursal.estadoOperativo === "inactiva" ? "Reactivar sucursal" : "Desactivar sucursal"}
+          </Link>
+        </p>
+      ) : null}
 
       {sucursal.perfiles.map((perfil) => {
         const vista = VISTAS[perfil];
@@ -76,6 +113,30 @@ export default async function PaginaSucursal({ params }: PageProps<"/sucursales/
         </ul>
         <p className="sub">Calculado en el servidor a partir de tus perfiles, alcance y facultades vigentes.</p>
       </section>
+
+      {historial ? (
+        <section className="tarjeta" aria-labelledby="titulo-historial" data-testid="historial-sucursal">
+          <h2 id="titulo-historial" className="titulo-seccion">Historial</h2>
+          <ol className="historial">
+            {historial.map((h) => (
+              <li key={h.id}>
+                <strong>{ACCIONES[h.accion] ?? h.accion}</strong>
+                <span className="sub"> · {fechaHora.format(h.en)} · {h.usuario ?? "Sistema"}</span>
+                {h.motivo ? <div>Motivo: {h.motivo}</div> : null}
+                {h.accion !== "crear" ? (
+                  <ul className="historial-cambios">
+                    {Object.entries(h.cambios as Record<string, { antes: unknown; despues: unknown }>).map(([campo, c]) => (
+                      <li key={campo}>
+                        {CAMPOS[campo] ?? campo}: {mostrar(campo, c.antes)} → {mostrar(campo, c.despues)}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
     </main>
   );
 }
