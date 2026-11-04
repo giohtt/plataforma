@@ -81,8 +81,13 @@ test("Recepción de Tenango: ve solo Tenango y su vista de Recepción", async ({
   await expect(page.getByTestId("permisos-sucursal")).toContainText("sucursal.consultar");
   await expect(page.getByTestId("permisos-sucursal")).not.toContainText("sucursal.editar");
 
-  // Escribir otra sucursal en la dirección no sirve.
+  // Escribir otra sucursal en la dirección no sirve: «No encontrada», sin datos de esa sucursal.
   expect((await page.goto("/sucursales/STG"))?.status()).toBe(404);
+  await expect(page.getByTestId("no-encontrada")).toContainText("No encontrada");
+  await expect(page.locator("body")).not.toContainText("Santiago");
+  // Una sucursal que no existe muestra exactamente lo mismo.
+  expect((await page.goto("/sucursales/ZZZ"))?.status()).toBe(404);
+  await expect(page.getByTestId("no-encontrada")).toContainText("No encontrada");
 });
 
 test("Recepción de Tenango: el servidor rechaza solicitudes directas a otra sucursal", async ({ page }) => {

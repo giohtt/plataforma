@@ -59,3 +59,9 @@ test("el sitio de pruebas pide no aparecer en buscadores y envía encabezados de
   expect(h["x-frame-options"]).toBe("DENY");
   expect(h["x-powered-by"]).toBeUndefined();
 });
+
+test("una dirección que no existe responde 404 con «No encontrada» en español", async ({ page }) => {
+  const respuesta = await page.goto("/no-existe-esta-pagina");
+  expect(respuesta?.status()).toBe(404);
+  await expect(page.getByTestId("no-encontrada")).toContainText("No encontrada");
+});
