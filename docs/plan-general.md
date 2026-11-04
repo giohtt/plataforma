@@ -48,8 +48,9 @@ Confirmados el 4 nov 2026.
 7. ~~Reporte básico: usuarios y sus asignaciones por sucursal.~~ Hecho (`/reportes/usuarios`). Probado en el sitio de pruebas el 4 nov 2026.
 - **Decisiones que necesita:** ninguna nueva.
 
-### Bloque 2. Expedientes de visitantes y búsqueda
+### Bloque 2. Expedientes de visitantes y búsqueda (en curso, solo datos ficticios)
 1. Expediente: alta, corrección con historial y motivo, búsqueda por nombre o teléfono. Pruebas con homónimos, errores de escritura y teléfono compartido.
+   - Primer flujo en revisión: búsqueda por nombre o teléfono completo, elección entre varias coincidencias y alta con confirmación «es otra persona». Usa reglas provisionales; las opciones a decidir están en [`decisiones-bloque-2.md`](decisiones-bloque-2.md).
 2. Coincidencias al crear y fusión manual autorizada.
 3. Vistas del expediente por perfil y cobertura del historial.
 - **Reporte básico:** expedientes creados por sucursal y periodo; posibles duplicados pendientes.

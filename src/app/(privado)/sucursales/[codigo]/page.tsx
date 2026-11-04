@@ -56,10 +56,11 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, historial] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, historial] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
+    tienePermiso(sql, sesion.usuarioId, "visitante.buscar", sucursal.id),
     historialSucursal(sql, sesion.usuarioId, sucursal.id),
   ]);
 
@@ -82,8 +83,13 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
       {sucursal.estadoOperativo === "inactiva" ? (
         <p className="aviso aviso-info" data-testid="sucursal-inactiva">Esta sucursal está desactivada.</p>
       ) : null}
-      {puedeEditar || puedeDesactivar || puedeVerUsuarios ? (
+      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes ? (
         <p className="fila-acciones">
+          {puedeBuscarVisitantes ? (
+            <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/visitantes`} data-testid="visitantes">
+              Visitantes
+            </Link>
+          ) : null}
           {puedeEditar || puedeDesactivar ? (
             <Link className="boton" href={`/sucursales/${sucursal.codigo}/editar`} data-testid="editar-sucursal">
               {puedeEditar ? "Editar sucursal" : sucursal.estadoOperativo === "inactiva" ? "Reactivar sucursal" : "Desactivar sucursal"}
