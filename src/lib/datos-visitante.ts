@@ -89,3 +89,32 @@ export function interpretarConsulta(valor: unknown): Consulta {
   if (clave.replace(/\s/g, "").length < 3) return { modo: "invalida", motivo: "Escribe al menos 3 letras del nombre." };
   return { modo: "nombre", clave, palabras: clave.split(" ").filter(Boolean).slice(0, 6) };
 }
+
+/** Teléfono en una corrección: se conserva, se cambia por otro o se quita. */
+export type CambioTelefono = { accion: "mantener" } | { accion: "cambiar"; telefono: string } | { accion: "quitar" };
+export type DatosCorreccion = { nombre: string; telefono: CambioTelefono; estadoProcedencia: string | null };
+
+/**
+ * Valida una corrección. El teléfono actual no se muestra completo (regla provisional), así que el campo
+ * llega vacío: vacío significa «sin cambio»; para quitarlo hay una casilla aparte.
+ */
+export function validarCorreccion(entrada: Record<string, unknown>): { ok: true; datos: DatosCorreccion } | { ok: false; errores: ErroresVisitante } {
+  const base = validarVisitante({ ...entrada, telefono: "" });
+  const errores: ErroresVisitante = base.ok ? {} : { ...base.errores };
+  delete errores.telefono;
+
+  const escrito = limpiarTexto(entrada.telefono);
+  let telefono: CambioTelefono = { accion: "mantener" };
+  if (entrada.quitarTelefono === "si") {
+    if (escrito) errores.telefono = "Escribe un teléfono nuevo o marca «Quitar el teléfono», no ambos.";
+    else if (REGLAS_PROVISIONALES.telefonoObligatorio) errores.telefono = "El teléfono es obligatorio.";
+    else telefono = { accion: "quitar" };
+  } else if (escrito) {
+    const n = normalizarTelefono(escrito);
+    if (n) telefono = { accion: "cambiar", telefono: n };
+    else errores.telefono = "El teléfono debe tener 10 dígitos.";
+  }
+
+  if (!base.ok || Object.keys(errores).length) return { ok: false, errores };
+  return { ok: true, datos: { nombre: base.datos.nombre, telefono, estadoProcedencia: base.datos.estadoProcedencia } };
+}

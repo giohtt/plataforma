@@ -36,7 +36,7 @@ export type ResultadoVisitante = {
   motivos: ("mismo_telefono" | "mismo_nombre" | "nombre_parecido")[];
 };
 
-type Fila = {
+export type Fila = {
   id: string;
   nombre: string;
   nombre_clave: string;
@@ -59,7 +59,7 @@ function patron(palabra: string) {
 }
 
 /** Lo que se muestra de una fila: el teléfono completo solo si la persona ya lo escribió completo. */
-function presentar(f: Fila, telefonoEscrito: string | null, claveEscrita: string | null): ResultadoVisitante {
+export function presentar(f: Fila, telefonoEscrito: string | null, claveEscrita: string | null): ResultadoVisitante {
   const mismoTelefono = !!telefonoEscrito && f.telefono === telefonoEscrito;
   const motivos: ResultadoVisitante["motivos"] = [];
   if (mismoTelefono) motivos.push("mismo_telefono");
@@ -79,7 +79,7 @@ function presentar(f: Fila, telefonoEscrito: string | null, claveEscrita: string
   };
 }
 
-async function sucursalConPermiso(tx: Tx | Sql, usuarioId: string, codigo: string, permiso: string) {
+export async function sucursalConPermiso(tx: Tx | Sql, usuarioId: string, codigo: string, permiso: string) {
   if (!/^[A-Z0-9]{2,5}$/.test(codigo)) return null;
   const [s] = await tx<{ id: string; nombre: string }[]>`
     select id, nombre from sucursal where codigo = ${codigo} and tiene_permiso(${usuarioId}, ${permiso}, id)`;
@@ -119,16 +119,18 @@ export async function buscarVisitantes(sql: Sql, usuarioId: string, codigo: stri
 }
 
 /** Posibles coincidencias para un alta: mismo teléfono, mismo nombre o nombre parecido. */
-async function coincidencias(tx: Tx, datos: DatosVisitante, clave: string): Promise<ResultadoVisitante[]> {
+/** Posibles coincidencias. `excluirId` deja fuera al propio expediente cuando se corrige. */
+export async function coincidencias(tx: Tx, datos: DatosVisitante, clave: string, excluirId: string | null = null): Promise<ResultadoVisitante[]> {
   const palabras = clave.split(" ").filter(Boolean);
   const filas = await tx<Fila[]>`
     select v.id, v.nombre, v.nombre_clave, v.telefono, v.estado_procedencia, s.nombre as sucursal_alta, v.creado_en,
            v.nombre_clave like all(${tx.array(palabras.map(patron))}) as contiene,
            similarity(v.nombre_clave, ${clave}) as parecido
     from visitante v join sucursal s on s.id = v.sucursal_alta_id
-    where (${datos.telefono}::text is not null and v.telefono = ${datos.telefono})
-       or v.nombre_clave like all(${tx.array(palabras.map(patron))})
-       or v.nombre_clave % ${clave}
+    where ((${datos.telefono}::text is not null and v.telefono = ${datos.telefono})
+           or v.nombre_clave like all(${tx.array(palabras.map(patron))})
+           or v.nombre_clave % ${clave})
+      and (${excluirId}::uuid is null or v.id <> ${excluirId}::uuid)
     order by (v.telefono = ${datos.telefono}) desc nulls last, parecido desc, v.creado_en
     limit 10`;
   // El teléfono capturado en el alta cuenta como escrito completo: solo se muestra el de quien coincide.

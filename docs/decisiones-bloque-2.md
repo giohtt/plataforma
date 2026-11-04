@@ -57,6 +57,15 @@ significa que la persona nunca haya asistido.
 ## Otras reglas provisionales del sitio de pruebas (también pendientes)
 
 - **Quién puede buscar, consultar y crear:** Recepción, Encargado y Dirección buscan, consultan y crean;
-  Administración solo busca y consulta. Corregir, fusionar e historial general no están asignados a nadie.
+  Administración solo busca y consulta. Fusionar e historial general no están asignados a nadie.
+- **Quién ve las correcciones de un expediente:** quien puede consultarlo, con el teléfono enmascarado.
+
+## Indicado para la primera entrega de correcciones (4 nov 2026)
+
+- **Corrigen Encargado y Dirección**, según sus sucursales autorizadas. Recepción y Administración no editan.
+- **Solo expedientes creados en una sucursal donde la persona tenga el permiso de corregir.**
+- Se corrigen nombre, teléfono y estado de procedencia, con **motivo obligatorio**. Se conserva el dato anterior,
+  el nuevo, quién, desde qué sucursal y cuándo; el teléfono se muestra enmascarado.
+- Si la corrección produce coincidencias, se avisa y las fichas siguen separadas (unirlas será la fusión).
 - **Búsqueda por teléfono:** solo con los 10 dígitos; no se aceptan pedazos, para que no se puedan adivinar números.
 - **El historial de cambios no repite el teléfono:** solo registra si se capturó.

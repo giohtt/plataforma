@@ -128,8 +128,9 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(filas.every((f) => f.bloque <= 2 && !f.es_autorizacion)).toBe(true);
       const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso).sort();
       expect(recepcion).toEqual(["sucursal.consultar", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
-      // Corregir, fusionar e historial general entre sucursales no se asignan a ningún perfil todavía.
-      expect(filas.some((f) => ["visitante.corregir", "visitante.fusionar", "visitante.historial_general"].includes(f.permiso))).toBe(false);
+      // Corregir: solo Encargado y Dirección. Fusionar e historial general no se asignan todavía.
+      expect(filas.filter((f) => f.permiso === "visitante.corregir").map((f) => f.rol).sort()).toEqual(["direccion", "encargado"]);
+      expect(filas.some((f) => ["visitante.fusionar", "visitante.historial_general"].includes(f.permiso))).toBe(false);
     });
 
     it("una facultad de autorización no puede formar parte de un rol", async () => {
