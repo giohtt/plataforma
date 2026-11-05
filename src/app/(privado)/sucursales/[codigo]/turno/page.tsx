@@ -5,6 +5,7 @@ import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { requerirSesion } from "@/lib/sesion-servidor";
 import { estadoTurno, type TipoLugar } from "@/lib/turnos";
+import { impedimentoRegistroVisita, visitasDelTurno } from "@/lib/visitas";
 
 export const metadata = { title: "Turno · Fitnessland" };
 
@@ -20,6 +21,9 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   if (!e) notFound();
   const { aviso } = await searchParams;
   const t = e.turno;
+  const sql = obtenerBaseDatos()!;
+  const puedeCobrar = t ? (await impedimentoRegistroVisita(sql, sesion.usuarioId, codigo, leerEntorno())) === null : false;
+  const visitas = t ? await visitasDelTurno(sql, t.id) : [];
 
   return (
     <main className="contenedor contenedor-medio">
@@ -34,19 +38,51 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
             <h2 className="titulo-seccion">Turno abierto</h2>
             <p>Abierto por <strong>{t.abiertoPor}</strong> · {hora.format(t.abiertoEn)}</p>
             <p className="sub">La entrega al siguiente turno y el cierre llegan en el bloque 5.</p>
+            {puedeCobrar ? (
+              <p className="fila-acciones">
+                <Link className="boton boton-principal" href={`/sucursales/${codigo}/turno/visita`}>Registrar visita</Link>
+              </p>
+            ) : null}
           </section>
           <div className="lugares-turno">
             {t.lugares.map((l) => (
               <section key={l.tipo} className="tarjeta" data-testid={`lugar-${l.tipo}`} aria-label={NOMBRE[l.tipo]}>
                 <h2 className="titulo-seccion">{NOMBRE[l.tipo]}</h2>
-                <p className="cifra-reporte"><strong>{pesos.format(Number(l.contadoAlAbrir))}</strong> contado al abrir</p>
+                <dl className="cuentas-lugar">
+                  <dt>Contado al abrir</dt>
+                  <dd data-testid="contado-al-abrir">{pesos.format(Number(l.contadoAlAbrir))}</dd>
+                  {l.tipo === "bolsa_visitas" ? (
+                    <>
+                      <dt>Visitas cobradas en efectivo ({l.cantidadEntradas})</dt>
+                      <dd data-testid="entradas">+ {pesos.format(Number(l.entradas))}</dd>
+                    </>
+                  ) : null}
+                  <dt>Efectivo esperado</dt>
+                  <dd data-testid="esperado" className={l.esperado === null ? "dd-largo" : undefined}>
+                    {l.esperado !== null ? <strong>{pesos.format(Number(l.esperado))}</strong> : "No calculado: faltan datos de Open Desk"}
+                  </dd>
+                </dl>
                 <p className="sub">Responsable: <strong>{l.responsable}</strong>, desde {hora.format(l.responsableDesde)}</p>
                 {l.tipo === "cajon_mensualidades" ? (
                   <p className="aviso aviso-info" data-testid="no-conciliado">No conciliado: faltan datos de Open Desk</p>
-                ) : null}
+                ) : (
+                  <p className="sub">El esperado no es un conteo: el conteo y las diferencias llegan con el cierre (bloque 5).</p>
+                )}
               </section>
             ))}
           </div>
+          <section className="tarjeta" aria-labelledby="t-visitas" data-testid="visitas-turno">
+            <h2 id="t-visitas" className="titulo-seccion">Visitas de este turno ({visitas.length})</h2>
+            {visitas.length ? (
+              <ul className="lista-simple">
+                {visitas.map((v) => (
+                  <li key={v.id} data-testid="visita-turno">
+                    <strong>{v.visitante}</strong> · {hora.format(v.registradaEn)} · {pesos.format(Number(v.total))} en efectivo
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="sub">Todavía no hay visitas registradas.</p>}
+          </section>
         </>
       ) : e.sucursal.inactiva ? (
         <p className="aviso aviso-info">Esta sucursal está desactivada: no se pueden abrir turnos.</p>

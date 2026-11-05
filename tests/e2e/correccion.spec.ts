@@ -163,8 +163,11 @@ test("envío directo: Encargado de Tenango cambia el identificador oculto por un
 test("si la corrección produce coincidencias, avisa y al confirmar guarda con las fichas separadas", async ({ page }) => {
   const a = await expediente("TEN");
   const b = await expediente("TEN");
-  const total = async () => (await sql`select count(*)::int as n from visitante`)[0].n as number;
+  // Solo las fichas de esta prueba (otras pruebas crean fichas en paralelo): siguen siendo dos, separadas.
+  const total = async () =>
+    (await sql`select count(*)::int as n from visitante where (id in (${a.id}, ${b.id}) or nombre = ${a.nombre}) and fusionado_en_id is null`)[0].n as number;
   const antes = await total();
+  expect(antes).toBe(2);
 
   await entrar(page, (await crearCuenta([["encargado", "TEN"]])).correo);
   await page.goto(`/sucursales/TEN/visitantes/${b.id}/corregir`);
@@ -183,7 +186,7 @@ test("si la corrección produce coincidencias, avisa y al confirmar guarda con l
   await expect(page.locator("p.aviso[role=status]")).toHaveText("Corrección guardada.");
   expect((await fila(b.id)).nombre).toBe(a.nombre);
   expect((await fila(a.id)).nombre).toBe(a.nombre);
-  expect(await total()).toBe(antes);
+  expect(await total()).toBe(2);
 });
 
 test("el historial de correcciones solo lo recibe quien puede corregir; Recepción y Administración ven la ficha actual", async ({ page }) => {
