@@ -93,3 +93,18 @@ significa que la persona nunca haya asistido.
   terminado en 0401 (la segunda con falta de ortografía y sin procedencia).
 - **Se debe bloquear:** «Ana Martínez Ruiz» y «Luis Martínez Ruiz», que comparten el teléfono terminado en 0201 y ya
   están confirmados como personas distintas.
+
+## Indicado para el reporte básico (4 nov 2026)
+
+- **Lo ven Encargado, Administración y Dirección**, según sus sucursales autorizadas (permiso `reporte.expedientes`).
+  Recepción no. El permiso se valida en el servidor.
+- **«Expedientes creados»** por sucursal y periodo, contando por la sucursal donde se creó cada ficha. Las visitas por
+  sucursal se cuentan en el bloque 4.
+- **Posibles duplicados:** cada par una sola vez; fichas activas con el mismo teléfono registrado o un nombre muy
+  parecido; sin pares confirmados como personas distintas ni fichas ya unidas. Un par de fichas creadas en sucursales
+  distintas solo se muestra y cuenta para quien tiene el reporte en ambas.
+
+Provisional (decidido al construir): «nombre muy parecido» es una similitud de al menos **70 %**. Con ese valor entran
+errores de escritura como «Valeria Gómez / Gomes Pineda» (83 %) y quedan fuera hermanos que solo comparten apellidos,
+como «Ana / Luis Martínez Ruiz» (61 %). Las fichas que después se unieron a otra siguen contando como expedientes creados
+y se muestran aparte.
