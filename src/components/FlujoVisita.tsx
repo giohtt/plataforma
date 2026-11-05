@@ -6,13 +6,16 @@ import { accionConfirmarVisita, accionVisitasDeHoy } from "@/app/acciones-visita
 import { accionBuscarVisitantes } from "@/app/acciones-visitantes";
 import { FormularioVisitante } from "@/components/FormularioVisitante";
 import { TarjetaVisitante } from "@/components/Visitantes";
-import { leerRecibido, MAXIMO_PERSONAS, mensajeRecibido, TARIFA_VISITA, totalVisitas } from "@/lib/datos-visita";
+import {
+  leerAutorizacion, leerRecibido, MAXIMO_PERSONAS, MENSAJES_AUTORIZACION, mensajeRecibido, TARIFA_VISITA, totalVisitas, type FormaPago,
+} from "@/lib/datos-visita";
 import { normalizarTelefono } from "@/lib/datos-visitante";
-import type { CobroRegistrado, VisitaHoy } from "@/lib/visitas";
+import type { CobroConMismaAutorizacion, CobroRegistrado, VisitaHoy } from "@/lib/visitas";
 import type { ResultadoVisitante } from "@/lib/visitantes";
 
 const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
 const $ = (importe: string) => pesos.format(Number(importe));
+const hora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", timeStyle: "short" });
 
 /** Clave del cobro: se crea al agregar a la primera persona y se conserva hasta que el cobro se guarda. */
 function nuevaClave(): string {
@@ -49,11 +52,17 @@ export function FlujoVisita(props: Props) {
   const [hoy, setHoy] = useState<Record<string, VisitaHoy>>({});
   const [clave, setClave] = useState<string | null>(null);
   const [recibido, setRecibido] = useState("");
+  const [forma, setForma] = useState<FormaPago>("efectivo");
+  const [autorizacion, setAutorizacion] = useState("");
+  const [intentoTarjeta, setIntentoTarjeta] = useState(false);
+  // La autorización ya aparece hoy en la sucursal: se muestran los cobros previos y se pide confirmar otra venta.
+  const [previos, setPrevios] = useState<CobroConMismaAutorizacion[] | null>(null);
+  const [otraVenta, setOtraVenta] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const enCurso = useRef(false);
   // Tras perder la conexión no se sabe si el cobro se guardó: grupo y recibido quedan fijos hasta reintentar.
   const [pendiente, setPendiente] = useState(false);
-  const [error, setError] = useState<{ general: string; recibido?: string } | null>(null);
+  const [error, setError] = useState<{ general: string; recibido?: string; autorizacion?: string } | null>(null);
   const [registrado, setRegistrado] = useState<CobroRegistrado | null>(null);
   const [creando, setCreando] = useState<{ nombre: string; telefono: string } | null>(null);
 
@@ -83,6 +92,11 @@ export function FlujoVisita(props: Props) {
     setHoy({});
     setClave(null);
     setRecibido("");
+    setForma("efectivo");
+    setAutorizacion("");
+    setIntentoTarjeta(false);
+    setPrevios(null);
+    setOtraVenta(false);
     setError(null);
     setPendiente(false);
     setRegistrado(null);
@@ -102,7 +116,17 @@ export function FlujoVisita(props: Props) {
         </ul>
         <dl className="resumen-cobro">
           <dt>Total</dt>
-          <dd><strong>{$(registrado.total)}</strong> en efectivo</dd>
+          <dd><strong>{$(registrado.total)}</strong> {registrado.formaPago === "tarjeta" ? "con tarjeta" : "en efectivo"}</dd>
+          {registrado.formaPago === "tarjeta" ? (
+            <>
+              <dt>Autorización</dt>
+              <dd data-testid="autorizacion-registrada">{registrado.autorizacion}</dd>
+              <dt>Estado</dt>
+              <dd data-testid="estado-registrado">Confirmado operativamente</dd>
+              <dt>Liquidación bancaria</dt>
+              <dd data-testid="conciliacion-registrada">Pendiente de conciliar</dd>
+            </>
+          ) : null}
           {registrado.recibido ? (
             <>
               <dt>Recibido</dt>
@@ -111,8 +135,8 @@ export function FlujoVisita(props: Props) {
               <dd data-testid="cambio-registrado"><strong>{$(registrado.cambio ?? "0")}</strong></dd>
             </>
           ) : null}
-          <dt>Entró a la bolsa</dt>
-          <dd data-testid="bolsa-registrado">{$(registrado.total)}</dd>
+          <dt>{registrado.formaPago === "tarjeta" ? "Bolsa de visitas" : "Entró a la bolsa"}</dt>
+          <dd data-testid="bolsa-registrado">{registrado.formaPago === "tarjeta" ? "No entra efectivo (tarjeta)" : $(registrado.total)}</dd>
         </dl>
         <p className="fila-acciones">
           <button className="boton boton-principal" type="button" onClick={nuevaVisita}>Nueva visita</button>
@@ -123,13 +147,18 @@ export function FlujoVisita(props: Props) {
   }
 
   const total = totalVisitas(grupo.length);
-  const vivo = leerRecibido(recibido, total);
+  const tarjeta = forma === "tarjeta";
+  const vivo = leerRecibido(tarjeta ? "" : recibido, total);
   const errorCampo = !vivo.ok ? mensajeRecibido(vivo.motivo, total) : error?.recibido;
+  const aut = leerAutorizacion(autorizacion);
+  const errorAut = tarjeta && intentoTarjeta && !aut.ok ? MENSAJES_AUTORIZACION[aut.motivo] : error?.autorizacion;
+  const falta = previos !== null && !otraVenta;
   const conVisitaHoy = grupo.filter((v) => (hoy[v.id]?.visitasHoy ?? 0) > 0);
 
   const confirmar = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (enCurso.current || !vivo.ok || !grupo.length) return; // doble clic: el segundo no sale del navegador
+    if (tarjeta) setIntentoTarjeta(true);
+    if (enCurso.current || !vivo.ok || !grupo.length || (tarjeta && !aut.ok) || falta) return; // doble clic: el segundo no sale del navegador
     enCurso.current = true;
     setEnviando(true);
     setError(null);
@@ -137,12 +166,19 @@ export function FlujoVisita(props: Props) {
       const r = await accionConfirmarVisita(new FormData(e.currentTarget));
       setPendiente(false);
       if (r.ok) setRegistrado(r.cobro);
-      else setError({ general: r.error, recibido: r.errorRecibido });
+      else {
+        // Con una autorización repetida basta el recuadro con el cobro previo y la confirmación.
+        if (r.previos) { setPrevios(r.previos); setError(null); }
+        else setError({ general: r.error, recibido: r.errorRecibido, autorizacion: r.errorAutorizacion });
+      }
     } catch {
-      // No se sabe si llegó al servidor. Grupo, recibido y clave se conservan: reintentar no cobra dos veces.
+      // No se sabe si llegó al servidor. Grupo, medio de pago, recibido o autorización y clave se conservan:
+      // reintentar no registra dos veces.
       setPendiente(true);
       setError({
-        general: "Se perdió la conexión y no sabemos si el cobro se guardó. Vuelve a tocar «Confirmar cobro»: si ya se había guardado, no se cobrará dos veces. Mientras tanto no se puede cambiar el grupo ni lo recibido.",
+        general: tarjeta
+          ? "Se perdió la conexión y no sabemos si el cobro se registró en Fitnessland. El pago ya se cobró en la terminal: no vuelvas a pasar la tarjeta. Toca «Registrar cobro aprobado» otra vez con la misma autorización: si ya se había registrado, no se registrará dos veces."
+          : "Se perdió la conexión y no sabemos si el cobro se guardó. Vuelve a tocar «Confirmar cobro»: si ya se había guardado, no se cobrará dos veces. Mientras tanto no se puede cambiar el grupo ni lo recibido.",
       });
     } finally {
       enCurso.current = false;
@@ -194,7 +230,7 @@ export function FlujoVisita(props: Props) {
             <dd>{sucursal}</dd>
             <dt>Total</dt>
             <dd data-testid="total">
-              <strong>{$(total)}</strong> en efectivo{grupo.length > 1 ? ` (${grupo.length} × ${$(TARIFA_VISITA)})` : ""}
+              <strong>{$(total)}</strong> {tarjeta ? "con tarjeta" : "en efectivo"}{grupo.length > 1 ? ` (${grupo.length} × ${$(TARIFA_VISITA)})` : ""}
             </dd>
           </dl>
           {conVisitaHoy.length ? (
@@ -209,27 +245,78 @@ export function FlujoVisita(props: Props) {
             <input type="hidden" name="clave" value={clave ?? ""} />
             <input type="hidden" name="turnoId" value={turnoId} />
             {grupo.map((v) => <input key={v.id} type="hidden" name="visitanteId" value={v.id} />)}
-            <div className="campo">
-              <label htmlFor="recibido">Recibido (opcional)</label>
-              <div className="importe">
-                <span aria-hidden="true">$</span>
-                <input id="recibido" name="recibido" inputMode="decimal" autoComplete="off" value={recibido} readOnly={pendiente}
-                  onChange={(e) => { setRecibido(e.target.value); if (error?.recibido) setError(null); }}
-                  aria-invalid={errorCampo ? true : undefined}
-                  aria-describedby={`recibido-ayuda${errorCampo ? " recibido-error" : ""}`} />
+            <input type="hidden" name="formaPago" value={forma} />
+            <fieldset className="campo campo-grupo" disabled={fijo}>
+              <legend>Medio de pago</legend>
+              <div className="opciones-pago">
+                {(["efectivo", "tarjeta"] as const).map((f) => (
+                  <label key={f} className="casilla">
+                    <input type="radio" name="medio" value={f} checked={forma === f}
+                      onChange={() => { setForma(f); setError(null); setPrevios(null); setOtraVenta(false); }} />
+                    {f === "efectivo" ? "Efectivo" : "Tarjeta"}
+                  </label>
+                ))}
               </div>
-              {errorCampo ? <span className="campo-error" id="recibido-error">{errorCampo}</span> : null}
-              {vivo.ok && vivo.cambio !== null ? (
-                <span className="cambio-vivo" data-testid="cambio">Cambio: <strong>{$(vivo.cambio)}</strong></span>
-              ) : null}
-              <span className="sub" id="recibido-ayuda">
-                Si lo escribes, se calcula el cambio. A la bolsa solo entra el total de {$(total)}.
-              </span>
-            </div>
-            <p className="sub">Responsable de la bolsa: <strong>{responsableBolsa}</strong></p>
+            </fieldset>
+            {tarjeta ? (
+              <div className="campo">
+                <ol className="pasos-tarjeta">
+                  <li>Cobra <strong>{$(total)}</strong> en la terminal y espera a que diga <strong>«Aprobado»</strong>.</li>
+                  <li>Si la terminal rechaza el pago, no registres nada.</li>
+                </ol>
+                <label htmlFor="autorizacion">Autorización del comprobante</label>
+                <input id="autorizacion" name="autorizacion" autoComplete="off" autoCapitalize="characters" maxLength={20}
+                  value={autorizacion} readOnly={pendiente}
+                  onChange={(e) => { setAutorizacion(e.target.value); setPrevios(null); setOtraVenta(false); if (error) setError(null); }}
+                  aria-invalid={errorAut ? true : undefined}
+                  aria-describedby={`autorizacion-ayuda${errorAut ? " autorizacion-error" : ""}`} />
+                {errorAut ? <span className="campo-error" id="autorizacion-error">{errorAut}</span> : null}
+                <span className="sub" id="autorizacion-ayuda">
+                  Solo la autorización, como aparece en el comprobante. No escribas datos de la tarjeta. Formato provisional: de 4 a 12 letras o números.
+                </span>
+              </div>
+            ) : (
+              <div className="campo">
+                <label htmlFor="recibido">Recibido (opcional)</label>
+                <div className="importe">
+                  <span aria-hidden="true">$</span>
+                  <input id="recibido" name="recibido" inputMode="decimal" autoComplete="off" value={recibido} readOnly={pendiente}
+                    onChange={(e) => { setRecibido(e.target.value); if (error?.recibido) setError(null); }}
+                    aria-invalid={errorCampo ? true : undefined}
+                    aria-describedby={`recibido-ayuda${errorCampo ? " recibido-error" : ""}`} />
+                </div>
+                {errorCampo ? <span className="campo-error" id="recibido-error">{errorCampo}</span> : null}
+                {vivo.ok && vivo.cambio !== null ? (
+                  <span className="cambio-vivo" data-testid="cambio">Cambio: <strong>{$(vivo.cambio)}</strong></span>
+                ) : null}
+                <span className="sub" id="recibido-ayuda">
+                  Si lo escribes, se calcula el cambio. A la bolsa solo entra el total de {$(total)}.
+                </span>
+              </div>
+            )}
+            {tarjeta && previos ? (
+              <section className="aviso aviso-info" data-testid="autorizacion-previa" aria-label="Cobro con la misma autorización">
+                <p><strong>Esta autorización ya se registró hoy en {sucursal}:</strong></p>
+                <ul className="lista-simple">
+                  {previos.map((p) => (
+                    <li key={p.id}>
+                      {hora.format(new Date(p.registradaEn))} · {p.personas} {p.personas === 1 ? "persona" : "personas"} · {$(p.total)} con tarjeta ·
+                      registrado por {p.registradaPor} ·{" "}
+                      <a href={`/sucursales/${codigo}/turno/cobros/${p.id}`} target="_blank" rel="noopener">Ver cobro</a>
+                    </li>
+                  ))}
+                </ul>
+                <label className="casilla">
+                  <input type="checkbox" checked={otraVenta} onChange={(e) => setOtraVenta(e.target.checked)} disabled={fijo} />
+                  Confirmo que es otra venta aprobada en la terminal, distinta de la anterior.
+                </label>
+                {otraVenta ? <input type="hidden" name="otraVenta" value="si" /> : null}
+              </section>
+            ) : null}
+            {tarjeta ? null : <p className="sub">Responsable de la bolsa: <strong>{responsableBolsa}</strong></p>}
             <p className="fila-acciones">
-              <button className="boton boton-principal" type="submit" disabled={enviando || !vivo.ok}>
-                {enviando ? "Registrando…" : `Confirmar cobro · ${$(total)}`}
+              <button className="boton boton-principal" type="submit" disabled={enviando || !vivo.ok || falta}>
+                {enviando ? "Registrando…" : tarjeta ? `Registrar cobro aprobado · ${$(total)}` : `Confirmar cobro · ${$(total)}`}
               </button>
               <button className="boton" type="button" onClick={nuevaVisita} disabled={fijo}>Empezar de nuevo</button>
             </p>

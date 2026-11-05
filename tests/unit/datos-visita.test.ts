@@ -40,3 +40,14 @@ describe("total de un cobro grupal", () => {
     expect(mensajeRecibido("menor", "150.00")).toBe("Lo recibido es menor que el total ($150.00). No se puede confirmar así.");
   });
 });
+
+describe("autorización de la terminal (formato provisional)", () => {
+  it("es obligatoria; acepta de 4 a 12 letras o números, sin espacios ni guiones, en mayúsculas", async () => {
+    const { leerAutorizacion } = await import("@/lib/datos-visita");
+    expect(leerAutorizacion("")).toEqual({ ok: false, motivo: "vacia" });
+    expect(leerAutorizacion("  ")).toEqual({ ok: false, motivo: "vacia" });
+    expect(leerAutorizacion("123456")).toEqual({ ok: true, valor: "123456" });
+    expect(leerAutorizacion(" ab 12-3c ")).toEqual({ ok: true, valor: "AB123C" });
+    for (const malo of ["123", "1234567890123", "12$456", "ñandú1"]) expect(leerAutorizacion(malo).ok, malo).toBe(false);
+  });
+});
