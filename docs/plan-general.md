@@ -48,7 +48,7 @@ Confirmados el 4 nov 2026.
 7. ~~Reporte básico: usuarios y sus asignaciones por sucursal.~~ Hecho (`/reportes/usuarios`). Probado en el sitio de pruebas el 4 nov 2026.
 - **Decisiones que necesita:** ninguna nueva.
 
-### Bloque 2. Expedientes de visitantes y búsqueda (en curso, solo datos ficticios)
+### Bloque 2. Expedientes de visitantes y búsqueda (cerrado para el entorno de pruebas el 4 nov 2026)
 1. Expediente: alta, corrección con historial y motivo, búsqueda por nombre o teléfono. Pruebas con homónimos, errores de escritura y teléfono compartido.
    - ~~Primer flujo: búsqueda, elección entre coincidencias y alta.~~ Hecho con reglas provisionales (opciones en [`decisiones-bloque-2.md`](decisiones-bloque-2.md)). La búsqueda y el alta se envían por POST: el nombre y el teléfono nunca quedan en la dirección. **Probado en el sitio el 4 nov 2026 con Recepción Tenango:** búsqueda «maria hernandez» con 2 coincidencias distinguidas por teléfono enmascarado (0101 Tenango, 0102 Santiago); elección de la de Santiago; alta de Diego Martínez Ruiz con el teléfono compartido de Luis y Ana, confirmando que es otra persona.
    - ~~Corrección de expedientes.~~ Hecha. Corrigen Encargado y Dirección, solo expedientes creados en una sucursal donde tengan el permiso; motivo obligatorio; se conserva dato anterior, nuevo, quién, desde qué sucursal y cuándo; el historial de correcciones solo lo ve quien puede corregir ese expediente, con el teléfono enmascarado. **Probada en el sitio el 4 nov 2026:** Encargado Tenango corrigió la procedencia de Diego Martínez Ruiz (Estado de México → Querétaro) y el cambio apareció en el historial con motivo, quién y desde Tenango; Recepción Tenango vio la ficha actualizada sin el historial ni el botón «Corregir datos».
@@ -56,8 +56,10 @@ Confirmados el 4 nov 2026.
    - ~~Coincidencias al crear.~~ Hecho con el alta (confirmación «es otra persona» registrada).
    - ~~Fusión manual.~~ Hecha. Solo para dos fichas de la misma persona creadas por error. Solo Dirección con el permiso `visitante.fusionar` en la sucursal de cada ficha; elige la ficha activa y de cuál se toma cada dato, con teléfonos enmascarados, vista previa, motivo obligatorio y aviso de que no se deshace desde la pantalla. La otra ficha se conserva con su historial y un vínculo a la activa; sale de la búsqueda; un enlace anterior lleva a la activa solo con permiso de consulta. Bloqueada si ya se confirmaron como personas distintas. Deshacer queda pendiente. **Probada en el sitio el 4 nov 2026 con Dirección de Tenango:** se unieron las fichas ficticias de Valeria (Gómez y Gomes Pineda) y en la búsqueda quedó una sola; la fusión de Ana y Luis Martínez Ruiz, que comparten teléfono y estaban confirmados como distintos, quedó bloqueada con la explicación.
 3. Vistas del expediente por perfil y cobertura del historial.
-- **Reporte básico:** expedientes creados por sucursal y periodo; posibles duplicados pendientes. En revisión (`/reportes/expedientes`): lo ven Encargado, Administración y Dirección según sus sucursales (permiso `reporte.expedientes`), Recepción no. «Expedientes creados» cuenta por la sucursal donde se creó la ficha. Los posibles duplicados son pares de fichas activas con el mismo teléfono o un nombre muy parecido (similitud de al menos 70 %, provisional), contados una vez, sin los confirmados como distintos ni fichas unidas; un par de dos sucursales solo lo ve quien tiene el reporte en ambas.
-- **Decisiones que necesita:** privacidad del expediente (decisión 3) antes de cualquier dato real; qué ve recepción de otras sucursales.
+- **Reporte básico:** expedientes creados por sucursal y periodo; posibles duplicados pendientes. Hecho (`/reportes/expedientes`): lo ven Encargado, Administración y Dirección según sus sucursales (permiso `reporte.expedientes`), Recepción no. «Expedientes creados» cuenta por la sucursal donde se creó la ficha. Los posibles duplicados son pares de fichas activas con el mismo teléfono o un nombre muy parecido (similitud de al menos 70 %, provisional), contados una vez, sin los confirmados como distintos ni fichas unidas; un par de dos sucursales solo lo ve quien tiene el reporte en ambas. **Probado en el sitio el 4 nov 2026:** Encargado Tenango vio 7 expedientes creados, 1 unido después y 0 posibles duplicados; Administración (Tenango y Santiago) vio Santiago 1, Tenango 7, total 8 y el par de las dos María una sola vez; Recepción Tenango recibió «No encontrada» también por enlace directo.
+- **Cierre para el entorno de pruebas:** funciona con reglas provisionales y solo con datos ficticios.
+- **Pendiente antes de capturar datos reales:** campos obligatorios y quién puede ver el teléfono completo (hoy, opción A provisional: solo el nombre es obligatorio y el teléfono se enmascara para todos), además del aviso de privacidad y la conservación de datos (decisión 3). El umbral de «nombre muy parecido» (70 %) también es provisional.
+- **Se retoma en el bloque 4:** qué historial de otras sucursales ve Recepción.
 
 ### Bloque 3. Apertura de turno y lugares de efectivo
 1. Turno de recepción por sucursal y usuario.
@@ -78,7 +80,7 @@ Confirmados el 4 nov 2026.
 5. Historial del visitante entre sucursales con la marca de incompleto.
 6. No se registran cobros nuevos en una sucursal inactiva (comprobado en el servidor, también por solicitud directa).
 - **Reporte básico:** operaciones, pases, cobros confirmados por forma de pago (incluidas las transferencias con abono verificado), transferencias pendientes aparte y efectivo esperado de la bolsa. Pruebas: tres personas = una operación, un cobro y tres pases; una transferencia que pasa de pendiente a verificada cambia de línea sin duplicar el importe.
-- **Decisiones que necesita:** referencias mínimas de tarjeta y transferencia; comprobante para el visitante.
+- **Decisiones que necesita:** referencias mínimas de tarjeta y transferencia; comprobante para el visitante; qué historial de otras sucursales ve Recepción (pendiente desde el bloque 2).
 
 ### Bloque 5. Conteos, entregas, retiros, cierre y revisión
 1. Conteo con diferencia conservada; entrega entre recepcionistas con confirmación de quien recibe.
@@ -132,7 +134,7 @@ Reportes avanzados de visitantes (nuevos y recurrentes, frecuencia, comparacione
 |---|---|---|
 | 1 | Definición comercial de «visitante nuevo» | 7 (también reportes avanzados) |
 | 2 | Fuente válida del pago para el beneficio de pronto pago | 7 |
-| 3 | Privacidad del expediente: aviso, campos obligatorios, conservación, qué ve cada perfil | 2 (antes de datos reales) |
+| 3 | Privacidad del expediente: aviso, campos obligatorios, conservación, quién ve el teléfono completo; qué historial de otras sucursales ve Recepción | Antes de datos reales; el historial entre sucursales, en el bloque 4 |
 | 4 | Historial anterior: libreta, Open Desk o empezar desde una fecha declarada | 7 y reportes de nuevos |
 | 5 | Canal de entrega del QR | 8 |
 
