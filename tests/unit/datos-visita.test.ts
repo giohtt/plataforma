@@ -51,3 +51,13 @@ describe("autorización de la terminal (formato provisional)", () => {
     for (const malo of ["123", "1234567890123", "12$456", "ñandú1"]) expect(leerAutorizacion(malo).ok, malo).toBe(false);
   });
 });
+
+describe("clave de rastreo o folio bancario (formato provisional)", () => {
+  it("es obligatoria; de 4 a 30 letras o números, sin espacios ni guiones, en mayúsculas", async () => {
+    const { leerReferencia } = await import("@/lib/datos-visita");
+    expect(leerReferencia("")).toEqual({ ok: false, motivo: "vacia" });
+    expect(leerReferencia("mban 0100-2611")).toEqual({ ok: true, valor: "MBAN01002611" });
+    expect(leerReferencia("12345678901234567890123456789X")).toEqual({ ok: true, valor: "12345678901234567890123456789X" });
+    for (const malo of ["123", "1234567890123456789012345678901", "AB$12", "año1234"]) expect(leerReferencia(malo).ok, malo).toBe(false);
+  });
+});

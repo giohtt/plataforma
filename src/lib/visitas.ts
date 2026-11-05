@@ -1,5 +1,8 @@
 import type postgres from "postgres";
-import { leerAutorizacion, leerRecibido, MAXIMO_PERSONAS, TARIFA_VISITA, totalVisitas, type FormaPago } from "@/lib/datos-visita";
+import {
+  DIAS_FOLIO_REPETIDO, leerAutorizacion, leerRecibido, leerReferencia, MAXIMO_PERSONAS, TARIFA_VISITA, totalVisitas,
+  type FormaPago, type TipoReferencia,
+} from "@/lib/datos-visita";
 import { enmascararTelefono } from "@/lib/datos-visitante";
 import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
@@ -40,6 +43,8 @@ export type ErrorVisita =
   | "recibido_menor"
   | "autorizacion_invalida"
   | "autorizacion_repetida"
+  | "referencia_invalida"
+  | "referencia_repetida"
   | "forma_invalida"
   | "bloqueado_produccion";
 
@@ -86,19 +91,31 @@ export type CobroRegistrado = {
   visitantes: string[];
   total: string;
   formaPago: FormaPago;
-  estado: "confirmado" | "confirmado_operativamente";
+  estado: EstadoCobro;
   recibido: string | null;
   cambio: string | null;
   autorizacion: string | null;
   conciliacion: "pendiente" | null;
+  referencia: string | null;
+  tipoReferencia: TipoReferencia | null;
 };
 
-/** Cobro previo con la misma autorización en la sucursal y el día: se muestra antes de confirmar que es otra venta. */
-export type CobroConMismaAutorizacion = { id: string; registradaEn: Date; registradaPor: string; personas: number; total: string };
+export type EstadoCobro = "confirmado" | "confirmado_operativamente" | "pendiente_abono" | "abono_verificado" | "no_localizado";
+
+/**
+ * Cobro previo con la misma autorización (tarjeta) o la misma referencia (transferencia), que se muestra antes de
+ * confirmar que es otra venta u otra transferencia. Sus datos solo se muestran a quien puede ver los turnos o
+ * registrar visitas en la sucursal de ese cobro; a los demás solo se les dice que existe.
+ */
+export type CobroPrevio =
+  | { visible: true; id: string; registradaEn: Date; registradaPor: string; personas: number; total: string; sucursal: string; codigo: string; estado: EstadoCobro }
+  | { visible: false };
+/** @deprecated Nombre anterior, solo tarjeta. */
+export type CobroConMismaAutorizacion = CobroPrevio;
 
 export type ResultadoConfirmacion =
   | { ok: true; operacionId: string; repetida: boolean; cobro: CobroRegistrado }
-  | { ok: false; error: ErrorVisita; detalle?: string; previos?: CobroConMismaAutorizacion[] };
+  | { ok: false; error: ErrorVisita; detalle?: string; previos?: CobroPrevio[] };
 
 type Pedido = {
   clave: string;
@@ -109,7 +126,13 @@ type Pedido = {
   cambio: string | null;
   /** Solo con tarjeta: la autorización del comprobante, ya normalizada (leerAutorizacion). */
   autorizacion: string | null;
-  /** Solo con tarjeta: confirmó que es otra venta aunque la autorización ya aparece ese día en la sucursal. */
+  /** Solo con transferencia: la clave de rastreo o el folio bancario, ya normalizado (leerReferencia), y su tipo. */
+  referencia?: string | null;
+  tipoReferencia?: TipoReferencia | null;
+  /**
+   * Tarjeta: confirmó que es otra venta aunque la autorización ya aparece ese día en la sucursal.
+   * Transferencia: confirmó que es otra transferencia aunque la referencia ya estaba registrada.
+   */
   otraVenta: boolean;
 };
 
@@ -121,7 +144,8 @@ type Pedido = {
 async function operacionExistente(tx: Tx, pedido: Pedido, usuarioId: string, codigo: string, repetida = true): Promise<ResultadoConfirmacion | null> {
   const [o] = await tx<({ id: string; registrada_por: string; codigo: string } & Omit<CobroRegistrado, "personas" | "visitantes">)[]>`
     select o.id, o.registrada_por, s.codigo, c.importe::text as total, c.recibido::text as recibido, c.cambio::text as cambio,
-           c.forma_pago as "formaPago", c.estado, c.autorizacion, c.conciliacion
+           c.forma_pago as "formaPago", c.estado, c.autorizacion, c.conciliacion,
+           c.referencia, c.tipo_referencia as "tipoReferencia"
     from operacion_visita o
     join sucursal s on s.id = o.sucursal_id
     join cobro_visita c on c.operacion_id = o.id
@@ -136,15 +160,36 @@ async function operacionExistente(tx: Tx, pedido: Pedido, usuarioId: string, cod
     pases.every((p, i) => p.visitante_id === pedido.visitanteIds[i]) &&
     o.recibido === pedido.recibido &&
     o.formaPago === pedido.formaPago &&
-    o.autorizacion === pedido.autorizacion;
+    o.autorizacion === pedido.autorizacion &&
+    o.referencia === (pedido.referencia ?? null) &&
+    o.tipoReferencia === (pedido.tipoReferencia ?? null);
   if (!mismos) return { ok: false, error: "datos_distintos" };
   return {
     ok: true, operacionId: o.id, repetida,
     cobro: {
       personas: pases.length, visitantes: pases.map((p) => p.nombre), total: o.total, formaPago: o.formaPago, estado: o.estado,
       recibido: o.recibido, cambio: o.cambio, autorizacion: o.autorizacion, conciliacion: o.conciliacion,
+      referencia: o.referencia, tipoReferencia: o.tipoReferencia,
     },
   };
+}
+
+/** Cobros que cumplen `filtro` (sobre `c` cobro, `o` operación, `s` sucursal), con sus datos solo si se pueden ver. */
+async function cobrosPrevios(tx: Tx, usuarioId: string, filtro: postgres.PendingQuery<postgres.Row[]>): Promise<CobroPrevio[]> {
+  const filas = await tx<(Omit<Extract<CobroPrevio, { visible: true }>, "visible"> & { visible: boolean })[]>`
+    select o.id, o.registrada_en as "registradaEn", u.nombre as "registradaPor", c.importe::text as total, c.estado,
+           s.nombre as sucursal, s.codigo,
+           (select count(*)::int from pase_visita p where p.operacion_id = o.id) as personas,
+           (tiene_permiso(${usuarioId}, 'turno.consultar', s.id) or tiene_permiso(${usuarioId}, 'visita.registrar', s.id)) as visible
+    from cobro_visita c
+    join operacion_visita o on o.id = c.operacion_id
+    join sucursal s on s.id = o.sucursal_id
+    join usuario u on u.id = o.registrada_por
+    where ${filtro}
+    order by o.registrada_en
+    limit 20`;
+  const visibles: CobroPrevio[] = filas.filter((f) => f.visible).map((f) => ({ ...f, visible: true as const }));
+  return filas.some((f) => !f.visible) ? [...visibles, { visible: false }] : visibles;
 }
 
 /**
@@ -170,8 +215,19 @@ export async function confirmarVisita(
   if (new Set(ids).size !== ids.length) return { ok: false, error: "persona_repetida" };
   const total = totalVisitas(ids.length);
   const tarjeta = pedido.formaPago === "tarjeta";
-  if (pedido.formaPago !== "efectivo" && !tarjeta) return { ok: false, error: "forma_invalida" };
-  if (tarjeta) {
+  const transferencia = pedido.formaPago === "transferencia";
+  const referencia = pedido.referencia ?? null;
+  const tipoReferencia = pedido.tipoReferencia ?? null;
+  if (pedido.formaPago !== "efectivo" && !tarjeta && !transferencia) return { ok: false, error: "forma_invalida" };
+  if (!transferencia && (referencia !== null || tipoReferencia !== null)) return { ok: false, error: "forma_invalida" };
+  if (transferencia) {
+    // Con transferencia no hay recibido, cambio ni autorización; la referencia y su tipo son obligatorios.
+    if (pedido.recibido !== null || pedido.cambio !== null || pedido.autorizacion !== null) return { ok: false, error: "forma_invalida" };
+    const ref = leerReferencia(referencia);
+    if (!ref.ok || ref.valor !== referencia || (tipoReferencia !== "clave_rastreo" && tipoReferencia !== "folio_bancario")) {
+      return { ok: false, error: "referencia_invalida" };
+    }
+  } else if (tarjeta) {
     // Con tarjeta no hay recibido ni cambio; la autorización es obligatoria.
     if (pedido.recibido !== null || pedido.cambio !== null) return { ok: false, error: "forma_invalida" };
     const a = leerAutorizacion(pedido.autorizacion);
@@ -208,18 +264,22 @@ export async function confirmarVisita(
     // Misma autorización ya registrada hoy en esta sucursal: puede ser la misma venta capturada dos veces.
     let repetidaConfirmada = false;
     if (tarjeta) {
-      const previos = await tx<CobroConMismaAutorizacion[]>`
-        select o.id, o.registrada_en as "registradaEn", u.nombre as "registradaPor", c.importe::text as total,
-               (select count(*)::int from pase_visita p where p.operacion_id = o.id) as personas
-        from cobro_visita c
-        join operacion_visita o on o.id = c.operacion_id
-        join sucursal s on s.id = o.sucursal_id
-        join usuario u on u.id = o.registrada_por
-        where c.autorizacion = ${pedido.autorizacion} and o.sucursal_id = ${r.c.sucursalId}
-          and o.registrada_en >= (date_trunc('day', now() at time zone s.zona_horaria)) at time zone s.zona_horaria
-        order by o.registrada_en`;
-      if (previos.length && !pedido.otraVenta) return { ok: false, error: "autorizacion_repetida", previos: [...previos] };
+      const previos = await cobrosPrevios(tx, usuarioId, tx`
+        c.autorizacion = ${pedido.autorizacion} and o.sucursal_id = ${r.c.sucursalId}
+        and o.registrada_en >= (date_trunc('day', now() at time zone s.zona_horaria)) at time zone s.zona_horaria`);
+      if (previos.length && !pedido.otraVenta) return { ok: false, error: "autorizacion_repetida", previos };
       repetidaConfirmada = previos.length > 0;
+    }
+    // Misma referencia ya registrada (en cualquier sucursal): puede ser el mismo abono capturado dos veces.
+    // Clave de rastreo: en cualquier fecha. Folio bancario: en los últimos días (los folios se repiten con el tiempo).
+    let referenciaConfirmada = false;
+    if (transferencia) {
+      const previos = await cobrosPrevios(tx, usuarioId, tipoReferencia === "clave_rastreo"
+        ? tx`c.tipo_referencia = 'clave_rastreo' and c.referencia = ${referencia}`
+        : tx`c.tipo_referencia = 'folio_bancario' and c.referencia = ${referencia}
+             and o.registrada_en >= now() - make_interval(days => ${DIAS_FOLIO_REPETIDO})`);
+      if (previos.length && !pedido.otraVenta) return { ok: false, error: "referencia_repetida", previos };
+      referenciaConfirmada = previos.length > 0;
     }
 
     const [o] = await tx<{ id: string }[]>`
@@ -231,9 +291,11 @@ export async function confirmarVisita(
 
     const [cobro] = await tx<{ id: string }[]>`
       insert into cobro_visita (operacion_id, forma_pago, estado, importe, recibido, cambio, autorizacion, conciliacion,
-                                autorizacion_repetida_confirmada)
-      values (${o.id}, ${pedido.formaPago}, ${tarjeta ? "confirmado_operativamente" : "confirmado"}, ${total},
-              ${pedido.recibido}, ${pedido.cambio}, ${pedido.autorizacion}, ${tarjeta ? "pendiente" : null}, ${repetidaConfirmada})
+                                autorizacion_repetida_confirmada, referencia, tipo_referencia, referencia_repetida_confirmada)
+      values (${o.id}, ${pedido.formaPago},
+              ${tarjeta ? "confirmado_operativamente" : transferencia ? "pendiente_abono" : "confirmado"}, ${total},
+              ${pedido.recibido}, ${pedido.cambio}, ${pedido.autorizacion}, ${tarjeta ? "pendiente" : null}, ${repetidaConfirmada},
+              ${referencia}, ${tipoReferencia}, ${referenciaConfirmada})
       returning id`;
     // Un pase por persona, en el orden en que se agregaron; cada uno con la sucursal donde ocurre la visita.
     for (const [i, id] of ids.entries()) {
@@ -242,8 +304,8 @@ export async function confirmarVisita(
         values (${o.id}, ${id}, ${r.c.sucursalId}, ${TARIFA_VISITA}, 0, ${TARIFA_VISITA}, ${i + 1})`;
     }
     // Efectivo: a la bolsa entra el total del grupo, en un solo movimiento; el cambio no es un movimiento.
-    // Tarjeta: no hay entrada de efectivo.
-    if (!tarjeta) {
+    // Tarjeta y transferencia: no hay entrada de efectivo.
+    if (!tarjeta && !transferencia) {
       await tx`
         insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, cobro_id, responsable_id, registrado_por)
         values (${r.c.bolsaId}, ${r.c.turnoId}, 'entrada_cobro_visita', ${total}, ${cobro.id}, ${usuarioId}, ${usuarioId})`;
@@ -254,7 +316,7 @@ export async function confirmarVisita(
 
 export type CobroDelTurno = {
   id: string; registradaEn: Date; personas: number; total: string; formaPago: FormaPago;
-  estado: "confirmado" | "confirmado_operativamente"; conciliacion: "pendiente" | null;
+  estado: EstadoCobro; conciliacion: "pendiente" | null;
 };
 
 /** Cobros de visitas de un turno, una línea por cobro, el más reciente primero. Quien llama ya comprobó que puede ver el turno. */
@@ -275,9 +337,16 @@ export type DetalleCobro = {
   registradaEn: Date;
   registradaPor: string;
   formaPago: FormaPago;
-  estado: "confirmado" | "confirmado_operativamente";
+  estado: EstadoCobro;
   autorizacion: string | null;
   conciliacion: "pendiente" | null;
+  referencia: string | null;
+  tipoReferencia: TipoReferencia | null;
+  abonoFecha: string | null;
+  verificadoPor: string | null;
+  verificadoEn: Date | null;
+  /** Cambios de estado de una transferencia (verificado, no localizado), del más antiguo al más reciente. */
+  cambios: { de: EstadoCobro; a: EstadoCobro; abonoFecha: string | null; motivo: string | null; usuario: string; en: Date }[];
   total: string;
   recibido: string | null;
   cambio: string | null;
@@ -293,9 +362,11 @@ export type DetalleCobro = {
 export async function detalleCobro(sql: Sql, usuarioId: string, codigo: string, operacionId: string): Promise<DetalleCobro | null> {
   if (!/^[A-Z0-9]{2,5}$/.test(codigo) || !esIdentificadorValido(operacionId)) return null;
   return sql.begin("isolation level repeatable read read only", async (tx) => {
-    const [o] = await tx<(Omit<DetalleCobro, "pases" | "sucursal"> & { codigo: string; sucursal_nombre: string })[]>`
+    const [o] = await tx<(Omit<DetalleCobro, "pases" | "sucursal" | "cambios"> & { codigo: string; sucursal_nombre: string; cobro_id: string })[]>`
       select o.id, s.codigo, s.nombre as sucursal_nombre, o.registrada_en as "registradaEn", u.nombre as "registradaPor",
              c.forma_pago as "formaPago", c.estado, c.autorizacion, c.conciliacion, c.importe::text as total, c.recibido::text as recibido, c.cambio::text as cambio,
+             c.referencia, c.tipo_referencia as "tipoReferencia", c.abono_fecha::text as "abonoFecha",
+             uv.nombre as "verificadoPor", c.verificado_en as "verificadoEn", c.id as cobro_id,
              m.importe::text as "entradaBolsa", ur.nombre as "responsableBolsa"
       from operacion_visita o
       join sucursal s on s.id = o.sucursal_id
@@ -303,8 +374,10 @@ export async function detalleCobro(sql: Sql, usuarioId: string, codigo: string, 
       join cobro_visita c on c.operacion_id = o.id
       left join movimiento_efectivo m on m.cobro_id = c.id
       left join usuario ur on ur.id = m.responsable_id
+      left join usuario uv on uv.id = c.verificado_por
       where o.id = ${operacionId} and s.codigo = ${codigo}
-        and (tiene_permiso(${usuarioId}, 'turno.consultar', s.id) or tiene_permiso(${usuarioId}, 'visita.registrar', s.id))`;
+        and (tiene_permiso(${usuarioId}, 'turno.consultar', s.id) or tiene_permiso(${usuarioId}, 'visita.registrar', s.id)
+             or tiene_permiso(${usuarioId}, 'cobro.verificar_abono', s.id))`;
     if (!o) return null;
     const pases = await tx<(DetalleCobro["pases"][number] & { tel: string | null })[]>`
       select p.id, p.orden, v.nombre, v.telefono as tel, sa.nombre as "fichaDe",
@@ -314,9 +387,15 @@ export async function detalleCobro(sql: Sql, usuarioId: string, codigo: string, 
       join sucursal sa on sa.id = v.sucursal_alta_id
       where p.operacion_id = ${o.id}
       order by p.orden`;
-    const { codigo: cod, sucursal_nombre, ...resto } = o;
+    const cambios = await tx<DetalleCobro["cambios"]>`
+      select h.de, h.a, h.abono_fecha::text as "abonoFecha", h.motivo, u.nombre as usuario, h.en
+      from cobro_cambio_estado h join usuario u on u.id = h.usuario_id
+      where h.cobro_id = ${o.cobro_id} order by h.en, h.id`;
+    const { codigo: cod, sucursal_nombre, cobro_id, ...resto } = o;
+    void cobro_id;
     return {
       ...resto,
+      cambios: [...cambios],
       sucursal: { codigo: cod, nombre: sucursal_nombre },
       pases: pases.map(({ tel, ...p }) => ({ ...p, telefono: enmascararTelefono(tel) })),
     };

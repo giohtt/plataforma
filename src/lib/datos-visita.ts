@@ -48,7 +48,7 @@ export const MENSAJES_RECIBIDO = {
 } as const;
 
 /** Medio de pago de una operación: uno solo por operación (indicado el 5 nov 2026). */
-export type FormaPago = "efectivo" | "tarjeta";
+export type FormaPago = "efectivo" | "tarjeta" | "transferencia";
 
 /**
  * Autorización del comprobante de la terminal. Obligatoria con tarjeta.
@@ -68,3 +68,34 @@ export const MENSAJES_AUTORIZACION = {
   vacia: "Escribe el número de autorización del comprobante de la terminal.",
   formato: "La autorización debe tener de 4 a 12 letras o números, como aparece en el comprobante.",
 } as const;
+
+/** Tipo de referencia de una transferencia: se guarda con la referencia (indicado el 5 nov 2026). */
+export type TipoReferencia = "clave_rastreo" | "folio_bancario";
+export const NOMBRE_REFERENCIA: Record<TipoReferencia, string> = {
+  clave_rastreo: "Clave de rastreo",
+  folio_bancario: "Folio bancario",
+};
+
+/**
+ * «Clave de rastreo o folio bancario» del comprobante. Obligatoria con transferencia.
+ * FORMATO PROVISIONAL: de 4 a 30 letras o números; se ignoran espacios y guiones y se guarda en mayúsculas.
+ */
+export type Referencia = { ok: true; valor: string } | { ok: false; motivo: "vacia" | "formato" };
+
+export function leerReferencia(entrada: unknown): Referencia {
+  if (typeof entrada !== "string" || entrada.trim() === "") return { ok: false, motivo: "vacia" };
+  const valor = entrada.replace(/[\s-]/g, "").toUpperCase();
+  if (!/^[A-Z0-9]{4,30}$/.test(valor)) return { ok: false, motivo: "formato" };
+  return { ok: true, valor };
+}
+
+export const MENSAJES_REFERENCIA = {
+  vacia: "Escribe la clave de rastreo o el folio bancario del comprobante de la transferencia.",
+  formato: "La referencia debe tener de 4 a 30 letras o números, como aparece en el comprobante.",
+  tipo: "Indica si es una clave de rastreo o un folio bancario.",
+} as const;
+
+/** Días hacia atrás en que un folio bancario igual se toma como posible repetido (PROVISIONAL). */
+export const DIAS_FOLIO_REPETIDO = 30;
+/** Días antes de la operación que se aceptan como fecha del abono (PROVISIONAL; nunca una fecha futura). */
+export const DIAS_ABONO_ANTES = 3;

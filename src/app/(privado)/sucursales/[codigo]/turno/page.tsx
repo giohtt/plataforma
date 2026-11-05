@@ -26,6 +26,15 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   const cobros = t ? await cobrosDelTurno(sql, t.id) : [];
   const conTarjeta = cobros.filter((c) => c.formaPago === "tarjeta");
   const totalTarjeta = conTarjeta.reduce((suma, c) => suma + Math.round(Number(c.total) * 100), 0) / 100;
+  const transferencias = cobros.filter((c) => c.formaPago === "transferencia");
+  const porEstado = (estado: string) => {
+    const lista = transferencias.filter((c) => c.estado === estado);
+    return { n: lista.length, total: lista.reduce((suma, c) => suma + Math.round(Number(c.total) * 100), 0) / 100 };
+  };
+  const [tPend, tVer, tNoLoc] = [porEstado("pendiente_abono"), porEstado("abono_verificado"), porEstado("no_localizado")];
+  const ESTADO_TRANSFERENCIA: Record<string, string> = {
+    pendiente_abono: "Pendiente de verificar abono", abono_verificado: "Abono verificado", no_localizado: "No localizado",
+  };
 
   return (
     <main className="contenedor contenedor-medio">
@@ -85,6 +94,18 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
             </dl>
             <p className="sub">La tarjeta no entra a la bolsa de visitas ni cambia su efectivo esperado.</p>
           </section>
+          <section className="tarjeta" aria-labelledby="t-transf" data-testid="transferencias-turno">
+            <h2 id="t-transf" className="titulo-seccion">Transferencias</h2>
+            <dl className="cuentas-lugar">
+              <dt>Pendientes de verificar abono ({tPend.n})</dt>
+              <dd data-testid="transf-pendientes">{pesos.format(tPend.total)}</dd>
+              <dt>Abono verificado ({tVer.n})</dt>
+              <dd data-testid="transf-verificadas">{pesos.format(tVer.total)}</dd>
+              <dt>No localizadas ({tNoLoc.n})</dt>
+              <dd data-testid="transf-no-localizadas">{pesos.format(tNoLoc.total)}</dd>
+            </dl>
+            <p className="sub">Las transferencias no entran a la bolsa de visitas ni cambian su efectivo esperado.</p>
+          </section>
           <section className="tarjeta" aria-labelledby="t-cobros" data-testid="cobros-turno">
             <h2 id="t-cobros" className="titulo-seccion">Cobros de visitas de este turno ({cobros.length})</h2>
             {cobros.length ? (
@@ -93,7 +114,11 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                   <li key={c.id} data-testid="cobro-turno">
                     {hora.format(c.registradaEn)} · {c.personas} {c.personas === 1 ? "persona" : "personas"} ·{" "}
                     <strong>{pesos.format(Number(c.total))}</strong>{" "}
-                    {c.formaPago === "tarjeta" ? "con tarjeta · confirmado operativamente · liquidación pendiente de conciliar" : "en efectivo"} ·{" "}
+                    {c.formaPago === "tarjeta"
+                      ? "con tarjeta · confirmado operativamente · liquidación pendiente de conciliar"
+                      : c.formaPago === "transferencia"
+                      ? `por transferencia · ${ESTADO_TRANSFERENCIA[c.estado]}`
+                      : "en efectivo"} ·{" "}
                     <Link href={`/sucursales/${codigo}/turno/cobros/${c.id}`}>Ver detalle</Link>
                   </li>
                 ))}

@@ -2,12 +2,22 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
 import { requerirSesion } from "@/lib/sesion-servidor";
-import { detalleCobro } from "@/lib/visitas";
+import { NOMBRE_REFERENCIA } from "@/lib/datos-visita";
+import { detalleCobro, type EstadoCobro } from "@/lib/visitas";
 
 export const metadata = { title: "Detalle del cobro · Fitnessland" };
 
 const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
 const $ = (importe: string) => pesos.format(Number(importe));
+const ESTADO: Record<EstadoCobro, string> = {
+  confirmado: "Confirmado",
+  confirmado_operativamente: "Confirmado operativamente",
+  pendiente_abono: "Pendiente de verificar abono",
+  abono_verificado: "Abono verificado",
+  no_localizado: "No localizado",
+};
+const MEDIO = { efectivo: "en efectivo", tarjeta: "con tarjeta", transferencia: "por transferencia" } as const;
+const dia = new Intl.DateTimeFormat("es-MX", { timeZone: "UTC", dateStyle: "medium" });
 const hora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
 
 /** Detalle de un cobro de visitas: visitantes y sus pases. Sin permiso de ver turnos en la sucursal: «No encontrada». */
@@ -24,7 +34,7 @@ export default async function DetalleCobro({ params }: PageProps<"/sucursales/[c
       <p className="sub">Solo datos ficticios.</p>
       <section className="tarjeta" aria-labelledby="t-cobro" data-testid="detalle-cobro">
         <h2 id="t-cobro" className="titulo-seccion">
-          {d.pases.length} {d.pases.length === 1 ? "persona" : "personas"} · {$(d.total)} {d.formaPago === "tarjeta" ? "con tarjeta" : "en efectivo"}
+          {d.pases.length} {d.pases.length === 1 ? "persona" : "personas"} · {$(d.total)} {MEDIO[d.formaPago]}
         </h2>
         <dl className="resumen-cobro">
           <dt>Sucursal</dt>
@@ -32,7 +42,19 @@ export default async function DetalleCobro({ params }: PageProps<"/sucursales/[c
           <dt>Registrado</dt>
           <dd>{hora.format(d.registradaEn)} por {d.registradaPor}</dd>
           <dt>Estado</dt>
-          <dd data-testid="detalle-estado">{d.estado === "confirmado_operativamente" ? "Confirmado operativamente" : "Confirmado"}</dd>
+          <dd data-testid="detalle-estado">{ESTADO[d.estado]}</dd>
+          {d.formaPago === "transferencia" ? (
+            <>
+              <dt>{d.tipoReferencia ? NOMBRE_REFERENCIA[d.tipoReferencia] : "Referencia"}</dt>
+              <dd data-testid="detalle-referencia">{d.referencia}</dd>
+              {d.abonoFecha ? (
+                <>
+                  <dt>Fecha del abono</dt>
+                  <dd data-testid="detalle-abono">{dia.format(new Date(`${d.abonoFecha}T00:00:00Z`))} · verificó {d.verificadoPor}</dd>
+                </>
+              ) : null}
+            </>
+          ) : null}
           {d.formaPago === "tarjeta" ? (
             <>
               <dt>Autorización</dt>
@@ -51,12 +73,26 @@ export default async function DetalleCobro({ params }: PageProps<"/sucursales/[c
               <dd>{$(d.cambio ?? "0")}</dd>
             </>
           ) : null}
-          <dt>{d.formaPago === "tarjeta" ? "Bolsa de visitas" : "Entró a la bolsa"}</dt>
+          <dt>{d.formaPago === "efectivo" ? "Entró a la bolsa" : "Bolsa de visitas"}</dt>
           <dd data-testid="detalle-bolsa">
-            {d.entradaBolsa ? `${$(d.entradaBolsa)} · responsable ${d.responsableBolsa}` : d.formaPago === "tarjeta" ? "No entra efectivo (tarjeta)" : "—"}
+            {d.entradaBolsa ? `${$(d.entradaBolsa)} · responsable ${d.responsableBolsa}` : d.formaPago !== "efectivo" ? `No entra efectivo (${d.formaPago})` : "—"}
           </dd>
         </dl>
       </section>
+      {d.cambios.length ? (
+        <section className="tarjeta" aria-labelledby="t-cambios" data-testid="detalle-cambios">
+          <h2 id="t-cambios" className="titulo-seccion">Cambios de estado</h2>
+          <ul className="lista-simple">
+            {d.cambios.map((c, i) => (
+              <li key={i} data-testid="cambio-estado">
+                {hora.format(new Date(c.en))} · {ESTADO[c.de]} → <strong>{ESTADO[c.a]}</strong> · {c.usuario}
+                {c.abonoFecha ? ` · abono del ${dia.format(new Date(`${c.abonoFecha}T00:00:00Z`))}` : ""}
+                {c.motivo ? ` · Motivo: ${c.motivo}` : ""}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <section className="tarjeta" aria-labelledby="t-pases" data-testid="detalle-pases">
         <h2 id="t-pases" className="titulo-seccion">Visitantes y pases ({d.pases.length})</h2>
         <ul className="lista-visitantes">

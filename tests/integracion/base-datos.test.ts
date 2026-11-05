@@ -131,6 +131,8 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(recepcion).toEqual(["sucursal.consultar", "turno.abrir", "turno.consultar", "visita.registrar", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
       // Registrar visitas: solo Recepción (provisional); además, solo la responsable de la bolsa.
       expect(filas.filter((f) => f.permiso === "visita.registrar").map((f) => f.rol)).toEqual(["recepcion"]);
+      // Verificar abonos de transferencias: Administración y Dirección (provisional). Recepción no.
+      expect(filas.filter((f) => f.permiso === "cobro.verificar_abono").map((f) => f.rol).sort()).toEqual(["administracion", "direccion"]);
       // Abrir turno: solo Recepción (provisional). El reporte de turnos no es para Recepción.
       expect(filas.filter((f) => f.permiso === "reporte.turnos").map((f) => f.rol).sort()).toEqual(["administracion", "direccion", "encargado"]);
       expect(filas.filter((f) => f.permiso === "turno.abrir").map((f) => f.rol)).toEqual(["recepcion"]);

@@ -7,11 +7,14 @@
  * reintentar con la misma clave si se pierde la conexión.
  */
 import { redirect } from "next/navigation";
-import { leerAutorizacion, leerRecibido, MAXIMO_PERSONAS, MENSAJES_AUTORIZACION, mensajeRecibido, totalVisitas } from "@/lib/datos-visita";
+import {
+  leerAutorizacion, leerRecibido, leerReferencia, MAXIMO_PERSONAS, MENSAJES_AUTORIZACION, MENSAJES_REFERENCIA, mensajeRecibido,
+  totalVisitas, type FormaPago, type TipoReferencia,
+} from "@/lib/datos-visita";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
-import { confirmarVisita, visitasDeHoy, type CobroConMismaAutorizacion, type CobroRegistrado, type ErrorVisita, type VisitaHoy } from "@/lib/visitas";
+import { confirmarVisita, visitasDeHoy, type CobroPrevio, type CobroRegistrado, type ErrorVisita, type VisitaHoy } from "@/lib/visitas";
 
 const MENSAJES: Record<ErrorVisita, string> = {
   no_encontrada: "No encontrada.",
@@ -30,13 +33,15 @@ const MENSAJES: Record<ErrorVisita, string> = {
   recibido_menor: "Lo recibido es menor que el total. No se guardó nada.",
   autorizacion_invalida: MENSAJES_AUTORIZACION.formato,
   autorizacion_repetida: "Esta autorización ya se registró hoy en esta sucursal. Revisa el cobro anterior: si es otra venta, confírmalo para continuar.",
-  forma_invalida: "Elige un solo medio de pago para el cobro: efectivo o tarjeta. No se guardó nada.",
+  forma_invalida: "Elige un solo medio de pago para el cobro: efectivo, tarjeta o transferencia. No se guardó nada.",
+  referencia_invalida: MENSAJES_REFERENCIA.formato,
+  referencia_repetida: "Esta referencia ya está registrada en otro cobro. Revisa el cobro anterior: si es otra transferencia, confírmalo para continuar.",
   bloqueado_produccion: "El registro de visitas está desactivado fuera del entorno de pruebas.",
 };
 
 export type RespuestaCobro =
   | { ok: true; cobro: CobroRegistrado; repetida: boolean }
-  | { ok: false; error: string; errorRecibido?: string; errorAutorizacion?: string; previos?: CobroConMismaAutorizacion[] };
+  | { ok: false; error: string; errorRecibido?: string; errorAutorizacion?: string; errorReferencia?: string; previos?: CobroPrevio[] };
 
 /** Con tarjeta, un rechazo del servidor no significa que el pago no se cobró en la terminal. */
 const NO_REPASAR = " El pago ya se cobró en la terminal: no vuelvas a pasar la tarjeta; registra este cobro con la misma autorización.";
@@ -54,13 +59,23 @@ export async function accionConfirmarVisita(datos: FormData): Promise<RespuestaC
   // Todo se valida otra vez aquí (no se confía en el navegador): un solo medio de pago por operación.
   const visitanteIds = datos.getAll("visitanteId").filter((x): x is string => typeof x === "string").slice(0, MAXIMO_PERSONAS + 1);
   const total = totalVisitas(Math.max(visitanteIds.length, 1));
-  const formaPago = leer("formaPago", 10) === "tarjeta" ? "tarjeta" : leer("formaPago", 10) === "efectivo" ? "efectivo" : null;
+  const forma = leer("formaPago", 15);
+  const formaPago: FormaPago | null = forma === "efectivo" || forma === "tarjeta" || forma === "transferencia" ? forma : null;
   if (!formaPago) return { ok: false, error: MENSAJES.forma_invalida };
 
   let recibido: string | null = null;
   let cambio: string | null = null;
   let autorizacion: string | null = null;
-  if (formaPago === "efectivo") {
+  let referencia: string | null = null;
+  let tipoReferencia: TipoReferencia | null = null;
+  if (formaPago === "transferencia") {
+    const tipo = leer("tipoReferencia", 20);
+    if (tipo !== "clave_rastreo" && tipo !== "folio_bancario") return { ok: false, error: "Revisa la referencia.", errorReferencia: MENSAJES_REFERENCIA.tipo };
+    const ref = leerReferencia(leer("referencia", 60));
+    if (!ref.ok) return { ok: false, error: "Revisa la referencia.", errorReferencia: MENSAJES_REFERENCIA[ref.motivo] };
+    referencia = ref.valor;
+    tipoReferencia = tipo;
+  } else if (formaPago === "efectivo") {
     const r = leerRecibido(leer("recibido", 30), total);
     if (!r.ok) return { ok: false, error: "Revisa lo recibido.", errorRecibido: mensajeRecibido(r.motivo, total) };
     ({ recibido, cambio } = r);
@@ -77,10 +92,12 @@ export async function accionConfirmarVisita(datos: FormData): Promise<RespuestaC
     recibido,
     cambio,
     autorizacion,
-    otraVenta: formaPago === "tarjeta" && datos.get("otraVenta") === "si",
+    referencia,
+    tipoReferencia,
+    otraVenta: formaPago !== "efectivo" && datos.get("otraVenta") === "si",
   }, { entorno: leerEntorno() });
   if (!res.ok) {
-    if (res.error === "autorizacion_repetida") return { ok: false, error: MENSAJES.autorizacion_repetida, previos: res.previos };
+    if (res.error === "autorizacion_repetida" || res.error === "referencia_repetida") return { ok: false, error: MENSAJES[res.error], previos: res.previos };
     const base = res.error === "visitante_unido" && res.detalle
       ? `La ficha de ${res.detalle} se unió a otra. Quítala del grupo, búscala de nuevo y elige la ficha activa. No se guardó nada.`
       : MENSAJES[res.error];
