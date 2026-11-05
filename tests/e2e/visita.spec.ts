@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Page, type Route } from "@playwright/test";
 import postgres from "postgres";
 import { cifrarContrasena } from "../../src/lib/contrasena";
 
@@ -79,7 +79,7 @@ const conteos = async (codigo: string) => {
   return r;
 };
 
-/** Desde el turno: Registrar visita → buscar → Elegir. Deja la pantalla en «Cobro de visita». */
+/** Desde el turno: Registrar visita → buscar → Elegir. Deja la pantalla de cobro con la ficha elegida. */
 async function elegir(page: Page, codigo: string, nombre: string) {
   await page.goto(`/sucursales/${codigo}/turno`);
   await page.getByRole("link", { name: "Registrar visita" }).click();
@@ -90,101 +90,139 @@ async function elegir(page: Page, codigo: string, nombre: string) {
   await page.getByTestId("visitante").filter({ hasText: nombre }).getByRole("button", { name: "Elegir" }).click();
   await expect(page.getByTestId("datos-cobro")).toContainText(nombre);
 }
+const confirmar = (page: Page) => page.getByRole("button", { name: "Confirmar cobro · $50.00" });
+const aviso = (page: Page) => page.locator("[data-testid=datos-cobro] [role=alert]");
+/** Intercepta solo el envío del cobro (lleva la clave), no la búsqueda. */
+const esCobro = (route: Route) => route.request().method() === "POST" && (route.request().postData() ?? "").includes("clave");
 
-test("Recepción cobra $50 en efectivo: recibido $100 da $50 de cambio y a la bolsa entran solo $50", async ({ page }) => {
+test("una sola pantalla: Recibido $100 muestra $50 de cambio ahí mismo; se registra el cobro y a la bolsa entran $50", async ({ page }) => {
   const e = await escenario();
   await entrar(page, e.recep.correo);
   await elegir(page, e.codigo, e.nombre);
-  await expect(page.getByTestId("datos-cobro")).toContainText("$50.00 tarifa de visita");
-  await expect(page.getByTestId("datos-cobro")).toContainText("Efectivo");
+  const pantalla = page.getByTestId("datos-cobro");
+  await expect(pantalla).toContainText(`•• •••• ${e.telefono.slice(6)}`);
+  await expect(pantalla).toContainText(`Visitas ${e.codigo}`);
+  await expect(page.getByTestId("total")).toHaveText("$50.00 en efectivo");
+  await expect(pantalla.getByRole("button")).toHaveText([/Confirmar cobro · \$50\.00/, "Cambiar visitante"]);
 
-  // Menos de $50: no deja revisar ni confirmar.
+  // Menos que el total: el error aparece junto al campo y no deja confirmar.
   await page.getByLabel("Recibido (opcional)").fill("20");
   await expect(page.locator("#recibido-error")).toHaveText("Lo recibido es menor que el total de la visita ($50.00). No se puede confirmar así.");
-  await expect(page.getByRole("button", { name: "Revisar cobro" })).toBeDisabled();
+  await expect(page.getByLabel("Recibido (opcional)")).toHaveAttribute("aria-invalid", "true");
+  await expect(confirmar(page)).toBeDisabled();
 
   await page.getByLabel("Recibido (opcional)").fill("100");
-  await expect(page.getByTestId("cambio-vivo")).toHaveText("Cambio: $50.00");
-  await page.getByRole("button", { name: "Revisar cobro" }).click();
-
-  const resumen = page.getByTestId("resumen-cobro");
-  await expect(resumen).toContainText("Revisa el cobro");
-  await expect(resumen).toContainText(e.nombre);
-  await expect(resumen).toContainText(`•• •••• ${e.telefono.slice(6)}`);
-  await expect(resumen).toContainText(`Visitas ${e.codigo}`);
-  await expect(page.getByTestId("resumen-total")).toHaveText("$50.00");
-  await expect(page.getByTestId("resumen-recibido")).toHaveText("$100.00");
-  await expect(page.getByTestId("resumen-cambio")).toHaveText("$50.00");
-  await expect(page.getByTestId("resumen-bolsa")).toHaveText("$50.00");
-  await expect(resumen).toContainText(e.recep.nombre);
-  // Revisar no guarda nada, y el nombre y el teléfono no van en la dirección.
+  await expect(page.locator("#recibido-error")).toHaveCount(0);
+  await expect(page.getByTestId("cambio")).toHaveText("Cambio: $50.00");
   expect(await conteos(e.codigo)).toMatchObject({ operaciones: 0, movimientos: 0 });
-  expect(page.url()).not.toContain(e.nombre.split(" ")[0]);
-  expect(page.url()).not.toContain(e.telefono);
 
-  await page.getByRole("button", { name: "Confirmar cobro" }).click();
-  await expect(page).toHaveURL(new RegExp(`/sucursales/${e.codigo}/turno\\?aviso=visita$`));
-  await expect(page.locator("p.aviso[role=status]")).toHaveText("Visita registrada: $50.00 en efectivo, en la bolsa de visitas.");
-
-  const bolsa = page.getByTestId("lugar-bolsa_visitas");
-  await expect(bolsa.getByTestId("contado-al-abrir")).toHaveText("$0.00");
-  await expect(bolsa.getByTestId("entradas")).toHaveText("+ $50.00");
-  await expect(bolsa).toContainText("Visitas cobradas en efectivo (1)");
-  await expect(bolsa.getByTestId("esperado")).toHaveText("$50.00");
-  const cajon = page.getByTestId("lugar-cajon_mensualidades");
-  await expect(cajon.getByTestId("contado-al-abrir")).toHaveText("$1,200.00");
-  await expect(cajon.getByTestId("esperado")).toHaveText("No calculado: faltan datos de Open Desk");
-  await expect(cajon.getByTestId("no-conciliado")).toBeVisible();
-  await expect(page.getByTestId("visita-turno")).toHaveCount(1);
-  await expect(page.getByTestId("visita-turno")).toContainText(`${e.nombre} ·`);
+  await confirmar(page).click();
+  const listo = page.getByTestId("cobro-registrado");
+  await expect(listo.getByRole("heading")).toHaveText("Cobro registrado");
+  await expect(listo).toContainText(e.nombre);
+  await expect(page.getByTestId("cambio-registrado")).toHaveText("$50.00");
+  await expect(listo.getByRole("button", { name: "Nueva visita" })).toBeVisible();
+  // El nombre y el teléfono no van en la dirección.
+  expect(page.url()).toMatch(new RegExp(`/sucursales/${e.codigo}/turno/visita$`));
   expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 1, movimientos: 1, suma: "50.00" });
   const [c] = await sql`select c.recibido::text, c.cambio::text from cobro_visita c join operacion_visita o on o.id = c.operacion_id
                         join sucursal s on s.id = o.sucursal_id where s.codigo = ${e.codigo}`;
   expect(c).toEqual({ recibido: "100.00", cambio: "50.00" });
+
+  // «Nueva visita» deja la búsqueda vacía para el siguiente visitante.
+  await listo.getByRole("button", { name: "Nueva visita" }).click();
+  await expect(page.getByLabel(/Busca la ficha del visitante/)).toHaveValue("");
+  await expect(page.getByTestId("resultados")).toHaveCount(0);
+
+  // En el turno: la bolsa suma los $50; el cajón queda igual y sin efectivo esperado calculado.
+  await page.getByRole("link", { name: "← Turno" }).click();
+  const bolsa = page.getByTestId("lugar-bolsa_visitas");
+  await expect(bolsa.getByTestId("contado-al-abrir")).toHaveText("$0.00");
+  await expect(bolsa.getByTestId("entradas")).toHaveText("+ $50.00");
+  await expect(bolsa.getByTestId("esperado")).toHaveText("$50.00");
+  const cajon = page.getByTestId("lugar-cajon_mensualidades");
+  await expect(cajon.getByTestId("contado-al-abrir")).toHaveText("$1,200.00");
+  await expect(cajon.getByTestId("esperado")).toHaveText("No calculado: faltan datos de Open Desk");
+  await expect(page.getByTestId("visita-turno")).toHaveCount(1);
+  await expect(page.getByTestId("visita-turno")).toContainText(`${e.nombre} ·`);
 });
 
-test("sin escribir lo recibido también se confirma el cobro de $50", async ({ page }) => {
+test("sin escribir lo recibido también se registra el cobro de $50", async ({ page }) => {
   const e = await escenario();
   await entrar(page, e.recep.correo);
   await elegir(page, e.codigo, e.nombre);
-  await page.getByRole("button", { name: "Revisar cobro" }).click();
-  await expect(page.getByTestId("resumen-recibido")).toHaveText("No se escribió");
-  await expect(page.getByTestId("resumen-cambio")).toHaveCount(0);
-  await page.getByRole("button", { name: "Volver" }).click();
-  await expect(page.getByTestId("datos-cobro")).toBeVisible();
-  await page.getByRole("button", { name: "Revisar cobro" }).click();
-  await page.getByRole("button", { name: "Confirmar cobro" }).click();
-  await expect(page.locator("p.aviso[role=status]")).toBeVisible();
-  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText("$50.00");
+  await expect(page.getByTestId("cambio")).toHaveCount(0);
+  await confirmar(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toContainText("Cobro registrado");
+  await expect(page.getByTestId("cambio-registrado")).toHaveCount(0);
   expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 1, movimientos: 1, suma: "50.00" });
 });
 
-for (const modo of ["doble clic", "reenvío del mismo formulario"] as const) {
-  test(`${modo} en «Confirmar cobro»: una sola visita y una sola entrada de efectivo`, async ({ page }) => {
-    const e = await escenario();
-    await entrar(page, e.recep.correo);
-    await elegir(page, e.codigo, e.nombre);
-    await page.getByRole("button", { name: "Revisar cobro" }).click();
-    const boton = page.getByRole("button", { name: "Confirmar cobro" });
-    await expect(boton).toBeVisible();
-    if (modo === "doble clic") {
-      await boton.dblclick();
-    } else {
-      // El mismo formulario enviado dos veces seguidas, sin esperar la respuesta (como un reintento).
-      await page.evaluate(() => {
-        const f = document.querySelector<HTMLFormElement>("[data-testid=resumen-cobro] form")!;
-        f.requestSubmit();
-        f.requestSubmit();
-      });
-    }
-    await expect(page).toHaveURL(/\/turno\?aviso=visita$/);
-    await expect(page.getByTestId("visita-turno")).toHaveCount(1);
-    await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText("$50.00");
-    expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 1, movimientos: 1, suma: "50.00" });
+test("si lo recibido llega al servidor menor que el total, se rechaza y el error aparece junto al campo", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  await page.getByLabel("Recibido (opcional)").fill("100");
+  // Se cambia lo enviado en el camino: el navegador validó $100, al servidor llegan $20.
+  await page.route("**/*", async (route) => {
+    if (!esCobro(route)) return route.continue();
+    const cuerpo = (route.request().postData() ?? "").replace(/(name="[^"]*recibido"\r\n\r\n)100/, "$120");
+    await route.continue({ postData: cuerpo });
   });
-}
+  await confirmar(page).click();
+  await expect(page.locator("#recibido-error")).toHaveText("Lo recibido es menor que el total de la visita ($50.00). No se puede confirmar así.");
+  expect(await conteos(e.codigo)).toMatchObject({ operaciones: 0, movimientos: 0 });
+});
 
-test("solo cobra la responsable de la bolsa: otra recepcionista y Encargado no pueden, ni enviando la confirmación directamente", async ({ page, browser }) => {
+test("doble clic en «Confirmar cobro»: una sola visita y una sola entrada de efectivo", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  await confirmar(page).dblclick();
+  await expect(page.getByTestId("cobro-registrado")).toBeVisible();
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 1, movimientos: 1, suma: "50.00" });
+});
+
+test("se pierde la conexión después de guardar: al reintentar muestra «Cobro registrado» sin cobrar dos veces", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  let cortes = 0;
+  await page.route("**/*", async (route) => {
+    if (!esCobro(route) || cortes > 0) return route.continue();
+    cortes++;
+    await route.fetch(); // el servidor sí lo recibe y lo guarda…
+    await route.abort("internetdisconnected"); // …pero la respuesta no llega
+  });
+  await confirmar(page).click();
+  await expect(aviso(page)).toHaveText(
+    "Se perdió la conexión y no sabemos si el cobro se guardó. Vuelve a tocar «Confirmar cobro»: si ya se había guardado, no se cobrará dos veces.");
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 1, movimientos: 1, suma: "50.00" });
+
+  await confirmar(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toContainText("Cobro registrado");
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 1, movimientos: 1, suma: "50.00" });
+});
+
+test("se pierde la conexión antes de llegar: al reintentar se registra una sola vez", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  let cortes = 0;
+  await page.route("**/*", async (route) => {
+    if (!esCobro(route) || cortes > 0) return route.continue();
+    cortes++;
+    await route.abort("internetdisconnected");
+  });
+  await confirmar(page).click();
+  await expect(aviso(page)).toContainText("Se perdió la conexión");
+  expect(await conteos(e.codigo)).toMatchObject({ operaciones: 0 });
+  await confirmar(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toBeVisible();
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 1, movimientos: 1, suma: "50.00" });
+});
+
+test("solo cobra la responsable de la bolsa: otra recepcionista y Encargado no pueden, ni enviando el cobro directamente", async ({ page, browser }) => {
   const e = await escenario();
   const otra = await crearCuenta([["recepcion", e.codigo]]);
   const encargado = await crearCuenta([["encargado", e.codigo]]);
@@ -202,34 +240,28 @@ test("solo cobra la responsable de la bolsa: otra recepcionista y Encargado no p
   await page.goto(`/sucursales/${e.codigo}/turno/visita`);
   await expect(page.getByRole("heading", { name: "No encontrada" })).toBeVisible();
 
-  // La responsable llega al resumen; la confirmación se envía con la sesión de otra cuenta.
+  // La responsable llega a la pantalla de cobro; el cobro se envía con la sesión de otra cuenta.
   await entrar(page, e.recep.correo);
   await elegir(page, e.codigo, e.nombre);
-  await page.getByRole("button", { name: "Revisar cobro" }).click();
-  await expect(page.getByTestId("resumen-cobro")).toBeVisible();
   await usarSesionDe(browser, page, otra.correo);
-  await page.getByRole("button", { name: "Confirmar cobro" }).click();
-  await expect(page.locator("[data-testid=resumen-cobro] [role=alert]")).toHaveText(
-    "Solo la responsable de la bolsa de visitas puede cobrar en este turno. No se guardó nada.");
+  await confirmar(page).click();
+  await expect(aviso(page)).toHaveText("Solo la responsable de la bolsa de visitas puede cobrar en este turno. No se guardó nada.");
   await usarSesionDe(browser, page, encargado.correo);
-  await page.getByRole("button", { name: "Confirmar cobro" }).click();
-  await expect(page.locator("[data-testid=resumen-cobro] [role=alert]")).toHaveText(
-    "Tu cuenta no tiene permiso para registrar visitas en esta sucursal.");
+  await confirmar(page).click();
+  await expect(aviso(page)).toHaveText("Tu cuenta no tiene permiso para registrar visitas en esta sucursal. No se guardó nada.");
   expect(await conteos(e.codigo)).toMatchObject({ operaciones: 0, movimientos: 0 });
 });
 
-test("si el turno cambia entre revisar y confirmar, no se guarda nada", async ({ page }) => {
+test("si el turno cambia mientras se cobra, no se guarda nada", async ({ page }) => {
   const e = await escenario();
   await entrar(page, e.recep.correo);
   await elegir(page, e.codigo, e.nombre);
-  await page.getByRole("button", { name: "Revisar cobro" }).click();
-  await expect(page.getByTestId("resumen-cobro")).toBeVisible();
   // Simula cierre y nueva apertura (el cierre real llega en el bloque 5).
   await sql`update turno set cerrado_en = now() where id = ${e.turnoId}`;
   await sql`update responsable_lugar set hasta = now() where turno_id = ${e.turnoId}`;
   await abrirTurno(e.codigo, e.recep.id);
-  await page.getByRole("button", { name: "Confirmar cobro" }).click();
-  await expect(page.locator("[data-testid=resumen-cobro] [role=alert]")).toHaveText(
-    "El turno cambió después de revisar el cobro. No se guardó nada: revisa el cobro de nuevo.");
+  await confirmar(page).click();
+  await expect(aviso(page)).toHaveText(
+    "El turno cambió mientras cobrabas. No se guardó nada: vuelve a abrir «Registrar visita» desde el turno.");
   expect(await conteos(e.codigo)).toMatchObject({ operaciones: 0, movimientos: 0 });
 });

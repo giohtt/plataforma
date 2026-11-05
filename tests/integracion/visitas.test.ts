@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { abrirTurno, estadoTurno } from "@/lib/turnos";
-import { confirmarVisita, impedimentoRegistroVisita, revisarVisita, visitasDelTurno } from "@/lib/visitas";
+import { confirmarVisita, impedimentoRegistroVisita, pantallaCobro, visitasDelTurno } from "@/lib/visitas";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
 
@@ -49,12 +49,14 @@ const conteos = async (codigo: string) => {
     from sucursal s where s.codigo = ${codigo}`;
   return r;
 };
-const revisar = (u: string, codigo: string, visitanteId: string, recibido: string | null = null, cambio: string | null = null) =>
-  revisarVisita(sql, u, codigo, { visitanteId, recibido, cambio }, PRUEBAS);
+/** La pantalla de cobro: el turno abierto que muestra y la responsable de la bolsa (no guarda nada). */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const revisar = (u: string, codigo: string, _visitanteId?: string) => pantallaCobro(sql, u, codigo, "pruebas");
+/** Lo que envía la pantalla al confirmar: una clave nueva, el turno mostrado, la ficha y lo recibido. */
 async function revisada(u: string, codigo: string, visitanteId: string, recibido: string | null = null, cambio: string | null = null) {
-  const r = await revisar(u, codigo, visitanteId, recibido, cambio);
-  if (!r.ok) throw new Error(r.error);
-  return r.resumen;
+  const p = await revisar(u, codigo);
+  if (!p.ok) throw new Error(p.error);
+  return { clave: randomUUID(), turnoId: p.turnoId, visitante: { id: visitanteId }, recibido, cambio };
 }
 const confirmar = (u: string, codigo: string, r: { clave: string; turnoId: string; visitante: { id: string }; recibido: string | null; cambio: string | null }) =>
   confirmarVisita(sql, u, codigo, { clave: r.clave, turnoId: r.turnoId, visitanteId: r.visitante.id, recibido: r.recibido, cambio: r.cambio }, PRUEBAS);
@@ -67,25 +69,20 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
   });
   afterAll(async () => cerrar?.());
 
-  describe("revisar y confirmar", () => {
-    it("revisar no guarda nada; muestra $50, efectivo, el turno y la responsable; el teléfono enmascarado", async () => {
+  describe("pantalla de cobro y confirmación", () => {
+    it("la pantalla de cobro trae el turno abierto, la sucursal y la responsable de la bolsa; no guarda nada", async () => {
       const { codigo, recep, turnoId } = await escenario();
-      const v = await ficha("Diego Martínez Ruiz");
-      const r = await revisada(recep, codigo, v);
-      expect(r).toMatchObject({
-        turnoId, tarifa: "50.00", descuento: "0.00", total: "50.00", recibido: null, cambio: null,
-        responsableBolsa: `Visita ${n}`, visitante: { id: v, nombre: "Diego Martínez Ruiz", telefono: "•• •••• 0201", sucursalAlta: "Atlacomulco" },
+      expect(await pantallaCobro(sql, recep, codigo, "pruebas")).toEqual({
+        ok: true, turnoId, sucursal: `Sucursal visita ${k}`, responsableBolsa: `Visita ${n}`,
       });
       expect(await conteos(codigo)).toMatchObject({ operaciones: 0, cobros: 0, pases: 0, movimientos: 0 });
-      // Cada revisión trae una clave distinta.
-      expect((await revisada(recep, codigo, v)).clave).not.toBe(r.clave);
     });
 
     it("confirmar guarda una operación, un cobro, un pase en la sucursal de la visita y $50 en la bolsa", async () => {
       const { codigo, recep, turnoId } = await escenario();
       const v = await ficha();
       const c = await confirmar(recep, codigo, await revisada(recep, codigo, v));
-      expect(c).toMatchObject({ ok: true, repetida: false });
+      expect(c).toMatchObject({ ok: true, repetida: false, cobro: { total: "50.00", recibido: null, cambio: null } });
       expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 1, movimientos: 1, suma: "50.00" });
 
       const [p] = await sql`select p.visitante_id, p.sucursal_id, p.tarifa::text, p.descuento::text, p.total::text from pase_visita p
@@ -110,8 +107,7 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
     it("con $100 recibidos: cambio de $50 guardado en el cobro; a la bolsa entran solo $50", async () => {
       const { codigo, recep } = await escenario();
       const r = await revisada(recep, codigo, await ficha(), "100.00", "50.00");
-      expect([r.recibido, r.cambio, r.total]).toEqual(["100.00", "50.00", "50.00"]);
-      expect((await confirmar(recep, codigo, r)).ok).toBe(true);
+      expect(await confirmar(recep, codigo, r)).toMatchObject({ ok: true, cobro: { total: "50.00", recibido: "100.00", cambio: "50.00" } });
       expect(await conteos(codigo)).toMatchObject({ movimientos: 1, suma: "50.00" });
       const [c] = await sql`select c.recibido::text, c.cambio::text from cobro_visita c join operacion_visita o on o.id = c.operacion_id where o.sucursal_id = ${ids[codigo]}`;
       expect(c).toEqual({ recibido: "100.00", cambio: "50.00" });
@@ -135,7 +131,16 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
       const a = await confirmar(recep, codigo, r);
       const b = await confirmar(recep, codigo, r);
       expect(a).toMatchObject({ ok: true, repetida: false });
-      expect(b).toEqual({ ok: true, operacionId: (a as { operacionId: string }).operacionId, repetida: true });
+      expect(b).toEqual({ ...a, repetida: true });
+      expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 1, movimientos: 1, suma: "50.00" });
+    });
+
+    it("reintento tras perder la conexión, aun con otro «Recibido»: responde con el cobro ya guardado y no cobra otra vez", async () => {
+      const { codigo, recep } = await escenario();
+      const r = await revisada(recep, codigo, await ficha(), "100.00", "50.00");
+      expect((await confirmar(recep, codigo, r)).ok).toBe(true); // se guardó, pero la respuesta no llegó
+      const otra = await confirmar(recep, codigo, { ...r, recibido: "200.00", cambio: "150.00" });
+      expect(otra).toMatchObject({ ok: true, repetida: true, cobro: { recibido: "100.00", cambio: "50.00" } });
       expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 1, movimientos: 1, suma: "50.00" });
     });
 
@@ -149,7 +154,7 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
       expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 1, movimientos: 1, suma: "50.00" });
     });
 
-    it("dos revisiones distintas son dos visitas (por ejemplo, la misma persona vuelve más tarde)", async () => {
+    it("dos cobros con claves distintas son dos visitas (por ejemplo, la misma persona vuelve más tarde)", async () => {
       const { codigo, recep } = await escenario();
       const v = await ficha();
       expect((await confirmar(recep, codigo, await revisada(recep, codigo, v))).ok).toBe(true);
@@ -181,7 +186,7 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
       expect(await conteos(codigo)).toMatchObject({ operaciones: 0, movimientos: 0 });
     });
 
-    it("solo cobra la responsable de la bolsa: otra recepcionista no puede revisar ni confirmar", async () => {
+    it("solo cobra la responsable de la bolsa: otra recepcionista no puede abrir la pantalla de cobro ni confirmar", async () => {
       const { codigo, recep } = await escenario();
       const otra = await cuenta([["recepcion", codigo]]);
       const v = await ficha();
@@ -193,7 +198,7 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
       expect(await conteos(codigo)).toMatchObject({ operaciones: 0 });
     });
 
-    it("si la bolsa cambia de responsable después de revisar, la confirmación se rechaza", async () => {
+    it("si la bolsa cambia de responsable después de abrir la pantalla, la confirmación se rechaza", async () => {
       const { codigo, recep, turnoId } = await escenario();
       const otra = await cuenta([["recepcion", codigo]]);
       const r = await revisada(recep, codigo, await ficha());
@@ -243,8 +248,7 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
 
       const p = await escenario();
       const rp = await revisada(p.recep, p.codigo, v);
-      expect(await revisarVisita(sql, p.recep, p.codigo, { visitanteId: v, recibido: null, cambio: null }, { entorno: "produccion" }))
-        .toEqual({ ok: false, error: "bloqueado_produccion" });
+      expect(await pantallaCobro(sql, p.recep, p.codigo, "produccion")).toEqual({ ok: false, error: "bloqueado_produccion" });
       expect(await confirmarVisita(sql, p.recep, p.codigo, { clave: rp.clave, turnoId: rp.turnoId, visitanteId: v, recibido: null, cambio: null }, { entorno: "produccion" }))
         .toEqual({ ok: false, error: "bloqueado_produccion" });
       expect(await conteos(e.codigo)).toMatchObject({ operaciones: 0 });
@@ -258,9 +262,9 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
       const r = await revisada(recep, codigo, unida);
       await sql`update visitante set fusionado_en = now(), fusionado_en_id = ${activa} where id = ${unida}`;
       expect(await confirmar(recep, codigo, r)).toEqual({ ok: false, error: "visitante_unido" });
-      expect(await revisar(recep, codigo, unida)).toEqual({ ok: false, error: "visitante_unido" });
-      expect(await revisar(recep, codigo, randomUUID())).toEqual({ ok: false, error: "visitante_no_encontrado" });
-      expect(await revisar(recep, codigo, "no-es-id")).toEqual({ ok: false, error: "visitante_no_encontrado" });
+      expect(await confirmar(recep, codigo, await revisada(recep, codigo, unida))).toEqual({ ok: false, error: "visitante_unido" });
+      expect(await confirmar(recep, codigo, await revisada(recep, codigo, randomUUID()))).toEqual({ ok: false, error: "visitante_no_encontrado" });
+      expect(await confirmar(recep, codigo, await revisada(recep, codigo, "no-es-id"))).toEqual({ ok: false, error: "visitante_no_encontrado" });
       expect(await conteos(codigo)).toMatchObject({ operaciones: 0 });
     });
   });

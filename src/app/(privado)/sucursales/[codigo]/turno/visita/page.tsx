@@ -4,7 +4,7 @@ import { FlujoVisita } from "@/components/FlujoVisita";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { requerirSesion } from "@/lib/sesion-servidor";
-import { impedimentoRegistroVisita } from "@/lib/visitas";
+import { pantallaCobro } from "@/lib/visitas";
 
 export const metadata = { title: "Registrar visita · Fitnessland" };
 
@@ -19,18 +19,18 @@ const AVISO: Record<string, string> = {
 export default async function RegistrarVisita({ params }: PageProps<"/sucursales/[codigo]/turno/visita">) {
   const sesion = await requerirSesion();
   const { codigo } = await params;
-  const impedimento = await impedimentoRegistroVisita(obtenerBaseDatos()!, sesion.usuarioId, codigo, leerEntorno());
-  if (impedimento === "no_encontrada" || impedimento === "sin_permiso") notFound();
+  const p = await pantallaCobro(obtenerBaseDatos()!, sesion.usuarioId, codigo, leerEntorno());
+  if (!p.ok && (p.error === "no_encontrada" || p.error === "sin_permiso")) notFound();
 
   return (
     <main className="contenedor contenedor-medio">
       <p className="sub"><Link href={`/sucursales/${codigo}/turno`}>← Turno</Link></p>
       <h1 className="cabecera-titulo">Registrar visita</h1>
       <p className="sub">Solo datos ficticios. Una persona, $50 en efectivo. El registro grupal llega después.</p>
-      {impedimento ? (
-        <p className="aviso aviso-info" data-testid="no-puede-cobrar">{AVISO[impedimento] ?? "No se puede registrar la visita."}</p>
+      {!p.ok ? (
+        <p className="aviso aviso-info" data-testid="no-puede-cobrar">{AVISO[p.error] ?? "No se puede registrar la visita."}</p>
       ) : (
-        <FlujoVisita codigo={codigo} />
+        <FlujoVisita codigo={codigo} sucursal={p.sucursal} turnoId={p.turnoId} responsableBolsa={p.responsableBolsa} />
       )}
     </main>
   );

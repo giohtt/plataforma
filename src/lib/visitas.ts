@@ -1,20 +1,18 @@
-import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { TARIFA_VISITA } from "@/lib/datos-visita";
-import { enmascararTelefono } from "@/lib/datos-visitante";
 import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
 
 /**
  * Bloque 4, primer flujo: visita individual de $50 en efectivo (solo datos ficticios).
  *
- * Dos pasos, los dos comprobados en el servidor:
- * 1. Revisar: con la ficha elegida y lo recibido (opcional), arma el resumen del cobro. No guarda nada.
- *    Devuelve el turno que se mostró y una clave nueva para la confirmación.
- * 2. Confirmar: en una sola transacción comprueba que sigue abierto el MISMO turno que se mostró, que la
- *    persona sigue siendo la responsable vigente de la bolsa y que la ficha sigue activa; luego guarda una
- *    operación, un cobro en efectivo, un pase para el visitante y una entrada de efectivo a la bolsa.
- *    Si la misma clave llega dos veces (doble clic, reintento), la segunda no crea nada.
+ * Una sola pantalla: la ficha elegida, la sucursal, el total, lo recibido (opcional) y el cambio, con un solo
+ * botón «Confirmar cobro». La pantalla trae el turno abierto que mostró y una clave del cobro que el navegador
+ * conserva hasta que se guarda. Al confirmar, en una sola transacción, el servidor comprueba que sigue abierto
+ * ese MISMO turno, que la persona sigue siendo la responsable vigente de la bolsa y que la ficha sigue activa;
+ * luego guarda una operación, un cobro en efectivo, un pase para el visitante y una entrada de efectivo a la
+ * bolsa. Si la misma clave llega dos veces (doble clic, o reintento tras perder la conexión), la segunda no
+ * crea nada y responde con el cobro ya guardado.
  *
  * Reglas de esta prueba: registra quien tiene visita.registrar (hoy, Recepción) y además es la responsable
  * vigente de la bolsa. No se registra en una sucursal inactiva ni en producción. A la bolsa entra solo el
@@ -35,22 +33,9 @@ export type ErrorVisita =
   | "clave_ajena"
   | "bloqueado_produccion";
 
-export type ResumenVisita = {
-  clave: string;
-  turnoId: string;
-  sucursal: { codigo: string; nombre: string };
-  visitante: { id: string; nombre: string; telefono: string | null; sucursalAlta: string };
-  tarifa: string;
-  descuento: string;
-  total: string;
-  recibido: string | null;
-  cambio: string | null;
-  responsableBolsa: string;
-};
-
 type Contexto = { sucursalId: string; codigo: string; nombre: string; turnoId: string; bolsaId: string; responsable: string };
 
-/** Comprobaciones comunes a revisar y confirmar. Con `bloquear`, deja el turno bloqueado hasta terminar. */
+/** Comprobaciones comunes a la pantalla de cobro y a la confirmación. Con `bloquear`, deja el turno bloqueado hasta terminar. */
 async function contexto(
   tx: Tx,
   usuarioId: string,
@@ -96,53 +81,29 @@ async function fichaActiva(tx: Tx, visitanteId: string): Promise<{ ok: true; v: 
   return { ok: true, v };
 }
 
-/** Paso 1: resumen del cobro. No guarda nada. `recibido` y `cambio` llegan ya validados (leerRecibido). */
-export async function revisarVisita(
-  sql: Sql,
-  usuarioId: string,
-  codigo: string,
-  pedido: { visitanteId: string; recibido: string | null; cambio: string | null },
-  { entorno }: { entorno: Entorno },
-): Promise<{ ok: true; resumen: ResumenVisita } | { ok: false; error: ErrorVisita }> {
-  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
-  return sql.begin("isolation level repeatable read read only", async (tx) => {
-    const r = await contexto(tx, usuarioId, codigo, { bloquear: false });
-    if (!r.ok) return r;
-    const f = await fichaActiva(tx, pedido.visitanteId);
-    if (!f.ok) return f;
-    return {
-      ok: true as const,
-      resumen: {
-        clave: randomUUID(),
-        turnoId: r.c.turnoId,
-        sucursal: { codigo: r.c.codigo, nombre: r.c.nombre },
-        visitante: { id: f.v.id, nombre: f.v.nombre, telefono: enmascararTelefono(f.v.telefono), sucursalAlta: f.v.sucursal_alta },
-        tarifa: TARIFA_VISITA,
-        descuento: "0.00",
-        total: TARIFA_VISITA,
-        recibido: pedido.recibido,
-        cambio: pedido.cambio,
-        responsableBolsa: r.c.responsable,
-      },
-    };
-  });
-}
+export type CobroRegistrado = { visitante: string; total: string; recibido: string | null; cambio: string | null };
 
 export type ResultadoConfirmacion =
-  | { ok: true; operacionId: string; repetida: boolean }
+  | { ok: true; operacionId: string; repetida: boolean; cobro: CobroRegistrado }
   | { ok: false; error: ErrorVisita };
 
-async function operacionExistente(tx: Tx, clave: string, usuarioId: string, codigo: string): Promise<ResultadoConfirmacion | null> {
-  const [o] = await tx<{ id: string; registrada_por: string; codigo: string }[]>`
-    select o.id, o.registrada_por, s.codigo
-    from operacion_visita o join sucursal s on s.id = o.sucursal_id
+/** El cobro ya guardado con esta clave, tal como quedó (aunque un reintento traiga otros datos). */
+async function operacionExistente(tx: Tx, clave: string, usuarioId: string, codigo: string, repetida = true): Promise<ResultadoConfirmacion | null> {
+  const [o] = await tx<({ id: string; registrada_por: string; codigo: string } & CobroRegistrado)[]>`
+    select o.id, o.registrada_por, s.codigo, v.nombre as visitante, c.importe::text as total,
+           c.recibido::text as recibido, c.cambio::text as cambio
+    from operacion_visita o
+    join sucursal s on s.id = o.sucursal_id
+    join cobro_visita c on c.operacion_id = o.id
+    join pase_visita p on p.operacion_id = o.id
+    join visitante v on v.id = p.visitante_id
     where o.clave = ${clave}`;
   if (!o) return null;
   if (o.registrada_por !== usuarioId || o.codigo !== codigo) return { ok: false, error: "clave_ajena" };
-  return { ok: true, operacionId: o.id, repetida: true };
+  return { ok: true, operacionId: o.id, repetida, cobro: { visitante: o.visitante, total: o.total, recibido: o.recibido, cambio: o.cambio } };
 }
 
-/** Paso 2: confirma el cobro. Idempotente por `clave`. */
+/** Confirma el cobro. Idempotente por `clave`. `recibido` y `cambio` llegan ya validados (leerRecibido). */
 export async function confirmarVisita(
   sql: Sql,
   usuarioId: string,
@@ -187,7 +148,7 @@ export async function confirmarVisita(
     await tx`
       insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, cobro_id, responsable_id, registrado_por)
       values (${r.c.bolsaId}, ${r.c.turnoId}, 'entrada_cobro_visita', ${TARIFA_VISITA}, ${cobro.id}, ${usuarioId}, ${usuarioId})`;
-    return { ok: true, operacionId: o.id, repetida: false };
+    return (await operacionExistente(tx, pedido.clave, usuarioId, codigo, false))!;
   });
 }
 
@@ -211,5 +172,18 @@ export async function impedimentoRegistroVisita(sql: Sql, usuarioId: string, cod
   return sql.begin("read only", async (tx) => {
     const r = await contexto(tx, usuarioId, codigo, { bloquear: false });
     return r.ok ? null : r.error;
+  });
+}
+
+export type PantallaCobro =
+  | { ok: true; turnoId: string; sucursal: string; responsableBolsa: string }
+  | { ok: false; error: ErrorVisita };
+
+/** Lo que necesita la pantalla de cobro: el turno abierto que se mostrará y quién es la responsable de la bolsa. */
+export async function pantallaCobro(sql: Sql, usuarioId: string, codigo: string, entorno: Entorno): Promise<PantallaCobro> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  return sql.begin("read only", async (tx) => {
+    const r = await contexto(tx, usuarioId, codigo, { bloquear: false });
+    return r.ok ? { ok: true as const, turnoId: r.c.turnoId, sucursal: r.c.nombre, responsableBolsa: r.c.responsable } : r;
   });
 }

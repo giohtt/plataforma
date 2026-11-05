@@ -31,7 +31,6 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
       <h1 className="cabecera-titulo">Turno de Recepción</h1>
       <p className="sub">Solo datos ficticios. Un turno abierto a la vez por sucursal.</p>
       {aviso === "abierto" && t ? <p className="aviso aviso-ok" role="status">Turno abierto.</p> : null}
-      {aviso === "visita" && t ? <p className="aviso aviso-ok" role="status">Visita registrada: $50.00 en efectivo, en la bolsa de visitas.</p> : null}
 
       {t ? (
         <>
