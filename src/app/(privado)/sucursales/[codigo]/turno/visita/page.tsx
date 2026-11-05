@@ -30,7 +30,7 @@ export default async function RegistrarVisita({ params }: PageProps<"/sucursales
     <main className="contenedor contenedor-medio">
       <p className="sub"><Link href={`/sucursales/${codigo}/turno`}>← Turno</Link></p>
       <h1 className="cabecera-titulo">Registrar visita</h1>
-      <p className="sub">Solo datos ficticios. $50 por persona, en efectivo o con tarjeta. Una persona o un grupo de hasta 20 en un mismo cobro.</p>
+      <p className="sub">Solo datos ficticios. $50 por persona, en efectivo, con tarjeta o por transferencia. Una persona o un grupo de hasta 20 en un mismo cobro.</p>
       {!p.ok ? (
         <p className="aviso aviso-info" data-testid="no-puede-cobrar">{AVISO[p.error] ?? "No se puede registrar la visita."}</p>
       ) : (
