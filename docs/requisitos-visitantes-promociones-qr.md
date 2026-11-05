@@ -181,6 +181,10 @@ Filtros: sucursal, rango de fechas; vistas por día, semana y mes. [Propuesta] S
 
 ---
 
+### Programa de fidelidad [Propuesta, no aprobada]
+Cinco visitas pagadas dan una visita gratis, ligada a la ficha global. Diseño y pendientes en
+[`propuesta-fidelidad.md`](propuesta-fidelidad.md).
+
 ## 6. Beneficio por pronto pago de mensualidad
 
 ### Reglas [Confirmado]
