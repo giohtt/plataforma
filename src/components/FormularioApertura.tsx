@@ -13,7 +13,7 @@ function Lugar({ estado, campo, titulo, responsable, nota }: {
       <label htmlFor={campo}>Total contado</label>
       <div className="importe">
         <span aria-hidden="true">$</span>
-        <input id={campo} name={campo} inputMode="decimal" autoComplete="off" placeholder="0.00" defaultValue={estado?.valores?.[campo] ?? ""}
+        <input id={campo} name={campo} inputMode="decimal" autoComplete="off" defaultValue={estado?.valores?.[campo] ?? ""}
           aria-invalid={error ? true : undefined} aria-describedby={`${campo}-ayuda${error ? ` ${campo}-error` : ""}`} />
       </div>
       <span className="sub" id={`${campo}-ayuda`}>Solo el total, en pesos. Si no hay dinero, escribe 0. No hay fondo fijo.</span>

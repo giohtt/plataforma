@@ -129,7 +129,8 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(filas.every((f) => f.bloque <= 3 && !f.es_autorizacion)).toBe(true);
       const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso).sort();
       expect(recepcion).toEqual(["sucursal.consultar", "turno.abrir", "turno.consultar", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
-      // Abrir turno: solo Recepción (provisional).
+      // Abrir turno: solo Recepción (provisional). El reporte de turnos no es para Recepción.
+      expect(filas.filter((f) => f.permiso === "reporte.turnos").map((f) => f.rol).sort()).toEqual(["administracion", "direccion", "encargado"]);
       expect(filas.filter((f) => f.permiso === "turno.abrir").map((f) => f.rol)).toEqual(["recepcion"]);
       // Corregir: Encargado y Dirección. Fusionar: solo Dirección. Historial general: nadie todavía.
       expect(filas.filter((f) => f.permiso === "visitante.corregir").map((f) => f.rol).sort()).toEqual(["direccion", "encargado"]);
