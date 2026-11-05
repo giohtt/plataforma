@@ -56,7 +56,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, historial] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, historial] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -64,6 +64,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     tienePermiso(sql, sesion.usuarioId, "reporte.expedientes", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "turno.abrir", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "turno.consultar", sucursal.id),
+    tienePermiso(sql, sesion.usuarioId, "reporte.turnos", sucursal.id),
     historialSucursal(sql, sesion.usuarioId, sucursal.id),
   ]);
 
@@ -86,7 +87,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
       {sucursal.estadoOperativo === "inactiva" ? (
         <p className="aviso aviso-info" data-testid="sucursal-inactiva">Esta sucursal está desactivada.</p>
       ) : null}
-      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno ? (
+      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno || puedeVerReporteTurnos ? (
         <p className="fila-acciones">
           {puedeAbrirTurno || puedeVerTurno ? (
             <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/turno`} data-testid="turno">
@@ -101,6 +102,11 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
           {puedeEditar || puedeDesactivar ? (
             <Link className="boton" href={`/sucursales/${sucursal.codigo}/editar`} data-testid="editar-sucursal">
               {puedeEditar ? "Editar sucursal" : sucursal.estadoOperativo === "inactiva" ? "Reactivar sucursal" : "Desactivar sucursal"}
+            </Link>
+          ) : null}
+          {puedeVerReporteTurnos ? (
+            <Link className="boton" href={`/reportes/turnos?sucursal=${sucursal.codigo}`} data-testid="reporte-turnos">
+              Reporte de turnos
             </Link>
           ) : null}
           {puedeVerExpedientes ? (
