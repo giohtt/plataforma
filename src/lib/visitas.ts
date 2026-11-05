@@ -1,22 +1,24 @@
 import type postgres from "postgres";
-import { TARIFA_VISITA } from "@/lib/datos-visita";
+import { leerRecibido, MAXIMO_PERSONAS, TARIFA_VISITA, totalVisitas } from "@/lib/datos-visita";
+import { enmascararTelefono } from "@/lib/datos-visitante";
 import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
 
 /**
- * Bloque 4, primer flujo: visita individual de $50 en efectivo (solo datos ficticios).
+ * Bloque 4: cobro de visitas en efectivo, de una persona o de un grupo (solo datos ficticios).
  *
- * Una sola pantalla: la ficha elegida, la sucursal, el total, lo recibido (opcional) y el cambio, con un solo
- * botón «Confirmar cobro». La pantalla trae el turno abierto que mostró y una clave del cobro que el navegador
- * conserva hasta que se guarda. Al confirmar, en una sola transacción, el servidor comprueba que sigue abierto
- * ese MISMO turno, que la persona sigue siendo la responsable vigente de la bolsa y que la ficha sigue activa;
- * luego guarda una operación, un cobro en efectivo, un pase para el visitante y una entrada de efectivo a la
- * bolsa. Si la misma clave llega dos veces (doble clic, o reintento tras perder la conexión), la segunda no
- * crea nada y responde con el cobro ya guardado.
+ * Una sola pantalla: las fichas elegidas (de 1 a 20, sin repetir), la sucursal, el total ($50 por persona),
+ * lo recibido (opcional) y el cambio, con un solo botón «Confirmar cobro». La pantalla trae el turno abierto
+ * que mostró y una clave del cobro que el navegador conserva, con el mismo grupo y el mismo recibido, hasta que
+ * se guarda. Al confirmar, en una sola transacción, el servidor comprueba que sigue abierto ese MISMO turno,
+ * que la persona sigue siendo la responsable vigente de la bolsa y que las fichas siguen activas; luego guarda
+ * una operación, un cobro en efectivo, un pase por persona y una sola entrada a la bolsa por el total.
+ * Si la misma clave llega dos veces (doble clic, o reintento tras perder la conexión) con los mismos datos, no
+ * crea nada y responde con el cobro ya guardado; con otros datos, se rechaza.
  *
  * Reglas de esta prueba: registra quien tiene visita.registrar (hoy, Recepción) y además es la responsable
  * vigente de la bolsa. No se registra en una sucursal inactiva ni en producción. A la bolsa entra solo el
- * total de la visita, nunca lo recibido. Corrección, cancelación y devolución quedan para otro paso.
+ * total, nunca lo recibido. Corrección, cancelación y devolución quedan para otro paso.
  */
 type Sql = postgres.Sql;
 type Tx = postgres.TransactionSql;
@@ -31,6 +33,11 @@ export type ErrorVisita =
   | "visitante_no_encontrado"
   | "visitante_unido"
   | "clave_ajena"
+  | "datos_distintos"
+  | "grupo_vacio"
+  | "grupo_grande"
+  | "persona_repetida"
+  | "recibido_menor"
   | "bloqueado_produccion";
 
 type Contexto = { sucursalId: string; codigo: string; nombre: string; turnoId: string; bolsaId: string; responsable: string };
@@ -70,100 +77,210 @@ async function contexto(
 }
 
 type Ficha = { id: string; nombre: string; telefono: string | null; sucursal_alta: string; unida: boolean };
-async function fichaActiva(tx: Tx, visitanteId: string): Promise<{ ok: true; v: Ficha } | { ok: false; error: ErrorVisita }> {
-  if (!esIdentificadorValido(visitanteId)) return { ok: false, error: "visitante_no_encontrado" };
-  const [v] = await tx<Ficha[]>`
-    select v.id, v.nombre, v.telefono, s.nombre as sucursal_alta, v.fusionado_en_id is not null as unida
-    from visitante v join sucursal s on s.id = v.sucursal_alta_id
-    where v.id = ${visitanteId}`;
-  if (!v) return { ok: false, error: "visitante_no_encontrado" };
-  if (v.unida) return { ok: false, error: "visitante_unido" };
-  return { ok: true, v };
-}
 
-export type CobroRegistrado = { visitante: string; total: string; recibido: string | null; cambio: string | null };
+export type CobroRegistrado = {
+  personas: number;
+  visitantes: string[];
+  total: string;
+  recibido: string | null;
+  cambio: string | null;
+};
 
 export type ResultadoConfirmacion =
   | { ok: true; operacionId: string; repetida: boolean; cobro: CobroRegistrado }
-  | { ok: false; error: ErrorVisita };
+  | { ok: false; error: ErrorVisita; detalle?: string };
 
-/** El cobro ya guardado con esta clave, tal como quedó (aunque un reintento traiga otros datos). */
-async function operacionExistente(tx: Tx, clave: string, usuarioId: string, codigo: string, repetida = true): Promise<ResultadoConfirmacion | null> {
-  const [o] = await tx<({ id: string; registrada_por: string; codigo: string } & CobroRegistrado)[]>`
-    select o.id, o.registrada_por, s.codigo, v.nombre as visitante, c.importe::text as total,
-           c.recibido::text as recibido, c.cambio::text as cambio
+type Pedido = { clave: string; turnoId: string; visitanteIds: string[]; recibido: string | null; cambio: string | null };
+
+/**
+ * El cobro ya guardado con esta clave. Solo se responde con él si el reintento trae los mismos datos (mismas
+ * personas, en el mismo orden, y mismo «Recibido»); si no, es «datos_distintos» y no se guarda nada.
+ */
+async function operacionExistente(tx: Tx, pedido: Pedido, usuarioId: string, codigo: string, repetida = true): Promise<ResultadoConfirmacion | null> {
+  const [o] = await tx<{ id: string; registrada_por: string; codigo: string; total: string; recibido: string | null; cambio: string | null }[]>`
+    select o.id, o.registrada_por, s.codigo, c.importe::text as total, c.recibido::text as recibido, c.cambio::text as cambio
     from operacion_visita o
     join sucursal s on s.id = o.sucursal_id
     join cobro_visita c on c.operacion_id = o.id
-    join pase_visita p on p.operacion_id = o.id
-    join visitante v on v.id = p.visitante_id
-    where o.clave = ${clave}`;
+    where o.clave = ${pedido.clave}`;
   if (!o) return null;
   if (o.registrada_por !== usuarioId || o.codigo !== codigo) return { ok: false, error: "clave_ajena" };
-  return { ok: true, operacionId: o.id, repetida, cobro: { visitante: o.visitante, total: o.total, recibido: o.recibido, cambio: o.cambio } };
+  const pases = await tx<{ visitante_id: string; nombre: string }[]>`
+    select p.visitante_id, v.nombre from pase_visita p join visitante v on v.id = p.visitante_id
+    where p.operacion_id = ${o.id} order by p.orden`;
+  const mismos =
+    pases.length === pedido.visitanteIds.length &&
+    pases.every((p, i) => p.visitante_id === pedido.visitanteIds[i]) &&
+    o.recibido === pedido.recibido;
+  if (!mismos) return { ok: false, error: "datos_distintos" };
+  return {
+    ok: true, operacionId: o.id, repetida,
+    cobro: { personas: pases.length, visitantes: pases.map((p) => p.nombre), total: o.total, recibido: o.recibido, cambio: o.cambio },
+  };
 }
 
-/** Confirma el cobro. Idempotente por `clave`. `recibido` y `cambio` llegan ya validados (leerRecibido). */
+/**
+ * Confirma el cobro de una o varias personas (hasta 20, sin repetir). Idempotente por `clave`.
+ * `recibido` y `cambio` llegan ya validados contra el total del grupo (leerRecibido).
+ */
 export async function confirmarVisita(
   sql: Sql,
   usuarioId: string,
   codigo: string,
-  pedido: { clave: string; turnoId: string; visitanteId: string; recibido: string | null; cambio: string | null },
+  pedido: Pedido,
   { entorno }: { entorno: Entorno },
 ): Promise<ResultadoConfirmacion> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
   if (!esIdentificadorValido(pedido.clave) || !esIdentificadorValido(pedido.turnoId)) return { ok: false, error: "no_encontrada" };
+  const ids = pedido.visitanteIds;
+  if (ids.length === 0) return { ok: false, error: "grupo_vacio" };
+  if (ids.length > MAXIMO_PERSONAS) return { ok: false, error: "grupo_grande" };
+  if (!ids.every(esIdentificadorValido)) return { ok: false, error: "visitante_no_encontrado" };
+  if (new Set(ids).size !== ids.length) return { ok: false, error: "persona_repetida" };
+  const total = totalVisitas(ids.length);
+  if (pedido.recibido !== null) {
+    const r = leerRecibido(pedido.recibido, total);
+    if (!r.ok || r.cambio !== pedido.cambio) return { ok: false, error: "recibido_menor" };
+  } else if (pedido.cambio !== null) return { ok: false, error: "recibido_menor" };
 
   return sql.begin(async (tx): Promise<ResultadoConfirmacion> => {
     // Un reintento de un cobro ya guardado responde lo mismo, aunque después haya cambiado el turno.
-    const previa = await operacionExistente(tx, pedido.clave, usuarioId, codigo);
+    const previa = await operacionExistente(tx, pedido, usuarioId, codigo);
     if (previa) return previa;
 
     // Bloquea el turno: dos confirmaciones a la vez esperan aquí, una detrás de la otra.
     const r = await contexto(tx, usuarioId, codigo, { bloquear: true });
     if (!r.ok) return r;
     // Ya con el turno bloqueado, la segunda de dos confirmaciones simultáneas ve la primera.
-    const repetida = await operacionExistente(tx, pedido.clave, usuarioId, codigo);
+    const repetida = await operacionExistente(tx, pedido, usuarioId, codigo);
     if (repetida) return repetida;
     if (r.c.turnoId !== pedido.turnoId) return { ok: false, error: "turno_cambio" };
 
-    const f = await fichaActiva(tx, pedido.visitanteId);
-    if (!f.ok) return f;
+    const fichas = await tx<Ficha[]>`
+      select v.id, v.nombre, v.telefono, s.nombre as sucursal_alta, v.fusionado_en_id is not null as unida
+      from visitante v join sucursal s on s.id = v.sucursal_alta_id
+      where v.id = any(${ids}::uuid[])`;
+    if (fichas.length !== ids.length) return { ok: false, error: "visitante_no_encontrado" };
+    const unida = fichas.find((f) => f.unida);
+    if (unida) return { ok: false, error: "visitante_unido", detalle: unida.nombre };
 
     const [o] = await tx<{ id: string }[]>`
       insert into operacion_visita (clave, sucursal_id, turno_id, registrada_por, total)
-      values (${pedido.clave}, ${r.c.sucursalId}, ${r.c.turnoId}, ${usuarioId}, ${TARIFA_VISITA})
+      values (${pedido.clave}, ${r.c.sucursalId}, ${r.c.turnoId}, ${usuarioId}, ${total})
       on conflict (clave) do nothing
       returning id`;
-    if (!o) return (await operacionExistente(tx, pedido.clave, usuarioId, codigo)) ?? { ok: false, error: "clave_ajena" };
+    if (!o) return (await operacionExistente(tx, pedido, usuarioId, codigo)) ?? { ok: false, error: "clave_ajena" };
 
     const [cobro] = await tx<{ id: string }[]>`
       insert into cobro_visita (operacion_id, forma_pago, estado, importe, recibido, cambio)
-      values (${o.id}, 'efectivo', 'confirmado', ${TARIFA_VISITA}, ${pedido.recibido}, ${pedido.cambio})
+      values (${o.id}, 'efectivo', 'confirmado', ${total}, ${pedido.recibido}, ${pedido.cambio})
       returning id`;
-    await tx`
-      insert into pase_visita (operacion_id, visitante_id, sucursal_id, tarifa, descuento, total)
-      values (${o.id}, ${f.v.id}, ${r.c.sucursalId}, ${TARIFA_VISITA}, 0, ${TARIFA_VISITA})`;
-    // A la bolsa entra solo el total de la visita; el cambio no es un movimiento.
+    // Un pase por persona, en el orden en que se agregaron; cada uno con la sucursal donde ocurre la visita.
+    for (const [i, id] of ids.entries()) {
+      await tx`
+        insert into pase_visita (operacion_id, visitante_id, sucursal_id, tarifa, descuento, total, orden)
+        values (${o.id}, ${id}, ${r.c.sucursalId}, ${TARIFA_VISITA}, 0, ${TARIFA_VISITA}, ${i + 1})`;
+    }
+    // A la bolsa entra el total del grupo, en un solo movimiento; el cambio no es un movimiento.
     await tx`
       insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, cobro_id, responsable_id, registrado_por)
-      values (${r.c.bolsaId}, ${r.c.turnoId}, 'entrada_cobro_visita', ${TARIFA_VISITA}, ${cobro.id}, ${usuarioId}, ${usuarioId})`;
-    return (await operacionExistente(tx, pedido.clave, usuarioId, codigo, false))!;
+      values (${r.c.bolsaId}, ${r.c.turnoId}, 'entrada_cobro_visita', ${total}, ${cobro.id}, ${usuarioId}, ${usuarioId})`;
+    return (await operacionExistente(tx, pedido, usuarioId, codigo, false))!;
   });
 }
 
-export type VisitaDelTurno = { id: string; visitante: string; registradaEn: Date; total: string; formaPago: "efectivo" };
+export type CobroDelTurno = { id: string; registradaEn: Date; personas: number; total: string; formaPago: "efectivo" };
 
-/** Visitas registradas en un turno, la más reciente primero. Quien llama ya comprobó que puede ver el turno. */
-export async function visitasDelTurno(sql: Sql | Tx, turnoId: string): Promise<VisitaDelTurno[]> {
-  return sql<VisitaDelTurno[]>`
-    select o.id, v.nombre as visitante, o.registrada_en as "registradaEn", c.importe::text as total, c.forma_pago as "formaPago"
+/** Cobros de visitas de un turno, una línea por cobro, el más reciente primero. Quien llama ya comprobó que puede ver el turno. */
+export async function cobrosDelTurno(sql: Sql | Tx, turnoId: string): Promise<CobroDelTurno[]> {
+  return sql<CobroDelTurno[]>`
+    select o.id, o.registrada_en as "registradaEn", c.importe::text as total, c.forma_pago as "formaPago",
+           (select count(*)::int from pase_visita p where p.operacion_id = o.id) as personas
     from operacion_visita o
     join cobro_visita c on c.operacion_id = o.id
-    join pase_visita p on p.operacion_id = o.id
-    join visitante v on v.id = p.visitante_id
     where o.turno_id = ${turnoId}
     order by o.registrada_en desc, o.id`;
+}
+
+export type DetalleCobro = {
+  id: string;
+  sucursal: { codigo: string; nombre: string };
+  registradaEn: Date;
+  registradaPor: string;
+  formaPago: "efectivo";
+  estado: "confirmado";
+  total: string;
+  recibido: string | null;
+  cambio: string | null;
+  entradaBolsa: string | null;
+  responsableBolsa: string | null;
+  pases: { id: string; orden: number; nombre: string; telefono: string | null; fichaDe: string; tarifa: string; descuento: string; total: string }[];
+};
+
+/**
+ * Detalle de un cobro: visitantes y sus pases. Lo ve quien puede ver los turnos de la sucursal del cobro.
+ * null si no existe o no hay permiso (misma respuesta). Teléfonos enmascarados.
+ */
+export async function detalleCobro(sql: Sql, usuarioId: string, codigo: string, operacionId: string): Promise<DetalleCobro | null> {
+  if (!/^[A-Z0-9]{2,5}$/.test(codigo) || !esIdentificadorValido(operacionId)) return null;
+  return sql.begin("isolation level repeatable read read only", async (tx) => {
+    const [o] = await tx<(Omit<DetalleCobro, "pases" | "sucursal"> & { codigo: string; sucursal_nombre: string })[]>`
+      select o.id, s.codigo, s.nombre as sucursal_nombre, o.registrada_en as "registradaEn", u.nombre as "registradaPor",
+             c.forma_pago as "formaPago", c.estado, c.importe::text as total, c.recibido::text as recibido, c.cambio::text as cambio,
+             m.importe::text as "entradaBolsa", ur.nombre as "responsableBolsa"
+      from operacion_visita o
+      join sucursal s on s.id = o.sucursal_id
+      join usuario u on u.id = o.registrada_por
+      join cobro_visita c on c.operacion_id = o.id
+      left join movimiento_efectivo m on m.cobro_id = c.id
+      left join usuario ur on ur.id = m.responsable_id
+      where o.id = ${operacionId} and s.codigo = ${codigo}
+        and (tiene_permiso(${usuarioId}, 'turno.consultar', s.id) or tiene_permiso(${usuarioId}, 'visita.registrar', s.id))`;
+    if (!o) return null;
+    const pases = await tx<(DetalleCobro["pases"][number] & { tel: string | null })[]>`
+      select p.id, p.orden, v.nombre, v.telefono as tel, sa.nombre as "fichaDe",
+             p.tarifa::text as tarifa, p.descuento::text as descuento, p.total::text as total
+      from pase_visita p
+      join visitante v on v.id = p.visitante_id
+      join sucursal sa on sa.id = v.sucursal_alta_id
+      where p.operacion_id = ${o.id}
+      order by p.orden`;
+    const { codigo: cod, sucursal_nombre, ...resto } = o;
+    return {
+      ...resto,
+      sucursal: { codigo: cod, nombre: sucursal_nombre },
+      pases: pases.map(({ tel, ...p }) => ({ ...p, telefono: enmascararTelefono(tel) })),
+    };
+  });
+}
+
+export type VisitaHoy = { id: string; visitasHoy: number; enEstaSucursal: boolean };
+
+/**
+ * Personas que ya tienen una visita registrada hoy (fecha de la sucursal), en cualquier sucursal y contando
+ * sus fichas unidas. Solo para el aviso previo: la regla de reingreso está pendiente, así que no bloquea.
+ * null si la persona no puede registrar visitas en esa sucursal.
+ */
+export async function visitasDeHoy(sql: Sql, usuarioId: string, codigo: string, visitanteIds: string[]): Promise<VisitaHoy[] | null> {
+  const ids = visitanteIds.filter(esIdentificadorValido).slice(0, MAXIMO_PERSONAS);
+  return sql.begin("read only", async (tx): Promise<VisitaHoy[] | null> => {
+    const r = await contexto(tx, usuarioId, codigo, { bloquear: false });
+    if (!r.ok) return null;
+    if (!ids.length) return [];
+    const filas = await tx<VisitaHoy[]>`
+      with s as (select id, zona_horaria from sucursal where id = ${r.c.sucursalId}),
+      hoy as (
+        select (date_trunc('day', now() at time zone s.zona_horaria)) at time zone s.zona_horaria as desde, s.id from s
+      )
+      select x.id,
+             count(p.id)::int as "visitasHoy",
+             coalesce(bool_or(p.sucursal_id = hoy.id), false) as "enEstaSucursal"
+      from unnest(${ids}::uuid[]) as x(id)
+      cross join hoy
+      left join pase_visita p on p.visitante_id in (select visitante_grupo(x.id)) and p.creado_en >= hoy.desde
+      group by x.id`;
+    return [...filas];
+  });
 }
 
 /** null si la persona puede registrar visitas ahora en la sucursal; si no, el motivo. */

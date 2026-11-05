@@ -29,3 +29,14 @@ describe("lo recibido en una visita de $50", () => {
     expect(leerRecibido("10000000")).toEqual({ ok: false, motivo: "maximo" });
   });
 });
+
+describe("total de un cobro grupal", () => {
+  it("$50 por persona; lo recibido se compara con el total del grupo", async () => {
+    const { totalVisitas, mensajeRecibido, MAXIMO_PERSONAS } = await import("@/lib/datos-visita");
+    expect([totalVisitas(1), totalVisitas(3), totalVisitas(20)]).toEqual(["50.00", "150.00", "1000.00"]);
+    expect(MAXIMO_PERSONAS).toBe(20);
+    expect(leerRecibido("200", "150.00")).toEqual({ ok: true, recibido: "200.00", cambio: "50.00" });
+    expect(leerRecibido("100", "150.00")).toEqual({ ok: false, motivo: "menor" });
+    expect(mensajeRecibido("menor", "150.00")).toBe("Lo recibido es menor que el total ($150.00). No se puede confirmar así.");
+  });
+});

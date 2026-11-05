@@ -5,7 +5,7 @@ import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { requerirSesion } from "@/lib/sesion-servidor";
 import { estadoTurno, type TipoLugar } from "@/lib/turnos";
-import { impedimentoRegistroVisita, visitasDelTurno } from "@/lib/visitas";
+import { cobrosDelTurno, impedimentoRegistroVisita } from "@/lib/visitas";
 
 export const metadata = { title: "Turno · Fitnessland" };
 
@@ -23,7 +23,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   const t = e.turno;
   const sql = obtenerBaseDatos()!;
   const puedeCobrar = t ? (await impedimentoRegistroVisita(sql, sesion.usuarioId, codigo, leerEntorno())) === null : false;
-  const visitas = t ? await visitasDelTurno(sql, t.id) : [];
+  const cobros = t ? await cobrosDelTurno(sql, t.id) : [];
 
   return (
     <main className="contenedor contenedor-medio">
@@ -53,7 +53,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                   <dd data-testid="contado-al-abrir">{pesos.format(Number(l.contadoAlAbrir))}</dd>
                   {l.tipo === "bolsa_visitas" ? (
                     <>
-                      <dt>Visitas cobradas en efectivo ({l.cantidadEntradas})</dt>
+                      <dt>Cobros de visitas en efectivo ({l.cantidadEntradas} {l.cantidadEntradas === 1 ? "cobro" : "cobros"} · {l.visitasEntradas} {l.visitasEntradas === 1 ? "visita" : "visitas"})</dt>
                       <dd data-testid="entradas">+ {pesos.format(Number(l.entradas))}</dd>
                     </>
                   ) : null}
@@ -71,17 +71,19 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
               </section>
             ))}
           </div>
-          <section className="tarjeta" aria-labelledby="t-visitas" data-testid="visitas-turno">
-            <h2 id="t-visitas" className="titulo-seccion">Visitas de este turno ({visitas.length})</h2>
-            {visitas.length ? (
+          <section className="tarjeta" aria-labelledby="t-cobros" data-testid="cobros-turno">
+            <h2 id="t-cobros" className="titulo-seccion">Cobros de visitas de este turno ({cobros.length})</h2>
+            {cobros.length ? (
               <ul className="lista-simple">
-                {visitas.map((v) => (
-                  <li key={v.id} data-testid="visita-turno">
-                    <strong>{v.visitante}</strong> · {hora.format(v.registradaEn)} · {pesos.format(Number(v.total))} en efectivo
+                {cobros.map((c) => (
+                  <li key={c.id} data-testid="cobro-turno">
+                    {hora.format(c.registradaEn)} · {c.personas} {c.personas === 1 ? "persona" : "personas"} ·{" "}
+                    <strong>{pesos.format(Number(c.total))}</strong> en efectivo ·{" "}
+                    <Link href={`/sucursales/${codigo}/turno/cobros/${c.id}`}>Ver detalle</Link>
                   </li>
                 ))}
               </ul>
-            ) : <p className="sub">Todavía no hay visitas registradas.</p>}
+            ) : <p className="sub">Todavía no hay cobros de visitas.</p>}
           </section>
         </>
       ) : e.sucursal.inactiva ? (

@@ -1,17 +1,17 @@
 "use server";
 
 /**
- * Cobro de una visita individual en efectivo, por POST. Aquí se leen la sesión y el formulario; permisos,
- * turno, responsable de la bolsa, ficha activa, cobros repetidos y bloqueo en producción se comprueban en
- * src/lib/visitas.ts. La pantalla llama a esta acción directamente para poder reintentar con la misma clave
- * si se pierde la conexión.
+ * Cobro de visitas en efectivo, de una persona o de un grupo (hasta 20), por POST. Aquí se leen la sesión y
+ * el formulario; permisos, turno, responsable de la bolsa, fichas activas, cobros repetidos y bloqueo en
+ * producción se comprueban en src/lib/visitas.ts. La pantalla llama a esta acción directamente para poder
+ * reintentar con la misma clave si se pierde la conexión.
  */
 import { redirect } from "next/navigation";
-import { leerRecibido, MENSAJES_RECIBIDO } from "@/lib/datos-visita";
+import { leerRecibido, MAXIMO_PERSONAS, mensajeRecibido, totalVisitas } from "@/lib/datos-visita";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
-import { confirmarVisita, type CobroRegistrado, type ErrorVisita } from "@/lib/visitas";
+import { confirmarVisita, visitasDeHoy, type CobroRegistrado, type ErrorVisita, type VisitaHoy } from "@/lib/visitas";
 
 const MENSAJES: Record<ErrorVisita, string> = {
   no_encontrada: "No encontrada.",
@@ -23,6 +23,11 @@ const MENSAJES: Record<ErrorVisita, string> = {
   visitante_no_encontrado: "No se encontró la ficha elegida. Búscala de nuevo.",
   visitante_unido: "Esta ficha se unió a otra. Búscala de nuevo y elige la ficha activa.",
   clave_ajena: "No se pudo registrar este cobro. Vuelve a abrir «Registrar visita» desde el turno.",
+  datos_distintos: "Este cobro ya se había enviado con otras personas o con otro importe recibido. No se guardó nada.",
+  grupo_vacio: "Agrega al menos una persona antes de confirmar.",
+  grupo_grande: `Un cobro puede tener como máximo ${MAXIMO_PERSONAS} personas.`,
+  persona_repetida: "La misma persona aparece dos veces en el grupo. No se guardó nada.",
+  recibido_menor: "Lo recibido es menor que el total. No se guardó nada.",
   bloqueado_produccion: "El registro de visitas está desactivado fuera del entorno de pruebas.",
 };
 
@@ -40,16 +45,33 @@ export async function accionConfirmarVisita(datos: FormData): Promise<RespuestaC
     return typeof v === "string" ? v.slice(0, max) : "";
   };
 
-  // Lo recibido se valida otra vez aquí: no se confía en el navegador.
-  const r = leerRecibido(leer("recibido", 30));
-  if (!r.ok) return { ok: false, error: "Revisa lo recibido.", errorRecibido: MENSAJES_RECIBIDO[r.motivo] };
+  // Lo recibido se valida otra vez aquí, contra el total del grupo: no se confía en el navegador.
+  const visitanteIds = datos.getAll("visitanteId").filter((x): x is string => typeof x === "string").slice(0, MAXIMO_PERSONAS + 1);
+  const total = totalVisitas(Math.max(visitanteIds.length, 1));
+  const r = leerRecibido(leer("recibido", 30), total);
+  if (!r.ok) return { ok: false, error: "Revisa lo recibido.", errorRecibido: mensajeRecibido(r.motivo, total) };
   const res = await confirmarVisita(sql, sesion.usuarioId, leer("codigo", 10), {
     clave: leer("clave", 40),
     turnoId: leer("turnoId", 40),
-    visitanteId: leer("visitanteId", 40),
+    visitanteIds,
     recibido: r.recibido,
     cambio: r.cambio,
   }, { entorno: leerEntorno() });
-  if (!res.ok) return { ok: false, error: MENSAJES[res.error] };
+  if (!res.ok) {
+    const error = res.error === "visitante_unido" && res.detalle
+      ? `La ficha de ${res.detalle} se unió a otra. Quítala del grupo, búscala de nuevo y elige la ficha activa. No se guardó nada.`
+      : MENSAJES[res.error];
+    return { ok: false, error };
+  }
   return { ok: true, cobro: res.cobro, repetida: res.repetida };
+}
+
+/** Para el aviso previo: quiénes del grupo ya tienen una visita registrada hoy. No bloquea el cobro. */
+export async function accionVisitasDeHoy(codigo: string, visitanteIds: string[]): Promise<VisitaHoy[]> {
+  const sesion = await obtenerSesionActual();
+  if (!sesion) redirect("/iniciar-sesion");
+  const sql = obtenerBaseDatos();
+  if (!sql) throw new Error("Sin base de datos");
+  if (typeof codigo !== "string" || !Array.isArray(visitanteIds)) return [];
+  return (await visitasDeHoy(sql, sesion.usuarioId, codigo, visitanteIds.filter((x) => typeof x === "string"))) ?? [];
 }

@@ -13,9 +13,11 @@ import { interpretarConsulta, validarCorreccion, validarVisitante, type ErroresV
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
-import { buscarVisitantes, crearVisitante, type ResultadoVisitante } from "@/lib/visitantes";
+import { buscarVisitantes, consultarVisitante, crearVisitante, type ResultadoVisitante } from "@/lib/visitantes";
 
 export type EstadoAltaVisitante = {
+  /** Solo con destino «cobro»: la ficha creada, para agregarla al grupo sin salir de la pantalla. */
+  creado?: ResultadoVisitante;
   error?: string;
   errores?: ErroresVisitante;
   valores?: Record<string, string>;
@@ -49,7 +51,13 @@ export async function accionCrearVisitante(previo: EstadoAltaVisitante, datos: F
   // Solo cuentan como confirmados los expedientes mostrados, y solo si se marcó la casilla.
   const confirmados = datos.get("confirmo") === "si" ? datos.getAll("distinto").filter((x): x is string => typeof x === "string").slice(0, 20) : [];
   const r = await crearVisitante(sql, sesion.usuarioId, codigo, v.datos, confirmados, { entorno: leerEntorno() });
-  if (r.ok) redirect(`/sucursales/${codigo}/visitantes/${r.id}?aviso=creado`);
+  if (r.ok) {
+    if (datos.get("destino") === "cobro") {
+      const f = await consultarVisitante(sql, sesion.usuarioId, codigo, r.id);
+      if (f) return { creado: { ...f, motivos: [] }, intento };
+    }
+    redirect(`/sucursales/${codigo}/visitantes/${r.id}?aviso=creado`);
+  }
   if (r.error === "coincidencias") {
     return {
       error: confirmados.length
