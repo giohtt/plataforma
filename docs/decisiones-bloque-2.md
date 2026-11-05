@@ -1,6 +1,6 @@
 # Bloque 2: decisiones pendientes sobre el expediente de visitante
 
-Fecha: 4 nov 2026. Estado: **pendientes**. Forman parte de la decisión 3 (privacidad del expediente)
+Fecha: 4 nov 2026. Estado: **pendientes**. El bloque 2 se cerró para el entorno de pruebas el 4 nov 2026 con estas reglas provisionales. Forman parte de la decisión 3 (privacidad del expediente)
 del [plan general](plan-general.md) y del [documento de requisitos](requisitos-visitantes-promociones-qr.md).
 
 Mientras no se decidan, el sitio de pruebas usa la **opción A** de cada una, solo con datos ficticios. Las
@@ -108,3 +108,11 @@ Provisional (decidido al construir): «nombre muy parecido» es una similitud de
 errores de escritura como «Valeria Gómez / Gomes Pineda» (83 %) y quedan fuera hermanos que solo comparten apellidos,
 como «Ana / Luis Martínez Ruiz» (61 %). Las fichas que después se unieron a otra siguen contando como expedientes creados
 y se muestran aparte.
+
+## Estado al cerrar el bloque 2 para el entorno de pruebas (4 nov 2026)
+
+- **Se deciden antes de capturar datos reales:** campos obligatorios (decisión 1 de este documento) y quién puede ver
+  el teléfono completo (decisión 2). Mientras tanto siguen las opciones A provisionales.
+- **Se retoma en el bloque 4:** lo que Recepción ve del historial de otras sucursales (decisión 3 de este documento),
+  cuando existan visitas.
+- El reporte básico se probó en el sitio el 4 nov 2026 con Encargado Tenango, Administración y Recepción Tenango.
