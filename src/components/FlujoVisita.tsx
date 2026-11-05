@@ -7,15 +7,24 @@ import { accionBuscarVisitantes } from "@/app/acciones-visitantes";
 import { FormularioVisitante } from "@/components/FormularioVisitante";
 import { TarjetaVisitante } from "@/components/Visitantes";
 import {
-  leerAutorizacion, leerRecibido, MAXIMO_PERSONAS, MENSAJES_AUTORIZACION, mensajeRecibido, TARIFA_VISITA, totalVisitas, type FormaPago,
+  leerAutorizacion, leerRecibido, leerReferencia, MAXIMO_PERSONAS, MENSAJES_AUTORIZACION, MENSAJES_REFERENCIA, mensajeRecibido,
+  NOMBRE_REFERENCIA, TARIFA_VISITA, totalVisitas, type FormaPago, type TipoReferencia,
 } from "@/lib/datos-visita";
 import { normalizarTelefono } from "@/lib/datos-visitante";
-import type { CobroConMismaAutorizacion, CobroRegistrado, VisitaHoy } from "@/lib/visitas";
+import type { CobroPrevio, CobroRegistrado, EstadoCobro, VisitaHoy } from "@/lib/visitas";
 import type { ResultadoVisitante } from "@/lib/visitantes";
 
 const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
 const $ = (importe: string) => pesos.format(Number(importe));
-const hora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", timeStyle: "short" });
+const hora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
+const MEDIO: Record<FormaPago, string> = { efectivo: "en efectivo", tarjeta: "con tarjeta", transferencia: "por transferencia" };
+const ESTADO: Record<EstadoCobro, string> = {
+  confirmado: "Confirmado",
+  confirmado_operativamente: "Confirmado operativamente",
+  pendiente_abono: "Pendiente de verificar abono",
+  abono_verificado: "Abono verificado",
+  no_localizado: "No localizado",
+};
 
 /** Clave del cobro: se crea al agregar a la primera persona y se conserva hasta que el cobro se guarda. */
 function nuevaClave(): string {
@@ -55,14 +64,17 @@ export function FlujoVisita(props: Props) {
   const [forma, setForma] = useState<FormaPago>("efectivo");
   const [autorizacion, setAutorizacion] = useState("");
   const [intentoTarjeta, setIntentoTarjeta] = useState(false);
-  // La autorización ya aparece hoy en la sucursal: se muestran los cobros previos y se pide confirmar otra venta.
-  const [previos, setPrevios] = useState<CobroConMismaAutorizacion[] | null>(null);
+  const [referencia, setReferencia] = useState("");
+  const [tipoReferencia, setTipoReferencia] = useState<TipoReferencia | "">("");
+  // La autorización (tarjeta) o la referencia (transferencia) ya está registrada: se muestran los cobros previos
+  // (solo los que la persona puede ver) y se pide confirmar que es otra venta u otra transferencia.
+  const [previos, setPrevios] = useState<CobroPrevio[] | null>(null);
   const [otraVenta, setOtraVenta] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const enCurso = useRef(false);
   // Tras perder la conexión no se sabe si el cobro se guardó: grupo y recibido quedan fijos hasta reintentar.
   const [pendiente, setPendiente] = useState(false);
-  const [error, setError] = useState<{ general: string; recibido?: string; autorizacion?: string } | null>(null);
+  const [error, setError] = useState<{ general: string; recibido?: string; autorizacion?: string; referencia?: string } | null>(null);
   const [registrado, setRegistrado] = useState<CobroRegistrado | null>(null);
   const [creando, setCreando] = useState<{ nombre: string; telefono: string } | null>(null);
 
@@ -95,6 +107,8 @@ export function FlujoVisita(props: Props) {
     setForma("efectivo");
     setAutorizacion("");
     setIntentoTarjeta(false);
+    setReferencia("");
+    setTipoReferencia("");
     setPrevios(null);
     setOtraVenta(false);
     setError(null);
@@ -116,7 +130,15 @@ export function FlujoVisita(props: Props) {
         </ul>
         <dl className="resumen-cobro">
           <dt>Total</dt>
-          <dd><strong>{$(registrado.total)}</strong> {registrado.formaPago === "tarjeta" ? "con tarjeta" : "en efectivo"}</dd>
+          <dd><strong>{$(registrado.total)}</strong> {MEDIO[registrado.formaPago]}</dd>
+          {registrado.formaPago === "transferencia" ? (
+            <>
+              <dt>{registrado.tipoReferencia ? NOMBRE_REFERENCIA[registrado.tipoReferencia] : "Referencia"}</dt>
+              <dd data-testid="referencia-registrada">{registrado.referencia}</dd>
+              <dt>Estado</dt>
+              <dd data-testid="estado-registrado">{ESTADO[registrado.estado]}</dd>
+            </>
+          ) : null}
           {registrado.formaPago === "tarjeta" ? (
             <>
               <dt>Autorización</dt>
@@ -135,9 +157,16 @@ export function FlujoVisita(props: Props) {
               <dd data-testid="cambio-registrado"><strong>{$(registrado.cambio ?? "0")}</strong></dd>
             </>
           ) : null}
-          <dt>{registrado.formaPago === "tarjeta" ? "Bolsa de visitas" : "Entró a la bolsa"}</dt>
-          <dd data-testid="bolsa-registrado">{registrado.formaPago === "tarjeta" ? "No entra efectivo (tarjeta)" : $(registrado.total)}</dd>
+          <dt>{registrado.formaPago === "efectivo" ? "Entró a la bolsa" : "Bolsa de visitas"}</dt>
+          <dd data-testid="bolsa-registrado">
+            {registrado.formaPago === "efectivo" ? $(registrado.total) : `No entra efectivo (${registrado.formaPago})`}
+          </dd>
         </dl>
+        {registrado.formaPago === "transferencia" ? (
+          <p className="aviso aviso-info" data-testid="aviso-acceso">
+            El abono todavía no está verificado. La regla para dar acceso con el comprobante está pendiente de decisión.
+          </p>
+        ) : null}
         <p className="fila-acciones">
           <button className="boton boton-principal" type="button" onClick={nuevaVisita}>Nueva visita</button>
           <Link className="boton" href={`/sucursales/${codigo}/turno`}>Ver el turno</Link>
@@ -148,17 +177,23 @@ export function FlujoVisita(props: Props) {
 
   const total = totalVisitas(grupo.length);
   const tarjeta = forma === "tarjeta";
-  const vivo = leerRecibido(tarjeta ? "" : recibido, total);
+  const transferencia = forma === "transferencia";
+  const vivo = leerRecibido(forma !== "efectivo" ? "" : recibido, total);
   const errorCampo = !vivo.ok ? mensajeRecibido(vivo.motivo, total) : error?.recibido;
   const aut = leerAutorizacion(autorizacion);
   const errorAut = tarjeta && intentoTarjeta && !aut.ok ? MENSAJES_AUTORIZACION[aut.motivo] : error?.autorizacion;
+  const ref = leerReferencia(referencia);
+  const errorRef = transferencia && intentoTarjeta && (!tipoReferencia || !ref.ok)
+    ? (!tipoReferencia ? MENSAJES_REFERENCIA.tipo : !ref.ok ? MENSAJES_REFERENCIA[ref.motivo] : undefined)
+    : error?.referencia;
   const falta = previos !== null && !otraVenta;
   const conVisitaHoy = grupo.filter((v) => (hoy[v.id]?.visitasHoy ?? 0) > 0);
 
   const confirmar = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (tarjeta) setIntentoTarjeta(true);
-    if (enCurso.current || !vivo.ok || !grupo.length || (tarjeta && !aut.ok) || falta) return; // doble clic: el segundo no sale del navegador
+    if (forma !== "efectivo") setIntentoTarjeta(true);
+    const faltaDato = (tarjeta && !aut.ok) || (transferencia && (!tipoReferencia || !ref.ok));
+    if (enCurso.current || !vivo.ok || !grupo.length || faltaDato || falta) return; // doble clic: el segundo no sale del navegador
     enCurso.current = true;
     setEnviando(true);
     setError(null);
@@ -169,14 +204,16 @@ export function FlujoVisita(props: Props) {
       else {
         // Con una autorización repetida basta el recuadro con el cobro previo y la confirmación.
         if (r.previos) { setPrevios(r.previos); setError(null); }
-        else setError({ general: r.error, recibido: r.errorRecibido, autorizacion: r.errorAutorizacion });
+        else setError({ general: r.error, recibido: r.errorRecibido, autorizacion: r.errorAutorizacion, referencia: r.errorReferencia });
       }
     } catch {
       // No se sabe si llegó al servidor. Grupo, medio de pago, recibido o autorización y clave se conservan:
       // reintentar no registra dos veces.
       setPendiente(true);
       setError({
-        general: tarjeta
+        general: transferencia
+          ? "Se perdió la conexión y no sabemos si la transferencia se registró en Fitnessland. Vuelve a tocar «Registrar transferencia» con la misma referencia: si ya se había registrado, no se registrará dos veces."
+          : tarjeta
           ? "Se perdió la conexión y no sabemos si el cobro se registró en Fitnessland. El pago ya se cobró en la terminal: no vuelvas a pasar la tarjeta. Toca «Registrar cobro aprobado» otra vez con la misma autorización: si ya se había registrado, no se registrará dos veces."
           : "Se perdió la conexión y no sabemos si el cobro se guardó. Vuelve a tocar «Confirmar cobro»: si ya se había guardado, no se cobrará dos veces. Mientras tanto no se puede cambiar el grupo ni lo recibido.",
       });
@@ -230,7 +267,7 @@ export function FlujoVisita(props: Props) {
             <dd>{sucursal}</dd>
             <dt>Total</dt>
             <dd data-testid="total">
-              <strong>{$(total)}</strong> {tarjeta ? "con tarjeta" : "en efectivo"}{grupo.length > 1 ? ` (${grupo.length} × ${$(TARIFA_VISITA)})` : ""}
+              <strong>{$(total)}</strong> {MEDIO[forma]}{grupo.length > 1 ? ` (${grupo.length} × ${$(TARIFA_VISITA)})` : ""}
             </dd>
           </dl>
           {conVisitaHoy.length ? (
@@ -246,19 +283,54 @@ export function FlujoVisita(props: Props) {
             <input type="hidden" name="turnoId" value={turnoId} />
             {grupo.map((v) => <input key={v.id} type="hidden" name="visitanteId" value={v.id} />)}
             <input type="hidden" name="formaPago" value={forma} />
+            {/* Campo oculto: las opciones se desactivan al quedar fijo el cobro y un control desactivado no se envía. */}
+            {transferencia ? <input type="hidden" name="tipoReferencia" value={tipoReferencia} /> : null}
             <fieldset className="campo campo-grupo" disabled={fijo}>
               <legend>Medio de pago</legend>
               <div className="opciones-pago">
-                {(["efectivo", "tarjeta"] as const).map((f) => (
+                {(["efectivo", "tarjeta", "transferencia"] as const).map((f) => (
                   <label key={f} className="casilla">
                     <input type="radio" name="medio" value={f} checked={forma === f}
                       onChange={() => { setForma(f); setError(null); setPrevios(null); setOtraVenta(false); }} />
-                    {f === "efectivo" ? "Efectivo" : "Tarjeta"}
+                    {f === "efectivo" ? "Efectivo" : f === "tarjeta" ? "Tarjeta" : "Transferencia"}
                   </label>
                 ))}
               </div>
             </fieldset>
-            {tarjeta ? (
+            {transferencia ? (
+              <div className="campo">
+                <ol className="pasos-tarjeta">
+                  <li>Pide al visitante que transfiera <strong>{$(total)}</strong> a la cuenta de Fitnessland y que te muestre el comprobante.</li>
+                  <li>Copia la clave de rastreo o el folio bancario del comprobante.</li>
+                </ol>
+                <fieldset className="campo campo-grupo" disabled={fijo}>
+                  <legend>Tipo de referencia</legend>
+                  <div className="opciones-pago">
+                    {(["clave_rastreo", "folio_bancario"] as const).map((t) => (
+                      <label key={t} className="casilla">
+                        <input type="radio" name="tipoReferenciaOpcion" value={t} checked={tipoReferencia === t}
+                          onChange={() => { setTipoReferencia(t); setPrevios(null); setOtraVenta(false); if (error) setError(null); }} />
+                        {NOMBRE_REFERENCIA[t]}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <label htmlFor="referencia">Clave de rastreo o folio bancario</label>
+                <input id="referencia" name="referencia" autoComplete="off" autoCapitalize="characters" maxLength={40}
+                  value={referencia} readOnly={pendiente}
+                  onChange={(e) => { setReferencia(e.target.value); setPrevios(null); setOtraVenta(false); if (error) setError(null); }}
+                  aria-invalid={errorRef ? true : undefined}
+                  aria-describedby={`referencia-ayuda${errorRef ? " referencia-error" : ""}`} />
+                {errorRef ? <span className="campo-error" id="referencia-error">{errorRef}</span> : null}
+                <span className="sub" id="referencia-ayuda">
+                  Como aparece en el comprobante. No escribas nombres ni números de cuenta. Formato provisional: de 4 a 30 letras o números.
+                </span>
+                <p className="aviso aviso-info" data-testid="aviso-acceso">
+                  El cobro quedará «Pendiente de verificar abono» hasta que Administración o Dirección lo verifique. La regla para dar acceso
+                  con el comprobante está pendiente de decisión.
+                </p>
+              </div>
+            ) : tarjeta ? (
               <div className="campo">
                 <ol className="pasos-tarjeta">
                   <li>Cobra <strong>{$(total)}</strong> en la terminal y espera a que diga <strong>«Aprobado»</strong>.</li>
@@ -294,29 +366,38 @@ export function FlujoVisita(props: Props) {
                 </span>
               </div>
             )}
-            {tarjeta && previos ? (
-              <section className="aviso aviso-info" data-testid="autorizacion-previa" aria-label="Cobro con la misma autorización">
-                <p><strong>Esta autorización ya se registró hoy en {sucursal}:</strong></p>
+            {forma !== "efectivo" && previos ? (
+              <section className="aviso aviso-info" data-testid={tarjeta ? "autorizacion-previa" : "referencia-previa"}
+                aria-label={tarjeta ? "Cobro con la misma autorización" : "Cobro con la misma referencia"}>
+                <p><strong>{tarjeta ? `Esta autorización ya se registró hoy en ${sucursal}:` : "Esta referencia ya está registrada en otro cobro:"}</strong></p>
                 <ul className="lista-simple">
-                  {previos.map((p) => (
+                  {previos.map((p, i) => p.visible ? (
                     <li key={p.id}>
-                      {hora.format(new Date(p.registradaEn))} · {p.personas} {p.personas === 1 ? "persona" : "personas"} · {$(p.total)} con tarjeta ·
-                      registrado por {p.registradaPor} ·{" "}
-                      <a href={`/sucursales/${codigo}/turno/cobros/${p.id}`} target="_blank" rel="noopener">Ver cobro</a>
+                      {hora.format(new Date(p.registradaEn))} · {p.sucursal} · {p.personas} {p.personas === 1 ? "persona" : "personas"} ·
+                      {" "}{$(p.total)} · {ESTADO[p.estado]} · registrado por {p.registradaPor} ·{" "}
+                      <a href={`/sucursales/${p.codigo}/turno/cobros/${p.id}`} target="_blank" rel="noopener">Ver cobro</a>
                     </li>
+                  ) : (
+                    <li key={`oculto-${i}`} data-testid="previo-oculto">En una sucursal a la que no tienes acceso. Pide a Administración que lo revise.</li>
                   ))}
                 </ul>
                 <label className="casilla">
                   <input type="checkbox" checked={otraVenta} onChange={(e) => setOtraVenta(e.target.checked)} disabled={fijo} />
-                  Confirmo que es otra venta aprobada en la terminal, distinta de la anterior.
+                  {tarjeta
+                    ? "Confirmo que es otra venta aprobada en la terminal, distinta de la anterior."
+                    : "Confirmo que es otra transferencia, distinta de la anterior."}
                 </label>
                 {otraVenta ? <input type="hidden" name="otraVenta" value="si" /> : null}
               </section>
             ) : null}
-            {tarjeta ? null : <p className="sub">Responsable de la bolsa: <strong>{responsableBolsa}</strong></p>}
+            {forma !== "efectivo" ? null : <p className="sub">Responsable de la bolsa: <strong>{responsableBolsa}</strong></p>}
             <p className="fila-acciones">
               <button className="boton boton-principal" type="submit" disabled={enviando || !vivo.ok || falta}>
-                {enviando ? "Registrando…" : tarjeta ? `Registrar cobro aprobado · ${$(total)}` : `Confirmar cobro · ${$(total)}`}
+                {enviando
+                  ? "Registrando…"
+                  : tarjeta ? `Registrar cobro aprobado · ${$(total)}`
+                  : transferencia ? `Registrar transferencia · ${$(total)}`
+                  : `Confirmar cobro · ${$(total)}`}
               </button>
               <button className="boton" type="button" onClick={nuevaVisita} disabled={fijo}>Empezar de nuevo</button>
             </p>

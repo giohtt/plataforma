@@ -542,7 +542,7 @@ test("autorización repetida hoy en la sucursal: muestra el cobro previo y pide 
   await registrar(page).click();
   const previa = page.getByTestId("autorizacion-previa");
   await expect(previa).toContainText(`Esta autorización ya se registró hoy en Visitas ${e.codigo}:`);
-  await expect(previa).toContainText("1 persona · $50.00 con tarjeta");
+  await expect(previa).toContainText("1 persona · $50.00 · Confirmado operativamente");
   await expect(previa.getByRole("link", { name: "Ver cobro" })).toHaveAttribute("target", "_blank");
   await expect(registrar(page)).toBeDisabled();
   expect(await conTarjetaEnBd(e.codigo)).toBe(1);
@@ -593,4 +593,169 @@ test("tarjeta: si el servidor rechaza el registro, recuerda no volver a pasar la
   await expect(aviso(page)).toContainText("El turno cambió mientras cobrabas. No se guardó nada");
   await expect(aviso(page)).toContainText("El pago ya se cobró en la terminal: no vuelvas a pasar la tarjeta; registra este cobro con la misma autorización.");
   expect(await conTarjetaEnBd(e.codigo)).toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// Cobro por transferencia y verificación del abono
+// ---------------------------------------------------------------------------
+const registrarTransferencia = (page: Page, total = "$50.00") => page.getByRole("button", { name: `Registrar transferencia · ${total}` });
+async function aTransferencia(page: Page, referencia: string, tipo: "Clave de rastreo" | "Folio bancario" = "Clave de rastreo") {
+  await page.getByRole("radio", { name: "Transferencia" }).check();
+  await expect(page.getByLabel("Recibido (opcional)")).toHaveCount(0);
+  if (referencia) {
+    await page.getByRole("radio", { name: tipo }).check();
+    await page.getByLabel("Clave de rastreo o folio bancario").fill(referencia);
+  }
+}
+const hoyMx = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date());
+const estadoTransferencia = async (codigo: string) =>
+  (await sql`select c.estado, c.version, c.abono_fecha::text as abono from cobro_visita c join operacion_visita o on o.id = c.operacion_id
+             join sucursal s on s.id = o.sucursal_id where s.codigo = ${codigo} and c.forma_pago = 'transferencia'`) as unknown as { estado: string; version: number; abono: string | null }[];
+
+test("transferencia: queda pendiente sin tocar la bolsa; Administración verifica el mismo cobro y pasa a verificado", async ({ page }) => {
+  const e = await escenario();
+  const adm = await crearCuenta([["administracion", e.codigo]]);
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  await page.getByRole("radio", { name: "Transferencia" }).check();
+  await expect(page.getByTestId("datos-cobro")).toContainText("Pide al visitante que transfiera $50.00 a la cuenta de Fitnessland");
+  await expect(page.getByTestId("aviso-acceso")).toContainText("La regla para dar acceso con el comprobante está pendiente de decisión.");
+  // Sin tipo ni referencia: error junto al campo.
+  await registrarTransferencia(page).click();
+  await expect(page.locator("#referencia-error")).toHaveText("Indica si es una clave de rastreo o un folio bancario.");
+  await page.getByRole("radio", { name: "Clave de rastreo" }).check();
+  await registrarTransferencia(page).click();
+  await expect(page.locator("#referencia-error")).toHaveText("Escribe la clave de rastreo o el folio bancario del comprobante de la transferencia.");
+  const ref = `MBAN${Math.floor(Math.random() * 1e12)}`;
+  await page.getByLabel("Clave de rastreo o folio bancario").fill(ref.toLowerCase());
+  await registrarTransferencia(page).click();
+  const listo = page.getByTestId("cobro-registrado");
+  await expect(listo).toContainText("$50.00 por transferencia");
+  await expect(page.getByTestId("referencia-registrada")).toHaveText(ref);
+  await expect(page.getByTestId("estado-registrado")).toHaveText("Pendiente de verificar abono");
+  await expect(page.getByTestId("bolsa-registrado")).toHaveText("No entra efectivo (transferencia)");
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 1, movimientos: 0, suma: "0" });
+
+  await listo.getByRole("link", { name: "Ver el turno" }).click();
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText("$0.00");
+  await expect(page.getByTestId("transf-pendientes")).toHaveText("$50.00");
+  await expect(page.getByTestId("cobro-turno")).toContainText("1 persona · $50.00 por transferencia · Pendiente de verificar abono");
+
+  // Recepción no verifica.
+  await page.goto(`/sucursales/${e.codigo}/transferencias`);
+  await expect(page.getByRole("heading", { name: "No encontrada" })).toBeVisible();
+
+  // Administración: importe incompleto no; importe completo y fecha, sí.
+  await entrar(page, adm.correo);
+  await page.goto(`/sucursales/${e.codigo}`);
+  await page.getByTestId("transferencias").click();
+  await lista(page);
+  const fila = page.getByTestId("pendientes").getByTestId("transferencia");
+  await expect(fila).toHaveCount(1);
+  await expect(fila.getByTestId("referencia")).toHaveText(ref);
+  await fila.getByLabel("Importe que llegó").fill("40");
+  await fila.getByLabel("Fecha del abono").fill(hoyMx());
+  await fila.getByLabel(/Comprobé en el estado de cuenta/).check();
+  await fila.getByRole("button", { name: "Abono verificado" }).click();
+  await expect(fila.getByRole("alert")).toHaveText("El abono debe ser por el importe completo del cobro. Si llegó otro importe, no lo marques como verificado.");
+  expect((await estadoTransferencia(e.codigo))[0].estado).toBe("pendiente_abono");
+  await fila.getByLabel("Importe que llegó").fill("50");
+  await fila.getByLabel("Fecha del abono").fill(hoyMx());
+  await fila.getByLabel(/Comprobé en el estado de cuenta/).check();
+  await fila.getByRole("button", { name: "Abono verificado" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toHaveText("Abono verificado. El cobro pasó de pendiente a verificado.");
+  await expect(page.getByTestId("pendientes").getByTestId("transferencia")).toHaveCount(0);
+  await expect(page.getByTestId("verificada")).toContainText(ref);
+  expect(await estadoTransferencia(e.codigo)).toEqual([{ estado: "abono_verificado", version: 2, abono: hoyMx() }]);
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 1, movimientos: 0, suma: "0" });
+
+  // En el turno: pasó de pendientes a verificadas, el mismo cobro, y la bolsa sigue igual.
+  await page.goto(`/sucursales/${e.codigo}/turno`);
+  await expect(page.getByTestId("transf-pendientes")).toHaveText("$0.00");
+  await expect(page.getByTestId("transf-verificadas")).toHaveText("$50.00");
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText("$0.00");
+  await expect(page.getByTestId("cobro-turno")).toHaveCount(1);
+  await page.getByTestId("cobro-turno").getByRole("link", { name: "Ver detalle" }).click();
+  await expect(page.getByTestId("detalle-estado")).toHaveText("Abono verificado");
+  await expect(page.getByTestId("cambio-estado")).toContainText("Pendiente de verificar abono → Abono verificado");
+});
+
+test("quien registró la transferencia no la puede verificar; «No localizado» pide motivo y después se puede verificar", async ({ page }) => {
+  const e = await escenario();
+  await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) select ${e.recep.id}, 'administracion', id, 'Prueba' from sucursal where codigo = ${e.codigo}`;
+  const dir = await crearCuenta([["direccion", e.codigo]]);
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  await aTransferencia(page, `FOL${Math.floor(Math.random() * 1e8)}`, "Folio bancario");
+  await registrarTransferencia(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toBeVisible();
+  await page.goto(`/sucursales/${e.codigo}/transferencias`);
+  await expect(page.getByTestId("propia")).toHaveText("La registraste tú: debe verificarla otra persona con permiso.");
+  await expect(page.getByRole("button", { name: "Abono verificado" })).toHaveCount(0);
+
+  await entrar(page, dir.correo);
+  await page.goto(`/sucursales/${e.codigo}/transferencias`);
+  await lista(page);
+  const fila = page.getByTestId("pendientes").getByTestId("transferencia");
+  await fila.getByLabel("Motivo si no se localiza").fill("no");
+  await fila.getByRole("button", { name: "No localizado" }).click();
+  await expect(fila.getByRole("alert")).toHaveText("Explica por qué no se localizó (de 5 a 300 caracteres).");
+  await fila.getByLabel("Motivo si no se localiza").fill("No aparece en el estado de cuenta de hoy");
+  await fila.getByRole("button", { name: "No localizado" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toContainText("Marcada como no localizada");
+  const nl = page.getByTestId("no-localizadas").getByTestId("transferencia");
+  await expect(nl).toContainText("Motivo: No aparece en el estado de cuenta de hoy");
+  await expect(nl.getByRole("button", { name: "No localizado" })).toHaveCount(0);
+  await nl.getByLabel("Importe que llegó").fill("50");
+  await nl.getByLabel("Fecha del abono").fill(hoyMx());
+  await nl.getByLabel(/Comprobé en el estado de cuenta/).check();
+  await nl.getByRole("button", { name: "Abono verificado" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toContainText("Abono verificado");
+  expect((await estadoTransferencia(e.codigo))[0].estado).toBe("abono_verificado");
+});
+
+test("referencia repetida: muestra el cobro previo y pide confirmar que es otra transferencia", async ({ page }) => {
+  const e = await escenario();
+  const g = await tresQueCompartenTelefono();
+  const ref = `RPT${Math.floor(Math.random() * 1e9)}`;
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  await aTransferencia(page, ref);
+  await registrarTransferencia(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toBeVisible();
+  await page.getByRole("button", { name: "Nueva visita" }).click();
+
+  await buscar(page, g.nombres[0]);
+  await tarjeta(page, g.nombres[0]).getByRole("button", { name: "Agregar" }).click();
+  await aTransferencia(page, ref);
+  await registrarTransferencia(page).click();
+  const previa = page.getByTestId("referencia-previa");
+  await expect(previa).toContainText("Esta referencia ya está registrada en otro cobro:");
+  await expect(previa).toContainText("Pendiente de verificar abono");
+  await expect(registrarTransferencia(page)).toBeDisabled();
+  await previa.getByLabel("Confirmo que es otra transferencia, distinta de la anterior.").check();
+  await registrarTransferencia(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toContainText(g.nombres[0]);
+  expect((await estadoTransferencia(e.codigo)).length).toBe(2);
+});
+
+test("transferencia: se pierde la conexión; el reintento con la misma referencia no registra dos veces", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  await aTransferencia(page, `CNX${Math.floor(Math.random() * 1e9)}`);
+  let cortes = 0;
+  await page.route("**/*", async (route) => {
+    if (!esCobro(route) || cortes > 0) return route.continue();
+    cortes++;
+    await route.fetch();
+    await route.abort("internetdisconnected");
+  });
+  await registrarTransferencia(page).click();
+  await expect(aviso(page)).toContainText("Vuelve a tocar «Registrar transferencia» con la misma referencia");
+  await expect(page.getByLabel("Clave de rastreo o folio bancario")).toHaveAttribute("readonly", "");
+  await registrarTransferencia(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toContainText("Pendiente de verificar abono");
+  await expect(page.getByTestId("referencia-previa")).toHaveCount(0);
+  expect((await estadoTransferencia(e.codigo)).length).toBe(1);
 });

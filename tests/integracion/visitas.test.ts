@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { abrirTurno, estadoTurno } from "@/lib/turnos";
+import { bandejaTransferencias, marcarNoLocalizado, verificarAbono } from "@/lib/abonos";
 import { cobrosDelTurno, confirmarVisita, detalleCobro, impedimentoRegistroVisita, pantallaCobro, visitasDeHoy } from "@/lib/visitas";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
@@ -58,8 +59,14 @@ async function revisada(u: string, codigo: string, visitantes: string | string[]
   if (!p.ok) throw new Error(p.error);
   return {
     clave: randomUUID(), turnoId: p.turnoId, visitanteIds: ([] as string[]).concat(visitantes),
-    formaPago: "efectivo" as "efectivo" | "tarjeta", recibido, cambio, autorizacion: null as string | null, otraVenta: false,
+    formaPago: "efectivo" as "efectivo" | "tarjeta" | "transferencia", recibido, cambio, autorizacion: null as string | null,
+    referencia: null as string | null, tipoReferencia: null as "clave_rastreo" | "folio_bancario" | null, otraVenta: false,
   };
+}
+/** Lo que envía la pantalla con transferencia: la referencia del comprobante y su tipo. */
+async function conTransferencia(u: string, codigo: string, visitantes: string | string[], referencia: string,
+  tipoReferencia: "clave_rastreo" | "folio_bancario" = "clave_rastreo", otraVenta = false) {
+  return { ...(await revisada(u, codigo, visitantes)), formaPago: "transferencia" as const, referencia, tipoReferencia, otraVenta };
 }
 /** Lo que envía la pantalla con tarjeta: sin recibido ni cambio, con la autorización del comprobante. */
 async function conTarjeta(u: string, codigo: string, visitantes: string | string[], autorizacion: string, otraVenta = false) {
@@ -456,7 +463,7 @@ describe.skipIf(!URL_ADMIN)("cobro de visitas en efectivo: individual y grupal",
       const r = await confirmar(recep, codigo, segunda);
       expect(r).toMatchObject({ ok: false, error: "autorizacion_repetida" });
       if (r.ok || !primero.ok) return;
-      expect(r.previos!.map((p) => [p.id, p.personas, p.total])).toEqual([[primero.operacionId, 1, "50.00"]]);
+      expect(r.previos!.map((p) => (p.visible ? [p.id, p.personas, p.total] : null))).toEqual([[primero.operacionId, 1, "50.00"]]);
       expect(await conteos(codigo)).toMatchObject({ operaciones: 1 });
       // Confirmando que es otra venta, se registra y queda anotado.
       const ok = await confirmar(recep, codigo, { ...segunda, otraVenta: true });
@@ -516,6 +523,189 @@ describe.skipIf(!URL_ADMIN)("cobro de visitas en efectivo: individual y grupal",
       expect(await conteos(codigo)).toMatchObject({ operaciones: 0 });
       await intento(false, { autorizacion: "ABC123" }); // correcto
       expect(await conteos(codigo)).toMatchObject({ operaciones: 1, movimientos: 0 });
+    });
+  });
+
+  describe("cobro por transferencia y verificación del abono", () => {
+    const hoyMx = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date());
+    const estadoDe = async (operacionId: string) =>
+      (await sql`select c.id, c.estado, c.version, c.abono_fecha::text as abono, c.abono_importe::text as importe
+                 from cobro_visita c where c.operacion_id = ${operacionId}`)[0] as { id: string; estado: string; version: number; abono: string | null; importe: string | null };
+    async function registrada(ref = `MBAN${Math.floor(Math.random() * 1e9)}`, tipo: "clave_rastreo" | "folio_bancario" = "clave_rastreo") {
+      const e = await escenario();
+      const c = await confirmar(e.recep, e.codigo, await conTransferencia(e.recep, e.codigo, await ficha("Fernanda Prueba Transferencia"), ref, tipo));
+      if (!c.ok) throw new Error(c.error);
+      return { ...e, operacionId: c.operacionId, cobro: c.cobro, ref };
+    }
+
+    it("registrar deja el cobro «Pendiente de verificar abono», sin entrada de efectivo; la bolsa no cambia", async () => {
+      const { codigo, recep, turnoId } = await escenario();
+      expect((await confirmar(recep, codigo, await revisada(recep, codigo, await ficha()))).ok).toBe(true); // $50 en efectivo antes
+      const c = await confirmar(recep, codigo, await conTransferencia(recep, codigo, await ficha(), "MBAN01002611050012345678"));
+      expect(c).toMatchObject({
+        ok: true, cobro: { formaPago: "transferencia", estado: "pendiente_abono", referencia: "MBAN01002611050012345678", tipoReferencia: "clave_rastreo", recibido: null, autorizacion: null },
+      });
+      expect(await conteos(codigo)).toEqual({ operaciones: 2, cobros: 2, pases: 2, movimientos: 1, suma: "50.00" });
+      expect((await estadoTurno(sql, recep, codigo))!.turno!.lugares[0].esperado).toBe("50.00");
+      expect((await cobrosDelTurno(sql, turnoId)).map((x) => [x.formaPago, x.estado])).toEqual([["transferencia", "pendiente_abono"], ["efectivo", "confirmado"]]);
+    });
+
+    it("grupo de tres por transferencia: un cobro de $150, tres pases, sin efectivo", async () => {
+      const { codigo, recep } = await escenario();
+      const c = await confirmar(recep, codigo, await conTransferencia(recep, codigo, [await ficha(), await ficha(), await ficha()], "FOLIO778899", "folio_bancario"));
+      expect(c).toMatchObject({ ok: true, cobro: { personas: 3, total: "150.00", tipoReferencia: "folio_bancario" } });
+      expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 3, movimientos: 0, suma: "0" });
+    });
+
+    it("referencia obligatoria con su tipo; nada de recibido ni autorización con transferencia", async () => {
+      const { codigo, recep } = await escenario();
+      const base = await conTransferencia(recep, codigo, await ficha(), "ABC12345");
+      expect(await confirmar(recep, codigo, { ...base, referencia: null })).toEqual({ ok: false, error: "referencia_invalida" });
+      expect(await confirmar(recep, codigo, { ...base, tipoReferencia: null })).toEqual({ ok: false, error: "referencia_invalida" });
+      expect(await confirmar(recep, codigo, { ...base, referencia: "AB" })).toEqual({ ok: false, error: "referencia_invalida" });
+      expect(await confirmar(recep, codigo, { ...base, recibido: "100.00", cambio: "50.00" })).toEqual({ ok: false, error: "forma_invalida" });
+      expect(await confirmar(recep, codigo, { ...base, autorizacion: "123456" })).toEqual({ ok: false, error: "forma_invalida" });
+      expect(await confirmar(recep, codigo, { ...(await revisada(recep, codigo, await ficha())), referencia: "ABC12345", tipoReferencia: "clave_rastreo" })).toEqual({ ok: false, error: "forma_invalida" });
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 0 });
+    });
+
+    it("una referencia repetida muestra el cobro previo (solo a quien puede verlo) y pide confirmar otra transferencia", async () => {
+      const a = await registrada("CLAVEREPETIDA01");
+      // En la misma sucursal: se ve el cobro previo.
+      const misma = await confirmar(a.recep, a.codigo, await conTransferencia(a.recep, a.codigo, await ficha(), "CLAVEREPETIDA01"));
+      expect(misma).toMatchObject({ ok: false, error: "referencia_repetida", previos: [{ visible: true, id: a.operacionId, total: "50.00", estado: "pendiente_abono" }] });
+      // En otra sucursal sin acceso a la primera: solo se sabe que existe.
+      const b = await escenario();
+      const otra = await confirmar(b.recep, b.codigo, await conTransferencia(b.recep, b.codigo, await ficha(), "CLAVEREPETIDA01"));
+      expect(otra).toEqual({ ok: false, error: "referencia_repetida", previos: [{ visible: false }] });
+      expect(JSON.stringify(otra)).not.toContain(a.operacionId);
+      // Confirmando que es otra transferencia, se registra y queda anotado.
+      expect((await confirmar(b.recep, b.codigo, await conTransferencia(b.recep, b.codigo, await ficha(), "CLAVEREPETIDA01", "clave_rastreo", true))).ok).toBe(true);
+      expect((await sql`select count(*)::int as n from cobro_visita where referencia = 'CLAVEREPETIDA01' and referencia_repetida_confirmada`)[0].n).toBe(1);
+      // Un folio bancario solo se toma como repetido dentro de los últimos 30 días.
+      const f = await registrada("FOLIO123", "folio_bancario");
+      expect(await confirmar(f.recep, f.codigo, await conTransferencia(f.recep, f.codigo, await ficha(), "FOLIO123", "folio_bancario"))).toMatchObject({ error: "referencia_repetida" });
+      await sql`alter table operacion_visita disable trigger operacion_visita_inmutable`;
+      await sql`update operacion_visita set registrada_en = now() - interval '31 days' where id = ${f.operacionId}`;
+      await sql`alter table operacion_visita enable trigger operacion_visita_inmutable`;
+      expect((await confirmar(f.recep, f.codigo, await conTransferencia(f.recep, f.codigo, await ficha(), "FOLIO123", "folio_bancario"))).ok).toBe(true);
+    });
+
+    it("reintento con los mismos datos no registra dos veces ni se toma como referencia repetida", async () => {
+      const { codigo, recep } = await escenario();
+      const t = await conTransferencia(recep, codigo, [await ficha(), await ficha()], "REINTENTO0001");
+      expect((await confirmar(recep, codigo, t)).ok).toBe(true);
+      expect(await confirmar(recep, codigo, t)).toMatchObject({ ok: true, repetida: true });
+      expect(await confirmar(recep, codigo, { ...t, referencia: "REINTENTO0002" })).toEqual({ ok: false, error: "datos_distintos" });
+      expect(await confirmar(recep, codigo, { ...t, tipoReferencia: "folio_bancario" })).toEqual({ ok: false, error: "datos_distintos" });
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 1, pases: 2, movimientos: 0 });
+    });
+
+    it("Administración verifica: el MISMO cobro pasa de pendiente a verificado con fecha e importe; queda en el historial", async () => {
+      const t = await registrada();
+      const adm = await cuenta([["administracion", t.codigo]]);
+      const antes = await estadoDe(t.operacionId);
+      const b = (await bandejaTransferencias(sql, adm, t.codigo))!;
+      expect(b.porVerificar.map((x) => [x.operacionId, x.estado, x.propia])).toEqual([[t.operacionId, "pendiente_abono", false]]);
+      expect(await verificarAbono(sql, adm, t.codigo, antes.id, { version: antes.version, fecha: hoyMx(), importe: "50.00" }, PRUEBAS)).toEqual({ ok: true });
+      const despues = await estadoDe(t.operacionId);
+      expect(despues).toMatchObject({ id: antes.id, estado: "abono_verificado", version: antes.version + 1, abono: hoyMx(), importe: "50.00" });
+      expect(await conteos(t.codigo)).toMatchObject({ operaciones: 1, cobros: 1, movimientos: 0 });
+      expect((await estadoTurno(sql, t.recep, t.codigo))!.turno!.lugares[0].esperado).toBe("0.00");
+      const d = (await detalleCobro(sql, adm, t.codigo, t.operacionId))!;
+      expect(d).toMatchObject({ estado: "abono_verificado", abonoFecha: hoyMx(), verificadoPor: `Visita ${n}` });
+      expect(d.cambios.map((c) => [c.de, c.a, c.abonoFecha])).toEqual([["pendiente_abono", "abono_verificado", hoyMx()]]);
+      // Ya no está pendiente; aparece entre las verificadas.
+      const b2 = (await bandejaTransferencias(sql, adm, t.codigo))!;
+      expect([b2.porVerificar.length, b2.verificadasRecientes.length]).toEqual([0, 1]);
+    });
+
+    it("también Dirección; Recepción, Encargado y quien la registró no pueden verificarla, ni de otra sucursal", async () => {
+      const t = await registrada();
+      const c = await estadoDe(t.operacionId);
+      const datos = { version: c.version, fecha: hoyMx(), importe: "50.00" };
+      // Quien la registró, aunque tuviera el permiso.
+      await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${t.recep}, 'administracion', ${ids[t.codigo]}, 'Prueba')`;
+      expect(await verificarAbono(sql, t.recep, t.codigo, c.id, datos, PRUEBAS)).toEqual({ ok: false, error: "propia" });
+      expect((await bandejaTransferencias(sql, t.recep, t.codigo))!.porVerificar[0].propia).toBe(true);
+      for (const rol of ["recepcion", "encargado"]) {
+        const u = await cuenta([[rol, t.codigo]]);
+        expect(await bandejaTransferencias(sql, u, t.codigo), rol).toBeNull();
+        expect(await verificarAbono(sql, u, t.codigo, c.id, datos, PRUEBAS), rol).toEqual({ ok: false, error: "no_encontrada" });
+      }
+      const admTen = await cuenta([["administracion", "TEN"]]);
+      expect(await verificarAbono(sql, admTen, t.codigo, c.id, datos, PRUEBAS)).toEqual({ ok: false, error: "no_encontrada" });
+      expect(await verificarAbono(sql, admTen, "TEN", c.id, datos, PRUEBAS)).toEqual({ ok: false, error: "no_encontrada" });
+      const dir = await cuenta([["direccion", t.codigo]]);
+      expect(await verificarAbono(sql, dir, t.codigo, c.id, datos, { entorno: "produccion" })).toEqual({ ok: false, error: "bloqueado_produccion" });
+      expect(await verificarAbono(sql, dir, t.codigo, c.id, datos, PRUEBAS)).toEqual({ ok: true });
+    });
+
+    it("importe incompleto, fecha futura o muy anterior, y versión vieja: no se verifica", async () => {
+      const t = await registrada();
+      const adm = await cuenta([["administracion", t.codigo]]);
+      const c = await estadoDe(t.operacionId);
+      const v = (datos: Partial<{ version: number; fecha: string; importe: string }>) =>
+        verificarAbono(sql, adm, t.codigo, c.id, { version: c.version, fecha: hoyMx(), importe: "50.00", ...datos }, PRUEBAS);
+      expect(await v({ importe: "49.99" })).toEqual({ ok: false, error: "importe_incompleto" });
+      expect(await v({ importe: "100.00" })).toEqual({ ok: false, error: "importe_incompleto" });
+      expect(await v({ fecha: "2100-01-01" })).toEqual({ ok: false, error: "fecha_invalida" });
+      expect(await v({ fecha: "2000-01-01" })).toEqual({ ok: false, error: "fecha_invalida" });
+      expect(await v({ fecha: "no-fecha" })).toEqual({ ok: false, error: "fecha_invalida" });
+      expect(await v({ version: c.version + 5 })).toEqual({ ok: false, error: "cambio" });
+      expect((await estadoDe(t.operacionId)).estado).toBe("pendiente_abono");
+    });
+
+    it("«No localizado» pide motivo; después se puede verificar si aparece; no se vuelve a pendiente", async () => {
+      const t = await registrada();
+      const adm = await cuenta([["administracion", t.codigo]]);
+      let c = await estadoDe(t.operacionId);
+      expect(await marcarNoLocalizado(sql, adm, t.codigo, c.id, { version: c.version, motivo: "no" }, PRUEBAS)).toEqual({ ok: false, error: "motivo" });
+      expect(await marcarNoLocalizado(sql, adm, t.codigo, c.id, { version: c.version, motivo: "No aparece en el estado de cuenta del día" }, PRUEBAS)).toEqual({ ok: true });
+      c = await estadoDe(t.operacionId);
+      expect(c.estado).toBe("no_localizado");
+      expect(await marcarNoLocalizado(sql, adm, t.codigo, c.id, { version: c.version, motivo: "Otra vez no localizada" }, PRUEBAS)).toEqual({ ok: false, error: "cambio" });
+      const b = (await bandejaTransferencias(sql, adm, t.codigo))!;
+      expect(b.porVerificar[0]).toMatchObject({ estado: "no_localizado", motivoNoLocalizado: "No aparece en el estado de cuenta del día" });
+      expect(await verificarAbono(sql, adm, t.codigo, c.id, { version: c.version, fecha: hoyMx(), importe: "50.00" }, PRUEBAS)).toEqual({ ok: true });
+      const d = (await detalleCobro(sql, adm, t.codigo, t.operacionId))!;
+      expect(d.cambios.map((x) => [x.de, x.a])).toEqual([["pendiente_abono", "no_localizado"], ["no_localizado", "abono_verificado"]]);
+      // La base no deja volver atrás ni editar otros datos del cobro.
+      await expect(sql`update cobro_visita set estado = 'pendiente_abono', version = version + 1, abono_fecha = null, abono_importe = null,
+                       verificado_por = null, verificado_en = null where id = ${c.id}`).rejects.toThrow();
+      await expect(sql`update cobro_visita set importe = 1, version = version + 1 where id = ${c.id}`).rejects.toThrow();
+      await expect(sql`update cobro_cambio_estado set motivo = 'cambiado'`).rejects.toThrow();
+    });
+
+    it("el mismo abono no se usa en dos cobros: misma referencia y fecha solo se verifica una vez", async () => {
+      const a = await registrada("ABONOUNICO01");
+      const b = await escenario();
+      const cb = await confirmar(b.recep, b.codigo, await conTransferencia(b.recep, b.codigo, await ficha(), "ABONOUNICO01", "clave_rastreo", true));
+      if (!cb.ok) throw new Error(cb.error);
+      const dir = await cuenta([["direccion", a.codigo], ["direccion", b.codigo]]);
+      const [ca, cbb] = [await estadoDe(a.operacionId), await estadoDe(cb.operacionId)];
+      expect(await verificarAbono(sql, dir, a.codigo, ca.id, { version: ca.version, fecha: hoyMx(), importe: "50.00" }, PRUEBAS)).toEqual({ ok: true });
+      expect(await verificarAbono(sql, dir, b.codigo, cbb.id, { version: cbb.version, fecha: hoyMx(), importe: "50.00" }, PRUEBAS))
+        .toEqual({ ok: false, error: "abono_usado" });
+      // Con otra fecha de abono es otro movimiento (los folios se repiten en días distintos).
+      const ayer = new Date(Date.now() - 864e5).toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
+      expect(await verificarAbono(sql, dir, b.codigo, cbb.id, { version: cbb.version, fecha: ayer, importe: "50.00" }, PRUEBAS)).toEqual({ ok: true });
+      // La base lo garantiza aunque se salte la comprobación previa.
+      const c = await registrada("ABONOUNICO02");
+      const d = await registrada("ABONOUNICO03");
+      await sql`update cobro_visita set estado = 'abono_verificado', abono_fecha = current_date, abono_importe = importe,
+                verificado_por = ${dir}, verificado_en = now(), version = version + 1 where operacion_id = ${c.operacionId}`;
+      await expect(sql`update cobro_visita set referencia = 'ABONOUNICO02', version = version + 1 where operacion_id = ${d.operacionId}`).rejects.toThrow();
+    });
+
+    it("dos verificaciones simultáneas del mismo cobro: solo una pasa", async () => {
+      const t = await registrada();
+      const [a1, a2] = [await cuenta([["administracion", t.codigo]]), await cuenta([["direccion", t.codigo]])];
+      const c = await estadoDe(t.operacionId);
+      const res = await Promise.all([a1, a2].map((u) => verificarAbono(sql, u, t.codigo, c.id, { version: c.version, fecha: hoyMx(), importe: "50.00" }, PRUEBAS)));
+      expect(res.filter((x) => x.ok)).toHaveLength(1);
+      expect(res.filter((x) => !x.ok && x.error === "cambio")).toHaveLength(1);
+      expect((await sql`select count(*)::int as n from cobro_cambio_estado where cobro_id = ${c.id}`)[0].n).toBe(1);
     });
   });
 
