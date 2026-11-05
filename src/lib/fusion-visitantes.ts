@@ -221,6 +221,8 @@ export async function fichaActiva(sql: Sql, id: string): Promise<{ activa: strin
 export type Fusion = {
   id: string;
   unida: { nombre: string; telefono: string | null; estadoProcedencia: string | null; sucursalAlta: string };
+  /** Ficha que quedó activa en esa fusión (puede ser una que después se unió a la actual). */
+  activaEnEseMomento: { nombre: string; esEsta: boolean };
   camposTomados: Record<CampoFusion, "activa" | "unida">;
   motivo: string;
   usuario: string;
@@ -240,10 +242,12 @@ export async function fusionesDeVisitante(sql: Sql, usuarioId: string, codigo: s
         or tiene_permiso(${usuarioId}, 'visitante.fusionar', sucursal_alta_id) as ok
     from visitante where id = ${id}`;
   if (!p?.ok) return null;
-  const filas = await sql<{ id: string; datos: Record<string, string | null>; campos: Record<CampoFusion, "activa" | "unida">; motivo: string; usuario: string; sucursal: string; en: Date }[]>`
-    select f.id::text, f.datos_absorbido as datos, f.campos_tomados as campos, f.motivo, u.nombre as usuario, s.nombre as sucursal, f.en
+  // Todas las fusiones del grupo: si A se unió a B y luego B a C, la ficha C muestra las dos.
+  const filas = await sql<{ id: string; datos: Record<string, string | null>; activa: Record<string, string | null>; esEsta: boolean; campos: Record<CampoFusion, "activa" | "unida">; motivo: string; usuario: string; sucursal: string; en: Date }[]>`
+    select f.id::text, f.datos_absorbido as datos, f.datos_activo as activa, f.activo_id = ${id}::uuid as "esEsta",
+           f.campos_tomados as campos, f.motivo, u.nombre as usuario, s.nombre as sucursal, f.en
     from visitante_fusion f join usuario u on u.id = f.usuario_id join sucursal s on s.id = f.sucursal_id
-    where f.activo_id = ${id}
+    where f.activo_id in (select visitante_grupo(${id}))
     order by f.en desc, f.id desc`;
   return filas.map((f) => ({
     id: f.id,
@@ -253,6 +257,7 @@ export async function fusionesDeVisitante(sql: Sql, usuarioId: string, codigo: s
       estadoProcedencia: f.datos.estado_procedencia ?? null,
       sucursalAlta: f.datos.sucursal_alta ?? "",
     },
+    activaEnEseMomento: { nombre: f.activa.nombre ?? "", esEsta: f.esEsta },
     camposTomados: f.campos,
     motivo: f.motivo,
     usuario: f.usuario,

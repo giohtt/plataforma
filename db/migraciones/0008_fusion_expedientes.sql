@@ -39,24 +39,54 @@ create trigger visitante_fusion_sin_vaciar
   before truncate on visitante_fusion
   for each statement execute function impedir_modificacion();
 
--- Ficha activa a la que lleva una ficha (sigue el vínculo si hubo fusiones encadenadas).
+-- ---------------------------------------------------------------------------
+-- Integridad de los vínculos. Garantiza que las fusiones forman árboles sin ciclos, de modo que
+-- seguir los vínculos siempre termina, sin importar cuántas fusiones encadenadas haya:
+--   - una ficha solo se puede unir a una ficha activa (que no esté unida a otra);
+--   - una ficha que ya tiene a otras unidas puede unirse después (la cadena crece hacia arriba);
+--   - el vínculo, una vez puesto, no se cambia ni se quita (deshacer queda para otra entrega).
+-- ---------------------------------------------------------------------------
+create function visitante_vinculo_valido() returns trigger
+language plpgsql as $$
+begin
+  if tg_op = 'UPDATE' and old.fusionado_en_id is not null
+     and new.fusionado_en_id is distinct from old.fusionado_en_id then
+    raise exception 'El vínculo de una ficha unida no se cambia ni se quita'
+      using errcode = 'check_violation';
+  end if;
+  if new.fusionado_en_id is not null and (tg_op = 'INSERT' or old.fusionado_en_id is null) then
+    if not exists (select 1 from visitante where id = new.fusionado_en_id and fusionado_en_id is null) then
+      raise exception 'Una ficha solo se puede unir a una ficha activa'
+        using errcode = 'check_violation';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+create trigger visitante_vinculo_valido
+  before insert or update of fusionado_en_id on visitante
+  for each row execute function visitante_vinculo_valido();
+
+-- Ficha activa a la que lleva una ficha: sigue los vínculos hasta la ficha que no está unida a otra.
+-- Sin límite de pasos: UNION descarta filas repetidas, así que la consulta termina siempre.
 create function visitante_activo(p_id uuid) returns uuid
 language sql stable as $$
-  with recursive cadena(id, siguiente, n) as (
-    select id, fusionado_en_id, 0 from visitante where id = p_id
-    union all
-    select v.id, v.fusionado_en_id, c.n + 1 from visitante v join cadena c on v.id = c.siguiente where c.n < 20
+  with recursive cadena(id, siguiente) as (
+    select id, fusionado_en_id from visitante where id = p_id
+    union
+    select v.id, v.fusionado_en_id from visitante v join cadena c on v.id = c.siguiente
   )
   select id from cadena where siguiente is null limit 1
 $$;
 
--- Una ficha y todas las que se le unieron (directa o indirectamente).
+-- Una ficha y todas las que se le unieron, directa o indirectamente, sin límite de niveles.
+-- Se usa para no perder confirmaciones de «personas distintas» ni historial al encadenar fusiones.
 create function visitante_grupo(p_id uuid) returns setof uuid
 language sql stable as $$
-  with recursive grupo(id, n) as (
-    select p_id, 0
-    union all
-    select v.id, g.n + 1 from visitante v join grupo g on v.fusionado_en_id = g.id where g.n < 20
+  with recursive grupo(id) as (
+    select p_id
+    union
+    select v.id from visitante v join grupo g on v.fusionado_en_id = g.id
   )
   select id from grupo
 $$;

@@ -217,6 +217,69 @@ describe.skipIf(!URL_ADMIN)("fusión de fichas duplicadas", () => {
       expect(await fusionar(direccionTen, "TEN", await eleccion(b, await ficha("TEN")))).toEqual({ ok: false, error: "ya_unida" });
     });
 
+    it("A se une a B y luego B a C: el enlace de A lleva a C y el historial autorizado de C muestra las dos fusiones", async () => {
+      const a = await ficha("TEN", { telefono: "0000000731" });
+      const b = await ficha("TEN", { telefono: "0000000732" });
+      const c = await ficha("TEN");
+      await sql`insert into visitante_cambio (visitante_id, campo, valor_anterior, valor_nuevo, motivo, usuario_id, sucursal_id)
+                values (${a}, 'estado_procedencia', null, 'Colima', 'Corrección hecha en A', ${direccionTen}, ${ids.TEN})`;
+      const propios = { nombre: "b", telefono: "b", estado_procedencia: "b" } as const;
+      expect(await fusionar(direccionTen, "TEN", await eleccion(a, b, { activa: "b", tomar: propios }), "A es la misma persona que B")).toEqual({ ok: true, activaId: b });
+      expect(await fusionar(direccionTen, "TEN", await eleccion(b, c, { activa: "b" }), "B es la misma persona que C")).toEqual({ ok: true, activaId: c });
+
+      expect(await fichaActiva(sql, a)).toEqual({ activa: c, unida: true });
+      expect(await fichaActiva(sql, b)).toEqual({ activa: c, unida: true });
+
+      const historial = (await fusionesDeVisitante(sql, direccionTen, "TEN", c))!;
+      expect(historial.map((f) => f.motivo)).toEqual(["B es la misma persona que C", "A es la misma persona que B"]);
+      expect(historial.map((f) => f.activaEnEseMomento.esEsta)).toEqual([true, false]);
+      expect(historial.map((f) => f.unida.telefono)).toEqual(["•• •••• 0732", "•• •••• 0731"]);
+      expect(JSON.stringify(historial)).not.toMatch(/000000073[12]/);
+      // Las correcciones hechas en A siguen visibles desde C, marcadas como de una ficha unida.
+      const correcciones = (await correccionesDeVisitante(sql, direccionTen, "TEN", c))!;
+      expect(correcciones.find((x) => x.motivo === "Corrección hecha en A")?.deFichaUnida).toBe(true);
+      // Sin permiso de corregir o fusionar, no se recibe nada de esto.
+      for (const rol of ["recepcion", "administracion"]) {
+        const u = await cuenta([[rol, "TEN"]]);
+        expect(await fusionesDeVisitante(sql, u, "TEN", c), rol).toBeNull();
+        expect(await correccionesDeVisitante(sql, u, "TEN", c), rol).toBeNull();
+      }
+    });
+
+    it("sin límite de pasos: en una cadena de 30 fusiones el primer enlace lleva a la última ficha y no se pierde ninguna confirmación de personas distintas", async () => {
+      const otraPersona = await ficha("TEN");
+      const fichas = [await ficha("TEN")];
+      // La primera ficha de la cadena ya se había confirmado como distinta de «otraPersona».
+      await sql`insert into visitante_distinto (visitante_id, distinto_de_id, motivo) values (${fichas[0]}, ${otraPersona}, 'Confirmado al inicio')`;
+      for (let i = 1; i <= 30; i++) {
+        fichas.push(await ficha("TEN"));
+        const r = await fusionar(direccionTen, "TEN", await eleccion(fichas[i - 1], fichas[i], { activa: "b" }), `Fusión número ${i}`);
+        expect(r, `fusión ${i}`).toEqual({ ok: true, activaId: fichas[i] });
+      }
+      const ultima = fichas[30];
+      for (const f of [fichas[0], fichas[10], fichas[20], fichas[29]]) expect(await fichaActiva(sql, f)).toEqual({ activa: ultima, unida: true });
+      expect((await sql`select count(*)::int as n from visitante_grupo(${ultima})`)[0].n).toBe(31);
+      expect((await fusionesDeVisitante(sql, direccionTen, "TEN", ultima))!).toHaveLength(30);
+      // La confirmación quedó 30 niveles abajo y sigue bloqueando la fusión.
+      expect(await prepararFusion(sql, direccionTen, "TEN", ultima, otraPersona)).toEqual({ ok: false, error: "confirmados_distintos" });
+      expect(await fusionar(direccionTen, "TEN", await eleccion(otraPersona, ultima))).toEqual({ ok: false, error: "confirmados_distintos" });
+    });
+
+    it("la base impide vínculos que romperían la cadena: unir a una ficha ya unida, cambiar o quitar un vínculo, o formar un ciclo", async () => {
+      const a = await ficha("TEN");
+      const b = await ficha("TEN");
+      const c = await ficha("TEN");
+      await sql`update visitante set fusionado_en = now(), fusionado_en_id = ${b} where id = ${a}`;
+      // c no puede apuntar a a, que ya está unida.
+      await expect(sql`update visitante set fusionado_en = now(), fusionado_en_id = ${a} where id = ${c}`).rejects.toThrow(/ficha activa/);
+      // El vínculo de a no se cambia ni se quita.
+      await expect(sql`update visitante set fusionado_en_id = ${c} where id = ${a}`).rejects.toThrow(/no se cambia/);
+      await expect(sql`update visitante set fusionado_en = null, fusionado_en_id = null where id = ${a}`).rejects.toThrow(/no se cambia/);
+      // Ciclo: b no puede apuntar a a (a ya apunta a b y está unida).
+      await expect(sql`update visitante set fusionado_en = now(), fusionado_en_id = ${a} where id = ${b}`).rejects.toThrow(/ficha activa/);
+      expect(await fichaActiva(sql, a)).toEqual({ activa: b, unida: true });
+    });
+
     it("el bloqueo por personas distintas también vale a través de fichas ya unidas", async () => {
       const x = await ficha("TEN");
       const duplicadoDeX = await ficha("TEN");

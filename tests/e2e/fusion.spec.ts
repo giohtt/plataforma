@@ -194,3 +194,47 @@ test("un enlace a una ficha unida solo lleva a la activa si se tiene permiso par
   expect((await page.goto(`/sucursales/TEN/visitantes/${a.id}`))?.status()).toBe(404);
   await expect(page).toHaveURL(new RegExp(`/visitantes/${a.id}$`));
 });
+
+test("dos fusiones seguidas, A con B y B con C: el enlace de A lleva a C y el historial de C muestra las dos", async ({ page }) => {
+  const telefono = telefonoUnico();
+  const a = await ficha("TEN", { telefono });
+  const b = await ficha("TEN", { telefono });
+  const c = await ficha("TEN", { telefono });
+  await entrar(page, await crearCuenta([["direccion", "TEN"]]));
+
+  const unir = async (desde: string, con: string, motivo: string) => {
+    await compararDesde(page, "TEN", desde, telefono, con);
+    await page.getByTestId("ficha-b").click(); // queda activa la ficha con la que se compara
+    await page.getByLabel("Motivo de la fusión").fill(motivo);
+    await page.getByLabel(/Entiendo que la fusión no se puede deshacer/).check();
+    await page.getByRole("button", { name: "Unir fichas" }).click();
+    await expect(page.locator("p.aviso[role=status]")).toHaveText("Fichas unidas. Esta es la ficha activa.");
+    await expect(page).toHaveURL(new RegExp(`/visitantes/${con}\\?aviso=fusionado$`));
+  };
+  await unir(a.id, b.id, "A y B son la misma persona");
+  // Al buscar desde B ya no aparece A: solo C.
+  await page.goto(`/sucursales/TEN/visitantes/${b.id}/fusionar`);
+  await lista(page);
+  await page.getByLabel(/Buscar la ficha duplicada/).fill(telefono);
+  await page.getByRole("button", { name: "Buscar" }).click();
+  await expect(page.getByTestId("candidata")).toHaveCount(1);
+  await unir(b.id, c.id, "B y C son la misma persona");
+
+  // Historial autorizado de C: las dos fusiones, con teléfonos enmascarados.
+  const fusiones = page.getByTestId("fusiones");
+  await expect(fusiones.locator("ol > li")).toHaveCount(2);
+  await expect(fusiones).toContainText("Motivo: B y C son la misma persona");
+  await expect(fusiones).toContainText("Motivo: A y B son la misma persona");
+  await expect(fusiones).toContainText(`Unida a «${b.nombre}», que después se unió a esta`);
+  await expect(fusiones).toContainText(`•• •••• ${telefono.slice(-4)}`);
+  expect(await page.content()).not.toContain(telefono);
+
+  // El enlace de A lleva a C con permiso de consulta (Recepción de Tenango), sin mostrarle el historial.
+  await entrar(page, await crearCuenta([["recepcion", "TEN"]]));
+  await page.goto(`/sucursales/TEN/visitantes/${a.id}`);
+  await expect(page).toHaveURL(new RegExp(`/visitantes/${c.id}\\?aviso=unida$`));
+  await expect(page.getByTestId("fusiones")).toHaveCount(0);
+  // Sin permiso de consulta, ni A ni C.
+  await entrar(page, await crearCuenta([]));
+  expect((await page.goto(`/sucursales/TEN/visitantes/${a.id}`))?.status()).toBe(404);
+});

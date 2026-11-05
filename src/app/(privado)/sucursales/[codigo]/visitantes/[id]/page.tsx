@@ -17,7 +17,7 @@ const AVISOS: Record<string, string> = {
   fusionado: "Fichas unidas. Esta es la ficha activa.",
   unida: "La ficha que abriste se unió a esta. Esta es la ficha activa.",
 };
-const ORIGEN: Record<string, string> = { activa: "de esta ficha", unida: "de la ficha unida" };
+const ORIGEN: Record<string, string> = { activa: "de la ficha que quedó activa", unida: "de la ficha unida" };
 const fechaHora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
 const CAMPO: Record<string, string> = { nombre: "Nombre", telefono: "Teléfono", estado_procedencia: "Estado de procedencia" };
 
@@ -75,6 +75,9 @@ export default async function ExpedienteVisitante({ params, searchParams }: Page
               <li key={f.id}>
                 <strong>{f.unida.nombre}</strong>
                 <span className="sub"> · Tel. {f.unida.telefono ?? "no registrado"} · {f.unida.estadoProcedencia ?? "sin procedencia"} · creada en {f.unida.sucursalAlta}</span>
+                <div className="sub">
+                  {f.activaEnEseMomento.esEsta ? "Unida a esta ficha" : `Unida a «${f.activaEnEseMomento.nombre}», que después se unió a esta`}
+                </div>
                 <div className="sub">{fechaHora.format(f.en)} · {f.usuario} · desde {f.sucursal}</div>
                 <div className="sub">
                   Se conservó: nombre {ORIGEN[f.camposTomados.nombre]}, teléfono {ORIGEN[f.camposTomados.telefono]}, procedencia {ORIGEN[f.camposTomados.estado_procedencia]}.
