@@ -25,7 +25,7 @@ type Campo = keyof typeof CAMPOS;
 
 export type ResultadoCorreccion =
   | { ok: true }
-  | { ok: false; error: "no_encontrada" | "sin_permiso" | "modificada" | "sin_cambios" | "motivo" | "bloqueado_produccion" }
+  | { ok: false; error: "no_encontrada" | "sin_permiso" | "modificada" | "sin_cambios" | "motivo" | "bloqueado_produccion" | "unida" }
   | { ok: false; error: "coincidencias"; coincidencias: ResultadoVisitante[] };
 
 export async function corregirVisitante(
@@ -46,9 +46,12 @@ export async function corregirVisitante(
   return sql.begin(async (tx): Promise<ResultadoCorreccion> => {
     const sucursal = await sucursalConPermiso(tx, usuarioId, codigo, "visitante.consultar");
     if (!sucursal) return { ok: false, error: "no_encontrada" };
-    const [v] = await tx<{ nombre: string; telefono: string | null; estado_procedencia: string | null; sucursal_alta_id: string; version: number }[]>`
-      select nombre, telefono, estado_procedencia, sucursal_alta_id, version from visitante where id = ${id} for update`;
+    const [v] = await tx<{ nombre: string; telefono: string | null; estado_procedencia: string | null; sucursal_alta_id: string; version: number; unida: boolean }[]>`
+      select nombre, telefono, estado_procedencia, sucursal_alta_id, version, fusionado_en_id is not null as unida
+      from visitante where id = ${id} for update`;
     if (!v) return { ok: false, error: "no_encontrada" };
+    // Una ficha unida a otra ya no se corrige: se corrige la ficha activa.
+    if (v.unida) return { ok: false, error: "unida" };
     const [{ puede }] = await tx<{ puede: boolean }[]>`
       select tiene_permiso(${usuarioId}, 'visitante.corregir', ${v.sucursal_alta_id}) as puede`;
     if (!puede) return { ok: false, error: "sin_permiso" };
@@ -112,7 +115,7 @@ export async function expedienteParaCorregir(sql: Sql, usuarioId: string, codigo
   if (!(await sucursalConPermiso(sql, usuarioId, codigo, "visitante.consultar"))) return null;
   const [v] = await sql<(Omit<ExpedienteEditable, "telefonoEnmascarado"> & { telefono: string | null })[]>`
     select v.id, v.nombre, v.telefono, v.estado_procedencia as "estadoProcedencia", v.version, s.nombre as "sucursalAlta",
-           tiene_permiso(${usuarioId}, 'visitante.corregir', v.sucursal_alta_id) as "puedeCorregir"
+           (v.fusionado_en_id is null and tiene_permiso(${usuarioId}, 'visitante.corregir', v.sucursal_alta_id)) as "puedeCorregir"
     from visitante v join sucursal s on s.id = v.sucursal_alta_id where v.id = ${id}`;
   if (!v) return null;
   const { telefono, ...resto } = v;
@@ -128,6 +131,8 @@ export type Correccion = {
   usuario: string;
   sucursal: string;
   en: Date;
+  /** La corrección se hizo en una ficha que después se unió a esta. */
+  deFichaUnida: boolean;
 };
 
 /**
@@ -143,9 +148,9 @@ export async function correccionesDeVisitante(sql: Sql, usuarioId: string, codig
   if (!permitido?.ok) return null;
   const filas = await sql<Correccion[]>`
     select c.id::text, c.campo, c.valor_anterior as anterior, c.valor_nuevo as nuevo, c.motivo,
-           u.nombre as usuario, s.nombre as sucursal, c.en
+           u.nombre as usuario, s.nombre as sucursal, c.en, c.visitante_id <> ${id}::uuid as "deFichaUnida"
     from visitante_cambio c join usuario u on u.id = c.usuario_id join sucursal s on s.id = c.sucursal_id
-    where c.visitante_id = ${id}
+    where c.visitante_id in (select visitante_grupo(${id}))
     order by c.en desc, c.id desc`;
   return filas.map((f) =>
     f.campo === "telefono" ? { ...f, anterior: enmascararTelefono(f.anterior), nuevo: enmascararTelefono(f.nuevo) } : f,

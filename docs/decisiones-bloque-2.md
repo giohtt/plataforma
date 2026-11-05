@@ -72,3 +72,24 @@ significa que la persona nunca haya asistido.
 - El formulario pide que el motivo describa la corrección **sin incluir teléfonos completos**.
 - **Búsqueda por teléfono:** solo con los 10 dígitos; no se aceptan pedazos, para que no se puedan adivinar números.
 - **El historial de cambios no repite el teléfono:** solo registra si se capturó.
+
+## Indicado para la fusión de duplicados (4 nov 2026)
+
+- **Una sola ficha por visitante para todo Fitnessland.** En otra sucursal, Recepción busca y usa esa misma ficha.
+  En el bloque 4, cada visita guardará la sucursal donde ocurrió, aunque la ficha se haya creado en otra.
+- La fusión se usa **únicamente cuando por error se crearon dos fichas de la misma persona**.
+- **Solo Dirección con el permiso específico de fusión** (`visitante.fusionar`). Si las fichas se crearon en
+  sucursales distintas, debe tenerlo en ambas. Se comprueba en el servidor al guardar.
+- **Dirección elige la ficha activa y de cuál ficha se toma** el nombre, el teléfono y el estado de procedencia.
+  Teléfonos enmascarados, vista previa antes de confirmar y motivo obligatorio. Se registra quién, cuándo y qué fichas unió.
+- **La otra ficha se conserva** con su historial y un vínculo a la ficha activa; sale de la búsqueda normal. Un
+  enlace anterior lleva a la ficha activa solo si la persona tiene permiso para consultarla.
+- **Personas confirmadas como distintas:** la fusión se bloquea y se explica el motivo (también si la confirmación
+  está en una ficha que ya se había unido a alguna de las dos).
+- **Deshacer: pendiente para otra entrega.** Antes de confirmar se avisa que la fusión no se puede deshacer desde la pantalla.
+
+### Casos ficticios cargados para probar
+- **Se pueden unir:** «Valeria Gómez Pineda» y «Valeria Gomes Pineda», ambas creadas en Tenango con el teléfono
+  terminado en 0401 (la segunda con falta de ortografía y sin procedencia).
+- **Se debe bloquear:** «Ana Martínez Ruiz» y «Luis Martínez Ruiz», que comparten el teléfono terminado en 0201 y ya
+  están confirmados como personas distintas.

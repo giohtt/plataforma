@@ -100,7 +100,7 @@ export async function buscarVisitantes(sql: Sql, usuarioId: string, codigo: stri
           select v.id, v.nombre, v.nombre_clave, v.telefono, v.estado_procedencia, s.nombre as sucursal_alta, v.creado_en,
                  false as contiene, 0::real as parecido
           from visitante v join sucursal s on s.id = v.sucursal_alta_id
-          where v.telefono = ${consulta.telefono}
+          where v.telefono = ${consulta.telefono} and v.fusionado_en_id is null
           order by v.nombre_clave, v.creado_en
           limit ${LIMITE + 1}`
       : await sql<Fila[]>`
@@ -108,8 +108,9 @@ export async function buscarVisitantes(sql: Sql, usuarioId: string, codigo: stri
                  v.nombre_clave like all(${sql.array(consulta.palabras.map(patron))}) as contiene,
                  similarity(v.nombre_clave, ${consulta.clave}) as parecido
           from visitante v join sucursal s on s.id = v.sucursal_alta_id
-          where v.nombre_clave like all(${sql.array(consulta.palabras.map(patron))})
-             or v.nombre_clave % ${consulta.clave}
+          where (v.nombre_clave like all(${sql.array(consulta.palabras.map(patron))})
+                 or v.nombre_clave % ${consulta.clave})
+            and v.fusionado_en_id is null
           order by contiene desc, parecido desc, v.nombre_clave, v.creado_en
           limit ${LIMITE + 1}`;
 
@@ -131,6 +132,7 @@ export async function coincidencias(tx: Tx, datos: DatosVisitante, clave: string
            or v.nombre_clave like all(${tx.array(palabras.map(patron))})
            or v.nombre_clave % ${clave})
       and (${excluirId}::uuid is null or v.id <> ${excluirId}::uuid)
+      and v.fusionado_en_id is null
     order by (v.telefono = ${datos.telefono}) desc nulls last, parecido desc, v.creado_en
     limit 10`;
   // El teléfono capturado en el alta cuenta como escrito completo: solo se muestra el de quien coincide.
