@@ -1,17 +1,17 @@
 "use server";
 
 /**
- * Cobro de visitas en efectivo, de una persona o de un grupo (hasta 20), por POST. Aquí se leen la sesión y
+ * Cobro de visitas en efectivo o con tarjeta, de una persona o de un grupo (hasta 20), por POST. Aquí se leen la sesión y
  * el formulario; permisos, turno, responsable de la bolsa, fichas activas, cobros repetidos y bloqueo en
  * producción se comprueban en src/lib/visitas.ts. La pantalla llama a esta acción directamente para poder
  * reintentar con la misma clave si se pierde la conexión.
  */
 import { redirect } from "next/navigation";
-import { leerRecibido, MAXIMO_PERSONAS, mensajeRecibido, totalVisitas } from "@/lib/datos-visita";
+import { leerAutorizacion, leerRecibido, MAXIMO_PERSONAS, MENSAJES_AUTORIZACION, mensajeRecibido, totalVisitas } from "@/lib/datos-visita";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
-import { confirmarVisita, visitasDeHoy, type CobroRegistrado, type ErrorVisita, type VisitaHoy } from "@/lib/visitas";
+import { confirmarVisita, visitasDeHoy, type CobroConMismaAutorizacion, type CobroRegistrado, type ErrorVisita, type VisitaHoy } from "@/lib/visitas";
 
 const MENSAJES: Record<ErrorVisita, string> = {
   no_encontrada: "No encontrada.",
@@ -28,12 +28,18 @@ const MENSAJES: Record<ErrorVisita, string> = {
   grupo_grande: `Un cobro puede tener como máximo ${MAXIMO_PERSONAS} personas.`,
   persona_repetida: "La misma persona aparece dos veces en el grupo. No se guardó nada.",
   recibido_menor: "Lo recibido es menor que el total. No se guardó nada.",
+  autorizacion_invalida: MENSAJES_AUTORIZACION.formato,
+  autorizacion_repetida: "Esta autorización ya se registró hoy en esta sucursal. Revisa el cobro anterior: si es otra venta, confírmalo para continuar.",
+  forma_invalida: "Elige un solo medio de pago para el cobro: efectivo o tarjeta. No se guardó nada.",
   bloqueado_produccion: "El registro de visitas está desactivado fuera del entorno de pruebas.",
 };
 
 export type RespuestaCobro =
   | { ok: true; cobro: CobroRegistrado; repetida: boolean }
-  | { ok: false; error: string; errorRecibido?: string };
+  | { ok: false; error: string; errorRecibido?: string; errorAutorizacion?: string; previos?: CobroConMismaAutorizacion[] };
+
+/** Con tarjeta, un rechazo del servidor no significa que el pago no se cobró en la terminal. */
+const NO_REPASAR = " El pago ya se cobró en la terminal: no vuelvas a pasar la tarjeta; registra este cobro con la misma autorización.";
 
 export async function accionConfirmarVisita(datos: FormData): Promise<RespuestaCobro> {
   const sesion = await obtenerSesionActual();
@@ -45,23 +51,40 @@ export async function accionConfirmarVisita(datos: FormData): Promise<RespuestaC
     return typeof v === "string" ? v.slice(0, max) : "";
   };
 
-  // Lo recibido se valida otra vez aquí, contra el total del grupo: no se confía en el navegador.
+  // Todo se valida otra vez aquí (no se confía en el navegador): un solo medio de pago por operación.
   const visitanteIds = datos.getAll("visitanteId").filter((x): x is string => typeof x === "string").slice(0, MAXIMO_PERSONAS + 1);
   const total = totalVisitas(Math.max(visitanteIds.length, 1));
-  const r = leerRecibido(leer("recibido", 30), total);
-  if (!r.ok) return { ok: false, error: "Revisa lo recibido.", errorRecibido: mensajeRecibido(r.motivo, total) };
+  const formaPago = leer("formaPago", 10) === "tarjeta" ? "tarjeta" : leer("formaPago", 10) === "efectivo" ? "efectivo" : null;
+  if (!formaPago) return { ok: false, error: MENSAJES.forma_invalida };
+
+  let recibido: string | null = null;
+  let cambio: string | null = null;
+  let autorizacion: string | null = null;
+  if (formaPago === "efectivo") {
+    const r = leerRecibido(leer("recibido", 30), total);
+    if (!r.ok) return { ok: false, error: "Revisa lo recibido.", errorRecibido: mensajeRecibido(r.motivo, total) };
+    ({ recibido, cambio } = r);
+  } else {
+    const a = leerAutorizacion(leer("autorizacion", 40));
+    if (!a.ok) return { ok: false, error: "Revisa la autorización.", errorAutorizacion: MENSAJES_AUTORIZACION[a.motivo] };
+    autorizacion = a.valor;
+  }
   const res = await confirmarVisita(sql, sesion.usuarioId, leer("codigo", 10), {
     clave: leer("clave", 40),
     turnoId: leer("turnoId", 40),
     visitanteIds,
-    recibido: r.recibido,
-    cambio: r.cambio,
+    formaPago,
+    recibido,
+    cambio,
+    autorizacion,
+    otraVenta: formaPago === "tarjeta" && datos.get("otraVenta") === "si",
   }, { entorno: leerEntorno() });
   if (!res.ok) {
-    const error = res.error === "visitante_unido" && res.detalle
+    if (res.error === "autorizacion_repetida") return { ok: false, error: MENSAJES.autorizacion_repetida, previos: res.previos };
+    const base = res.error === "visitante_unido" && res.detalle
       ? `La ficha de ${res.detalle} se unió a otra. Quítala del grupo, búscala de nuevo y elige la ficha activa. No se guardó nada.`
       : MENSAJES[res.error];
-    return { ok: false, error };
+    return { ok: false, error: formaPago === "tarjeta" && res.error !== "datos_distintos" ? base + NO_REPASAR : base };
   }
   return { ok: true, cobro: res.cobro, repetida: res.repetida };
 }

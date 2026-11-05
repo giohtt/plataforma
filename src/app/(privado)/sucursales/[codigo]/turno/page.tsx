@@ -24,6 +24,8 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   const sql = obtenerBaseDatos()!;
   const puedeCobrar = t ? (await impedimentoRegistroVisita(sql, sesion.usuarioId, codigo, leerEntorno())) === null : false;
   const cobros = t ? await cobrosDelTurno(sql, t.id) : [];
+  const conTarjeta = cobros.filter((c) => c.formaPago === "tarjeta");
+  const totalTarjeta = conTarjeta.reduce((suma, c) => suma + Math.round(Number(c.total) * 100), 0) / 100;
 
   return (
     <main className="contenedor contenedor-medio">
@@ -71,6 +73,18 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
               </section>
             ))}
           </div>
+          <section className="tarjeta" aria-labelledby="t-tarjeta" data-testid="tarjeta-turno">
+            <h2 id="t-tarjeta" className="titulo-seccion">Cobros con tarjeta</h2>
+            <dl className="cuentas-lugar">
+              <dt>Cobros ({conTarjeta.length} {conTarjeta.length === 1 ? "cobro" : "cobros"} · {(() => { const v = conTarjeta.reduce((n, c) => n + c.personas, 0); return `${v} ${v === 1 ? "visita" : "visitas"}`; })()})</dt>
+              <dd data-testid="total-tarjeta">{pesos.format(totalTarjeta)}</dd>
+              <dt>Estado</dt>
+              <dd>{conTarjeta.length ? "Confirmados operativamente" : "—"}</dd>
+              <dt>Liquidación bancaria</dt>
+              <dd data-testid="conciliacion-tarjeta">{conTarjeta.length ? "Pendiente de conciliar" : "—"}</dd>
+            </dl>
+            <p className="sub">La tarjeta no entra a la bolsa de visitas ni cambia su efectivo esperado.</p>
+          </section>
           <section className="tarjeta" aria-labelledby="t-cobros" data-testid="cobros-turno">
             <h2 id="t-cobros" className="titulo-seccion">Cobros de visitas de este turno ({cobros.length})</h2>
             {cobros.length ? (
@@ -78,7 +92,8 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                 {cobros.map((c) => (
                   <li key={c.id} data-testid="cobro-turno">
                     {hora.format(c.registradaEn)} · {c.personas} {c.personas === 1 ? "persona" : "personas"} ·{" "}
-                    <strong>{pesos.format(Number(c.total))}</strong> en efectivo ·{" "}
+                    <strong>{pesos.format(Number(c.total))}</strong>{" "}
+                    {c.formaPago === "tarjeta" ? "con tarjeta · confirmado operativamente · liquidación pendiente de conciliar" : "en efectivo"} ·{" "}
                     <Link href={`/sucursales/${codigo}/turno/cobros/${c.id}`}>Ver detalle</Link>
                   </li>
                 ))}

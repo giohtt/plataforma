@@ -39,7 +39,8 @@ async function abrirTurno(codigo: string, usuarioId: string) {
   return t.id;
 }
 async function escenario() {
-  const codigo = `Y${String(Math.floor(Math.random() * 1e4)).padStart(4, "0")}`;
+  // Código al azar de letras y números: con muchas sucursales por corrida, cuatro dígitos llegaban a repetirse.
+  const codigo = `Y${Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789"[Math.floor(Math.random() * 34)]).join("")}`;
   await sql`insert into sucursal (nombre, codigo) values (${"Visitas " + codigo}, ${codigo})`;
   const recep = await crearCuenta([["recepcion", codigo]]);
   const turnoId = await abrirTurno(codigo, recep.id);
@@ -447,4 +448,149 @@ test("la misma clave enviada con otro grupo se rechaza en el servidor", async ({
   await confirmar(page, "$150.00").click();
   await expect(aviso(page)).toHaveText("Este cobro ya se había enviado con otras personas o con otro importe recibido. No se guardó nada.");
   expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 3, movimientos: 1, suma: "150.00" });
+});
+
+// ---------------------------------------------------------------------------
+// Cobro con tarjeta
+// ---------------------------------------------------------------------------
+const registrar = (page: Page, total = "$50.00") => page.getByRole("button", { name: `Registrar cobro aprobado · ${total}` });
+async function aTarjeta(page: Page) {
+  await page.getByRole("radio", { name: "Tarjeta" }).check();
+  await expect(page.getByLabel("Recibido (opcional)")).toHaveCount(0);
+}
+const conTarjetaEnBd = async (codigo: string) =>
+  (await sql`select count(*)::int as n from cobro_visita c join operacion_visita o on o.id = c.operacion_id
+             join sucursal s on s.id = o.sucursal_id where s.codigo = ${codigo} and c.forma_pago = 'tarjeta'`)[0].n as number;
+
+test("tarjeta, una persona: autorización obligatoria; confirmado operativamente, liquidación pendiente y la bolsa no cambia", async ({ page }) => {
+  const e = await escenario();
+  const g = await tresQueCompartenTelefono();
+  await entrar(page, e.recep.correo);
+  // Antes: un cobro de $50 en efectivo, para comprobar que la tarjeta no mueve el esperado de la bolsa.
+  await elegir(page, e.codigo, e.nombre);
+  await confirmar(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toBeVisible();
+  await page.getByRole("button", { name: "Nueva visita" }).click();
+
+  await buscar(page, g.nombres[0]);
+  await tarjeta(page, g.nombres[0]).getByRole("button", { name: "Agregar" }).click();
+  await aTarjeta(page);
+  await expect(page.getByTestId("datos-cobro")).toContainText("Cobra $50.00 en la terminal y espera a que diga «Aprobado».");
+  await expect(page.getByTestId("datos-cobro")).toContainText("Si la terminal rechaza el pago, no registres nada.");
+
+  // Sin autorización o con un formato que no corresponde: el error aparece junto al campo y no se registra.
+  await registrar(page).click();
+  await expect(page.locator("#autorizacion-error")).toHaveText("Escribe el número de autorización del comprobante de la terminal.");
+  await page.getByLabel("Autorización del comprobante").fill("12");
+  await registrar(page).click();
+  await expect(page.locator("#autorizacion-error")).toHaveText("La autorización debe tener de 4 a 12 letras o números, como aparece en el comprobante.");
+  expect(await conTarjetaEnBd(e.codigo)).toBe(0);
+
+  await page.getByLabel("Autorización del comprobante").fill("a1b2c3");
+  await registrar(page).click();
+  const listo = page.getByTestId("cobro-registrado");
+  await expect(listo).toContainText("$50.00 con tarjeta");
+  await expect(page.getByTestId("autorizacion-registrada")).toHaveText("A1B2C3");
+  await expect(page.getByTestId("estado-registrado")).toHaveText("Confirmado operativamente");
+  await expect(page.getByTestId("conciliacion-registrada")).toHaveText("Pendiente de conciliar");
+  await expect(page.getByTestId("bolsa-registrado")).toHaveText("No entra efectivo (tarjeta)");
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 2, pases: 2, movimientos: 1, suma: "50.00" });
+
+  await listo.getByRole("link", { name: "Ver el turno" }).click();
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText("$50.00");
+  await expect(page.getByTestId("lugar-bolsa_visitas")).toContainText("(1 cobro · 1 visita)");
+  await expect(page.getByTestId("total-tarjeta")).toHaveText("$50.00");
+  await expect(page.getByTestId("conciliacion-tarjeta")).toHaveText("Pendiente de conciliar");
+  const linea = page.getByTestId("cobro-turno").filter({ hasText: "con tarjeta" });
+  await expect(linea).toContainText("1 persona · $50.00 con tarjeta · confirmado operativamente · liquidación pendiente de conciliar");
+  await linea.getByRole("link", { name: "Ver detalle" }).click();
+  await expect(page.getByTestId("detalle-autorizacion")).toHaveText("A1B2C3");
+  await expect(page.getByTestId("detalle-estado")).toHaveText("Confirmado operativamente");
+  await expect(page.getByTestId("detalle-conciliacion")).toHaveText("Pendiente de conciliar");
+  await expect(page.getByTestId("detalle-bolsa")).toHaveText("No entra efectivo (tarjeta)");
+});
+
+test("tarjeta, grupo de tres: «Registrar cobro aprobado · $150.00» y ninguna entrada de efectivo", async ({ page }) => {
+  const e = await escenario();
+  const g = await tresQueCompartenTelefono();
+  await entrar(page, e.recep.correo);
+  await abrirCobro(page, e.codigo);
+  await buscar(page, g.telefono);
+  for (const n of g.nombres) await tarjeta(page, n).getByRole("button", { name: "Agregar" }).click();
+  await aTarjeta(page);
+  await page.getByLabel("Autorización del comprobante").fill("778899");
+  await registrar(page, "$150.00").click();
+  await expect(page.getByTestId("cobro-registrado")).toContainText("3 personas");
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 3, movimientos: 0, suma: "0" });
+});
+
+test("autorización repetida hoy en la sucursal: muestra el cobro previo y pide confirmar que es otra venta", async ({ page }) => {
+  const e = await escenario();
+  const g = await tresQueCompartenTelefono();
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  await aTarjeta(page);
+  await page.getByLabel("Autorización del comprobante").fill("555000");
+  await registrar(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toBeVisible();
+  await page.getByRole("button", { name: "Nueva visita" }).click();
+
+  await buscar(page, g.nombres[1]);
+  await tarjeta(page, g.nombres[1]).getByRole("button", { name: "Agregar" }).click();
+  await aTarjeta(page);
+  await page.getByLabel("Autorización del comprobante").fill("555000");
+  await registrar(page).click();
+  const previa = page.getByTestId("autorizacion-previa");
+  await expect(previa).toContainText(`Esta autorización ya se registró hoy en Visitas ${e.codigo}:`);
+  await expect(previa).toContainText("1 persona · $50.00 con tarjeta");
+  await expect(previa.getByRole("link", { name: "Ver cobro" })).toHaveAttribute("target", "_blank");
+  await expect(registrar(page)).toBeDisabled();
+  expect(await conTarjetaEnBd(e.codigo)).toBe(1);
+
+  await previa.getByLabel("Confirmo que es otra venta aprobada en la terminal, distinta de la anterior.").check();
+  await registrar(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toContainText(g.nombres[1]);
+  expect(await conTarjetaEnBd(e.codigo)).toBe(2);
+});
+
+test("tarjeta: se pierde la conexión después de registrar; indica no volver a pasar la tarjeta y el reintento no duplica", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  await aTarjeta(page);
+  await page.getByLabel("Autorización del comprobante").fill("900100");
+  let cortes = 0;
+  await page.route("**/*", async (route) => {
+    if (!esCobro(route) || cortes > 0) return route.continue();
+    cortes++;
+    await route.fetch();
+    await route.abort("internetdisconnected");
+  });
+  await registrar(page).click();
+  await expect(aviso(page)).toHaveText(
+    "Se perdió la conexión y no sabemos si el cobro se registró en Fitnessland. El pago ya se cobró en la terminal: no vuelvas a pasar la tarjeta. Toca «Registrar cobro aprobado» otra vez con la misma autorización: si ya se había registrado, no se registrará dos veces.");
+  await expect(page.getByLabel("Autorización del comprobante")).toHaveAttribute("readonly", "");
+  await expect(page.getByRole("radio", { name: "Efectivo" })).toBeDisabled();
+  expect(await conTarjetaEnBd(e.codigo)).toBe(1);
+
+  await registrar(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toContainText("$50.00 con tarjeta");
+  await expect(page.getByTestId("autorizacion-previa")).toHaveCount(0);
+  expect(await conTarjetaEnBd(e.codigo)).toBe(1);
+  expect(await conteos(e.codigo)).toMatchObject({ operaciones: 1, movimientos: 0 });
+});
+
+test("tarjeta: si el servidor rechaza el registro, recuerda no volver a pasar la tarjeta", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  await aTarjeta(page);
+  await page.getByLabel("Autorización del comprobante").fill("313131");
+  await sql`update turno set cerrado_en = now() where id = ${e.turnoId}`;
+  await sql`update responsable_lugar set hasta = now() where turno_id = ${e.turnoId}`;
+  await abrirTurno(e.codigo, e.recep.id);
+  await registrar(page).click();
+  await expect(aviso(page)).toContainText("El turno cambió mientras cobrabas. No se guardó nada");
+  await expect(aviso(page)).toContainText("El pago ya se cobró en la terminal: no vuelvas a pasar la tarjeta; registra este cobro con la misma autorización.");
+  expect(await conTarjetaEnBd(e.codigo)).toBe(0);
 });

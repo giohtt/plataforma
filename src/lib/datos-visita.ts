@@ -46,3 +46,25 @@ export const MENSAJES_RECIBIDO = {
   maximo: "La cantidad es demasiado alta. Revísala.",
   menor: "Lo recibido es menor que el total. No se puede confirmar así.",
 } as const;
+
+/** Medio de pago de una operación: uno solo por operación (indicado el 5 nov 2026). */
+export type FormaPago = "efectivo" | "tarjeta";
+
+/**
+ * Autorización del comprobante de la terminal. Obligatoria con tarjeta.
+ * FORMATO PROVISIONAL hasta confirmar cómo aparece en el comprobante: de 4 a 12 letras o números; se ignoran
+ * espacios y guiones y se guarda en mayúsculas. No se piden ni se guardan datos de la tarjeta.
+ */
+export type Autorizacion = { ok: true; valor: string } | { ok: false; motivo: "vacia" | "formato" };
+
+export function leerAutorizacion(entrada: unknown): Autorizacion {
+  if (typeof entrada !== "string" || entrada.trim() === "") return { ok: false, motivo: "vacia" };
+  const valor = entrada.replace(/[\s-]/g, "").toUpperCase();
+  if (!/^[A-Z0-9]{4,12}$/.test(valor)) return { ok: false, motivo: "formato" };
+  return { ok: true, valor };
+}
+
+export const MENSAJES_AUTORIZACION = {
+  vacia: "Escribe el número de autorización del comprobante de la terminal.",
+  formato: "La autorización debe tener de 4 a 12 letras o números, como aparece en el comprobante.",
+} as const;

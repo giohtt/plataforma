@@ -56,7 +56,14 @@ const revisar = (u: string, codigo: string, _visitanteId?: string) => pantallaCo
 async function revisada(u: string, codigo: string, visitantes: string | string[], recibido: string | null = null, cambio: string | null = null) {
   const p = await revisar(u, codigo);
   if (!p.ok) throw new Error(p.error);
-  return { clave: randomUUID(), turnoId: p.turnoId, visitanteIds: ([] as string[]).concat(visitantes), recibido, cambio };
+  return {
+    clave: randomUUID(), turnoId: p.turnoId, visitanteIds: ([] as string[]).concat(visitantes),
+    formaPago: "efectivo" as "efectivo" | "tarjeta", recibido, cambio, autorizacion: null as string | null, otraVenta: false,
+  };
+}
+/** Lo que envía la pantalla con tarjeta: sin recibido ni cambio, con la autorización del comprobante. */
+async function conTarjeta(u: string, codigo: string, visitantes: string | string[], autorizacion: string, otraVenta = false) {
+  return { ...(await revisada(u, codigo, visitantes)), formaPago: "tarjeta" as const, autorizacion, otraVenta };
 }
 type Envio = Awaited<ReturnType<typeof revisada>>;
 const confirmar = (u: string, codigo: string, r: Envio) => confirmarVisita(sql, u, codigo, r, PRUEBAS);
@@ -388,6 +395,127 @@ describe.skipIf(!URL_ADMIN)("cobro de visitas en efectivo: individual y grupal",
       const todos = await Promise.all(Array.from({ length: 5 }, () => confirmar(recep, codigo, r)));
       expect(todos.every((x) => x.ok)).toBe(true);
       expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 3, movimientos: 1, suma: "150.00" });
+    });
+  });
+
+  describe("cobro con tarjeta", () => {
+    const efectivoDe = async (codigo: string) =>
+      (await sql`select count(*)::int as n from movimiento_efectivo m join cobro_visita c on c.id = m.cobro_id
+                 join operacion_visita o on o.id = c.operacion_id where o.sucursal_id = ${ids[codigo]} and c.forma_pago = 'tarjeta'`)[0].n;
+
+    it("una persona: confirmado operativamente, liquidación pendiente, sin entrada de efectivo; la bolsa no cambia", async () => {
+      const { codigo, recep, turnoId } = await escenario();
+      expect((await confirmar(recep, codigo, await revisada(recep, codigo, await ficha()))).ok).toBe(true); // $50 en efectivo antes
+      const valeria = await ficha("Valeria Prueba Tarjeta");
+      const c = await confirmar(recep, codigo, await conTarjeta(recep, codigo, valeria, "A1B2C3"));
+      expect(c).toMatchObject({
+        ok: true, repetida: false,
+        cobro: { personas: 1, total: "50.00", formaPago: "tarjeta", estado: "confirmado_operativamente", autorizacion: "A1B2C3", conciliacion: "pendiente", recibido: null, cambio: null },
+      });
+      expect(await efectivoDe(codigo)).toBe(0);
+      expect(await conteos(codigo)).toEqual({ operaciones: 2, cobros: 2, pases: 2, movimientos: 1, suma: "50.00" });
+      const bolsa = (await estadoTurno(sql, recep, codigo))!.turno!.lugares[0];
+      expect([bolsa.entradas, bolsa.cantidadEntradas, bolsa.visitasEntradas, bolsa.esperado]).toEqual(["50.00", 1, 1, "50.00"]);
+      const lista = await cobrosDelTurno(sql, turnoId);
+      expect(lista.map((x) => [x.formaPago, x.estado, x.conciliacion, x.total])).toEqual([
+        ["tarjeta", "confirmado_operativamente", "pendiente", "50.00"], ["efectivo", "confirmado", null, "50.00"],
+      ]);
+      if (!c.ok) return;
+      expect(await detalleCobro(sql, recep, codigo, c.operacionId)).toMatchObject({
+        formaPago: "tarjeta", estado: "confirmado_operativamente", autorizacion: "A1B2C3", conciliacion: "pendiente", entradaBolsa: null,
+      });
+    });
+
+    it("un grupo de tres con tarjeta: un cobro de $150, tres pases y ninguna entrada de efectivo", async () => {
+      const { codigo, recep } = await escenario();
+      const c = await confirmar(recep, codigo, await conTarjeta(recep, codigo, [await ficha(), await ficha(), await ficha()], "778899"));
+      expect(c).toMatchObject({ ok: true, cobro: { personas: 3, total: "150.00", formaPago: "tarjeta" } });
+      expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 3, movimientos: 0, suma: "0" });
+    });
+
+    it("un solo medio por operación: autorización obligatoria con tarjeta; sin recibido con tarjeta ni autorización con efectivo", async () => {
+      const { codigo, recep } = await escenario();
+      const v = await ficha();
+      const base = await conTarjeta(recep, codigo, v, "123456");
+      expect(await confirmar(recep, codigo, { ...base, autorizacion: null })).toEqual({ ok: false, error: "autorizacion_invalida" });
+      expect(await confirmar(recep, codigo, { ...base, autorizacion: "12" })).toEqual({ ok: false, error: "autorizacion_invalida" });
+      expect(await confirmar(recep, codigo, { ...base, autorizacion: "abc-123" })).toEqual({ ok: false, error: "autorizacion_invalida" });
+      expect(await confirmar(recep, codigo, { ...base, recibido: "100.00", cambio: "50.00" })).toEqual({ ok: false, error: "forma_invalida" });
+      const efectivo = await revisada(recep, codigo, v);
+      expect(await confirmar(recep, codigo, { ...efectivo, autorizacion: "123456" })).toEqual({ ok: false, error: "forma_invalida" });
+      expect(await confirmar(recep, codigo, { ...efectivo, formaPago: "cheque" as "efectivo" })).toEqual({ ok: false, error: "forma_invalida" });
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 0 });
+    });
+
+    it("autorización repetida hoy en la sucursal: muestra el cobro previo y pide confirmar que es otra venta", async () => {
+      const { codigo, recep } = await escenario();
+      const otra = await escenario();
+      const primero = await confirmar(recep, codigo, await conTarjeta(recep, codigo, await ficha(), "555000"));
+      expect(primero.ok).toBe(true);
+      const segunda = await conTarjeta(recep, codigo, await ficha(), "555000");
+      const r = await confirmar(recep, codigo, segunda);
+      expect(r).toMatchObject({ ok: false, error: "autorizacion_repetida" });
+      if (r.ok || !primero.ok) return;
+      expect(r.previos!.map((p) => [p.id, p.personas, p.total])).toEqual([[primero.operacionId, 1, "50.00"]]);
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 1 });
+      // Confirmando que es otra venta, se registra y queda anotado.
+      const ok = await confirmar(recep, codigo, { ...segunda, otraVenta: true });
+      expect(ok).toMatchObject({ ok: true, cobro: { autorizacion: "555000" } });
+      expect((await sql`select count(*)::int as n from cobro_visita where autorizacion = '555000' and autorizacion_repetida_confirmada`)[0].n).toBe(1);
+      // En otra sucursal la misma autorización no se considera repetida.
+      expect((await confirmar(otra.recep, otra.codigo, await conTarjeta(otra.recep, otra.codigo, await ficha(), "555000"))).ok).toBe(true);
+      // Una autorización de un día anterior tampoco.
+      await sql`alter table operacion_visita disable trigger operacion_visita_inmutable`;
+      await sql`update operacion_visita set registrada_en = now() - interval '1 day' where sucursal_id = ${ids[codigo]}`;
+      await sql`alter table operacion_visita enable trigger operacion_visita_inmutable`;
+      expect((await confirmar(recep, codigo, await conTarjeta(recep, codigo, await ficha(), "555000"))).ok).toBe(true);
+    });
+
+    it("reintento tras perder la conexión con la misma autorización: no la toma como repetida ni registra dos veces", async () => {
+      const { codigo, recep } = await escenario();
+      const t = await conTarjeta(recep, codigo, [await ficha(), await ficha()], "900100");
+      expect((await confirmar(recep, codigo, t)).ok).toBe(true);
+      expect(await confirmar(recep, codigo, t)).toMatchObject({ ok: true, repetida: true, cobro: { personas: 2, autorizacion: "900100" } });
+      expect(await confirmar(recep, codigo, { ...t, autorizacion: "900101" })).toEqual({ ok: false, error: "datos_distintos" });
+      expect(await confirmar(recep, codigo, { ...t, formaPago: "efectivo", autorizacion: null })).toEqual({ ok: false, error: "datos_distintos" });
+      expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 2, movimientos: 0, suma: "0" });
+    });
+
+    it("dos registros simultáneos distintos con la misma autorización: uno pasa y el otro pide confirmar otra venta", async () => {
+      const { codigo, recep } = await escenario();
+      const [a, b] = [await conTarjeta(recep, codigo, await ficha(), "424242"), await conTarjeta(recep, codigo, await ficha(), "424242")];
+      const res = await Promise.all([confirmar(recep, codigo, a), confirmar(recep, codigo, b)]);
+      expect(res.filter((x) => x.ok)).toHaveLength(1);
+      expect(res.filter((x) => !x.ok && x.error === "autorizacion_repetida")).toHaveLength(1);
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 1 });
+    });
+
+    it("la base rechaza tarjeta con entrada de efectivo, sin autorización o con recibido", async () => {
+      const { codigo, recep, turnoId } = await escenario();
+      const v = await ficha();
+      const [bolsa] = await sql`select id from lugar_efectivo where sucursal_id = ${ids[codigo]} and tipo = 'bolsa_visitas'`;
+      const intento = (efectivo: boolean, campos: { autorizacion?: string; estado?: string; conciliacion?: string | null; recibido?: string; cambio?: string }) => sql.begin(async (tx) => {
+        const [o] = await tx`insert into operacion_visita (clave, sucursal_id, turno_id, registrada_por, total)
+                             values (${randomUUID()}, ${ids[codigo]}, ${turnoId}, ${recep}, 50) returning id`;
+        const [c] = await tx`insert into cobro_visita (operacion_id, forma_pago, estado, importe, autorizacion, conciliacion, recibido, cambio)
+                             values (${o.id}, 'tarjeta', ${campos.estado ?? "confirmado_operativamente"}, 50, ${campos.autorizacion ?? null},
+                                     ${campos.conciliacion === undefined ? "pendiente" : campos.conciliacion},
+                                     ${campos.recibido ?? null}, ${campos.cambio ?? null}) returning id`;
+        await tx`insert into pase_visita (operacion_id, visitante_id, sucursal_id, tarifa, descuento, total, orden)
+                 values (${o.id}, ${v}, ${ids[codigo]}, 50, 0, 50, 1)`;
+        if (efectivo) {
+          await tx`insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, cobro_id, responsable_id, registrado_por)
+                   values (${bolsa.id}, ${turnoId}, 'entrada_cobro_visita', 50, ${c.id}, ${recep}, ${recep})`;
+        }
+      });
+      await expect(intento(true, { autorizacion: "ABC123" })).rejects.toThrow(/no cuadra/);
+      await expect(intento(false, {})).rejects.toThrow();
+      await expect(intento(false, { autorizacion: "ABC123", recibido: "100.00", cambio: "50.00" })).rejects.toThrow();
+      await expect(intento(false, { autorizacion: "ABC123", estado: "confirmado" })).rejects.toThrow();
+      await expect(intento(false, { autorizacion: "ABC123", conciliacion: null })).rejects.toThrow();
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 0 });
+      await intento(false, { autorizacion: "ABC123" }); // correcto
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 1, movimientos: 0 });
     });
   });
 

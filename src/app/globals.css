@@ -738,10 +738,16 @@ h3 {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  flex: 1;
 }
 .lista-grupo-datos .chip-estado {
   align-self: flex-start;
   margin-top: 4px;
+  white-space: normal;
+  max-width: 100%;
+}
+.lista-grupo .boton-chico {
+  flex-shrink: 0;
 }
 .boton-chico {
   padding: 6px 12px;
@@ -753,4 +759,15 @@ fieldset.sin-marco {
   padding: 0;
   min-width: 0;
   display: contents;
+}
+.opciones-pago {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+.pasos-tarjeta {
+  margin: 0 0 6px;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
 }

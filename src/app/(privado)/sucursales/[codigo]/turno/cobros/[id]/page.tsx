@@ -24,7 +24,7 @@ export default async function DetalleCobro({ params }: PageProps<"/sucursales/[c
       <p className="sub">Solo datos ficticios.</p>
       <section className="tarjeta" aria-labelledby="t-cobro" data-testid="detalle-cobro">
         <h2 id="t-cobro" className="titulo-seccion">
-          {d.pases.length} {d.pases.length === 1 ? "persona" : "personas"} · {$(d.total)} en efectivo
+          {d.pases.length} {d.pases.length === 1 ? "persona" : "personas"} · {$(d.total)} {d.formaPago === "tarjeta" ? "con tarjeta" : "en efectivo"}
         </h2>
         <dl className="resumen-cobro">
           <dt>Sucursal</dt>
@@ -32,7 +32,15 @@ export default async function DetalleCobro({ params }: PageProps<"/sucursales/[c
           <dt>Registrado</dt>
           <dd>{hora.format(d.registradaEn)} por {d.registradaPor}</dd>
           <dt>Estado</dt>
-          <dd>Confirmado</dd>
+          <dd data-testid="detalle-estado">{d.estado === "confirmado_operativamente" ? "Confirmado operativamente" : "Confirmado"}</dd>
+          {d.formaPago === "tarjeta" ? (
+            <>
+              <dt>Autorización</dt>
+              <dd data-testid="detalle-autorizacion">{d.autorizacion}</dd>
+              <dt>Liquidación bancaria</dt>
+              <dd data-testid="detalle-conciliacion">Pendiente de conciliar</dd>
+            </>
+          ) : null}
           <dt>Total</dt>
           <dd data-testid="detalle-total"><strong>{$(d.total)}</strong></dd>
           {d.recibido ? (
@@ -43,8 +51,10 @@ export default async function DetalleCobro({ params }: PageProps<"/sucursales/[c
               <dd>{$(d.cambio ?? "0")}</dd>
             </>
           ) : null}
-          <dt>Entró a la bolsa</dt>
-          <dd data-testid="detalle-bolsa">{d.entradaBolsa ? `${$(d.entradaBolsa)} · responsable ${d.responsableBolsa}` : "—"}</dd>
+          <dt>{d.formaPago === "tarjeta" ? "Bolsa de visitas" : "Entró a la bolsa"}</dt>
+          <dd data-testid="detalle-bolsa">
+            {d.entradaBolsa ? `${$(d.entradaBolsa)} · responsable ${d.responsableBolsa}` : d.formaPago === "tarjeta" ? "No entra efectivo (tarjeta)" : "—"}
+          </dd>
         </dl>
       </section>
       <section className="tarjeta" aria-labelledby="t-pases" data-testid="detalle-pases">
