@@ -13,7 +13,7 @@ const ESTADO: Record<string, string> = { activa: "Activa", proxima: "Próxima ap
 const VISTAS: Partial<Record<Rol, { descripcion: string; pendientes: string[] }>> = {
   recepcion: {
     descripcion: "Registrar la operación de tu turno y solicitar lo que requiere aprobación.",
-    pendientes: ["Abrir turno y recibir la bolsa de visitas o el cajón", "Registrar visitas y cobros", "Conteo, entrega y cierre de turno", "Solicitar gastos"],
+    pendientes: ["Registrar visitas y cobros", "Conteo, entrega y cierre de turno", "Solicitar gastos"],
   },
   encargado: {
     descripcion: "Consultar y dar seguimiento a la sucursal. Autorizas solo lo que Dirección te delegue expresamente.",
@@ -56,12 +56,14 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, historial] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, historial] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "visitante.buscar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "reporte.expedientes", sucursal.id),
+    tienePermiso(sql, sesion.usuarioId, "turno.abrir", sucursal.id),
+    tienePermiso(sql, sesion.usuarioId, "turno.consultar", sucursal.id),
     historialSucursal(sql, sesion.usuarioId, sucursal.id),
   ]);
 
@@ -84,8 +86,13 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
       {sucursal.estadoOperativo === "inactiva" ? (
         <p className="aviso aviso-info" data-testid="sucursal-inactiva">Esta sucursal está desactivada.</p>
       ) : null}
-      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes ? (
+      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno ? (
         <p className="fila-acciones">
+          {puedeAbrirTurno || puedeVerTurno ? (
+            <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/turno`} data-testid="turno">
+              Turno
+            </Link>
+          ) : null}
           {puedeBuscarVisitantes ? (
             <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/visitantes`} data-testid="visitantes">
               Visitantes
