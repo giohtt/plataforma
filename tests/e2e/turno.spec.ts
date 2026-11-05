@@ -75,13 +75,15 @@ test("Recepción abre turno: totales por separado, $0 válido, vacío no; el caj
   await page.locator("#cajon").fill("1,200");
   await page.getByRole("button", { name: "Abrir turno" }).click();
   await expect(page.locator("p.aviso[role=status]")).toHaveText("Turno abierto.");
-  await expect(page.getByTestId("lugar-bolsa_visitas")).toContainText("$0.00 contado al abrir");
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("contado-al-abrir")).toHaveText("$0.00");
   await expect(page.getByTestId("lugar-bolsa_visitas")).toContainText(`Responsable: ${recep.nombre}`);
-  await expect(page.getByTestId("lugar-cajon_mensualidades")).toContainText("$1,200.00 contado al abrir");
+  await expect(page.getByTestId("lugar-cajon_mensualidades").getByTestId("contado-al-abrir")).toHaveText("$1,200.00");
   await expect(page.getByTestId("lugar-cajon_mensualidades")).toContainText(`Responsable: ${recep.nombre}`);
   await expect(page.getByTestId("no-conciliado")).toHaveText("No conciliado: faltan datos de Open Desk");
   // Los totales nunca se suman en uno solo.
-  await expect(page.locator("main")).not.toContainText("$1,200.00 contado al abrir en total");
+  await expect(page.locator("main")).not.toContainText("$1,200.00 en total");
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText("$0.00");
+  await expect(page.getByTestId("lugar-cajon_mensualidades").getByTestId("esperado")).toHaveText("No calculado: faltan datos de Open Desk");
   expect(await abiertos(codigo)).toBe(1);
 });
 

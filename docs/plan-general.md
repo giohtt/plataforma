@@ -75,10 +75,13 @@ Confirmados el 4 nov 2026.
 - **Pasan al bloque 5:** la entrega entre turnos (y su relación con la apertura) y el cierre de turno. El turno ficticio de Tenango sigue abierto hasta entonces.
 - **Decisiones que necesita:** si una misma recepcionista custodia siempre ambos lugares (el diseño admite las dos opciones).
 
-### Bloque 4. Visitas, cobros y movimientos de efectivo
+### Bloque 4. Visitas, cobros y movimientos de efectivo (en curso, solo datos ficticios)
 1. Operación individual y grupal: un cobro, un pase por visitante, cada uno ligado a su expediente. En el registro grupal, un pase por persona y un total para el grupo. Primero se revisa el ejemplo individual.
    - Una sola ficha por visitante para todo Fitnessland: en otra sucursal, Recepción busca y usa esa misma ficha. Cada visita guarda la **sucursal donde ocurrió**, aunque la ficha se haya creado en otra.
    - Las visitas de una ficha unida se muestran en la ficha activa.
+   - **Primer flujo: visita individual de $50 en efectivo.** En revisión (`/sucursales/[codigo]/turno/visita`). Recepción busca y elige la ficha existente, escribe opcionalmente lo «Recibido» (si es menor que $50 no deja confirmar; si es mayor, muestra el cambio), revisa el cobro y lo confirma. Al confirmar, el servidor comprueba en la misma transacción que sigue abierto el mismo turno que se mostró al revisar, que la persona sigue siendo la responsable vigente de la bolsa y que la ficha sigue activa; guarda una operación, un cobro en efectivo confirmado, un pase con la sucursal donde ocurrió la visita y una entrada de $50 a la bolsa ligada a turno, lugar y responsable. A la bolsa entra solo el total de la visita, nunca lo recibido. Un doble clic o un reintento de la misma confirmación no crea otra visita ni otra entrada de efectivo. En el turno, la bolsa muestra contado al abrir, visitas cobradas y efectivo esperado; el cajón muestra lo contado al abrir y «No calculado: faltan datos de Open Desk» como efectivo esperado. Los registros no se editan ni se borran.
+   - **Provisional:** registra visitas solo Recepción (permiso `visita.registrar`) y, en esta prueba, solo la responsable de la bolsa. Por ahora la única forma de pago es efectivo y no hay promociones (tarifa $50, descuento $0).
+   - **Para otro paso:** corrección, cancelación y devolución de un cobro; tarjeta y transferencia; registro grupal (un pase por persona y un total para el grupo).
 2. Formas de pago con los estados acordados; el efectivo entra a la bolsa del turno; tarjeta y transferencia no aumentan el efectivo.
 3. Protección contra duplicados por doble clic o reintento.
 4. Apertura manual por pase, separada de las entradas confirmadas.

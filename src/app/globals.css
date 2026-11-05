@@ -679,3 +679,38 @@ h3 {
 .importe input {
   font-size: 18px;
 }
+
+/* --- Visita y cuentas de cada lugar --- */
+.cuentas-lugar,
+.resumen-cobro {
+  display: grid;
+  grid-template-columns: minmax(7em, 1fr) auto;
+  gap: 6px 16px;
+  margin: 0;
+}
+.cuentas-lugar dt,
+.resumen-cobro dt {
+  color: var(--muted);
+}
+.cuentas-lugar dd,
+.resumen-cobro dd {
+  margin: 0;
+  text-align: right;
+}
+.resumen-cobro {
+  grid-template-columns: minmax(0, 11em) minmax(0, 1fr);
+}
+.resumen-cobro dd {
+  text-align: left;
+}
+.lista-simple {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+.cuentas-lugar dd.dd-largo {
+  grid-column: 1 / -1;
+  text-align: left;
+  margin-top: -2px;
+}

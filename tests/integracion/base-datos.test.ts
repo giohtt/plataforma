@@ -122,13 +122,15 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect([as, ag, fa]).toEqual([0, 0, 0]);
     });
 
-    it("los perfiles solo tienen permisos de los bloques construidos (1 a 3) y ninguno de autorización", async () => {
+    it("los perfiles solo tienen permisos de los bloques construidos (1 a 4) y ninguno de autorización", async () => {
       const filas = await sql`
         select rp.rol, rp.permiso, p.bloque, p.es_autorizacion from rol_permiso rp join permiso p on p.clave = rp.permiso`;
       expect(filas.length).toBeGreaterThan(0);
-      expect(filas.every((f) => f.bloque <= 3 && !f.es_autorizacion)).toBe(true);
+      expect(filas.every((f) => f.bloque <= 4 && !f.es_autorizacion)).toBe(true);
       const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso).sort();
-      expect(recepcion).toEqual(["sucursal.consultar", "turno.abrir", "turno.consultar", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
+      expect(recepcion).toEqual(["sucursal.consultar", "turno.abrir", "turno.consultar", "visita.registrar", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
+      // Registrar visitas: solo Recepción (provisional); además, solo la responsable de la bolsa.
+      expect(filas.filter((f) => f.permiso === "visita.registrar").map((f) => f.rol)).toEqual(["recepcion"]);
       // Abrir turno: solo Recepción (provisional). El reporte de turnos no es para Recepción.
       expect(filas.filter((f) => f.permiso === "reporte.turnos").map((f) => f.rol).sort()).toEqual(["administracion", "direccion", "encargado"]);
       expect(filas.filter((f) => f.permiso === "turno.abrir").map((f) => f.rol)).toEqual(["recepcion"]);
@@ -143,8 +145,8 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
         (tx) => tx`insert into rol_permiso (rol, permiso) values ('direccion', 'autorizacion.gasto')`,
       );
       expect(e.message).toMatch(/se otorga expresamente/);
-      await sql`insert into rol_permiso (rol, permiso) values ('recepcion', 'visita.registrar')`;
-      await sql`delete from rol_permiso where rol = 'recepcion'`;
+      await sql`insert into rol_permiso (rol, permiso) values ('recepcion', 'visita.consultar')`;
+      await sql`delete from rol_permiso where rol = 'recepcion' and permiso = 'visita.consultar'`;
     });
 
     it("una asignación de perfil es siempre para una sucursal; «todas» se otorga aparte", async () => {
