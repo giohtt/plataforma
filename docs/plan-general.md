@@ -61,12 +61,14 @@ Confirmados el 4 nov 2026.
 - **Pendiente antes de capturar datos reales:** campos obligatorios y quién puede ver el teléfono completo (hoy, opción A provisional: solo el nombre es obligatorio y el teléfono se enmascara para todos), además del aviso de privacidad y la conservación de datos (decisión 3). El umbral de «nombre muy parecido» (70 %) también es provisional.
 - **Se retoma en el bloque 4:** qué historial de otras sucursales ve Recepción.
 
-### Bloque 3. Apertura de turno y lugares de efectivo
+### Bloque 3. Apertura de turno y lugares de efectivo (en curso, solo datos ficticios)
 1. Turno de recepción por sucursal y usuario.
 2. **Bolsa de visitas** y **cajón de mensualidades** como lugares de efectivo separados, con responsable por periodo (pueden ser la misma persona o distintas).
 3. Apertura con importe contado y relación con la entrega del turno anterior.
 4. Cajón de mensualidades marcado **«no conciliado: faltan datos de Open Desk»**.
 5. No se abre turno en una sucursal inactiva (comprobado en el servidor, también por solicitud directa).
+   - **Primer paso en revisión (apertura de turno):** un solo turno de Recepción abierto a la vez por sucursal, validado en el servidor y por la base (también con dos aperturas simultáneas). Al abrir se registra solo el total contado de la bolsa de visitas y del cajón de mensualidades, por separado, sin fondo fijo ni desglose; $0 es válido y un campo vacío no. Se registra por separado quién es responsable de cada lugar. El cajón muestra «No conciliado: faltan datos de Open Desk». Abrir no registra cobros ni movimientos. La entrega entre turnos es del bloque 5.
+   - **Provisional:** quien abre queda como responsable de la bolsa y del cajón (falta confirmar si siempre es la misma persona). Abre turno solo Recepción; consultan Recepción, Encargado, Administración y Dirección.
 - **Reporte básico:** turnos abiertos y responsables de cada lugar de efectivo.
 - **Decisiones que necesita:** si una misma recepcionista custodia siempre ambos lugares (el diseño admite las dos opciones).
 

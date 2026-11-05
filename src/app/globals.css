@@ -654,3 +654,28 @@ h3 {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
 }
+
+/* --- Turno --- */
+.lugares-turno {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+.lugar-apertura {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  gap: 6px;
+}
+.lugar-apertura legend {
+  padding: 0 4px;
+}
+.importe {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 18px;
+}
+.importe input {
+  font-size: 18px;
+}
