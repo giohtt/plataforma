@@ -77,6 +77,17 @@ export const VISITANTES_PRUEBA = [
   { nombre: "Ana Martínez Ruiz", telefono: "0000000201", estado: "Estado de México", codigo: "TEN" },
   { nombre: "José Ramírez Sánchez", telefono: "0000000301", estado: "Ciudad de México", codigo: "ATL" },
   { nombre: "Fernanda López Torres", telefono: null, estado: "Michoacán", codigo: "TEN" },
+  // Caso de fusión permitida: la misma persona registrada dos veces en Tenango por error (una con falta de ortografía).
+  { nombre: "Valeria Gómez Pineda", telefono: "0000000401", estado: "Estado de México", codigo: "TEN" },
+  { nombre: "Valeria Gomes Pineda", telefono: "0000000401", estado: null, codigo: "TEN" },
+];
+
+/**
+ * Caso de fusión bloqueada: Luis y Ana comparten teléfono y ya se confirmó que son personas distintas.
+ * Compartir nombre o teléfono no demuestra que sean la misma persona.
+ */
+export const DISTINTOS_PRUEBA = [
+  { a: { nombre: "Ana Martínez Ruiz", telefono: "0000000201" }, b: { nombre: "Luis Martínez Ruiz", telefono: "0000000201" } },
 ];
 
 const MOTIVO = "Datos ficticios de prueba";
@@ -181,7 +192,21 @@ export async function cargarDatosPrueba(sql, { entorno }) {
                   ${MOTIVO})`;
       }
     }
-    return { sucursales, usuarios, asignaciones, alcances, facultades, visitantes };
+    let distintos = 0;
+    for (const d of DISTINTOS_PRUEBA) {
+      const filas = await tx`
+        insert into visitante_distinto (visitante_id, distinto_de_id, motivo)
+        select a.id, b.id, ${MOTIVO + ": comparten teléfono, son personas distintas"}
+        from visitante a, visitante b
+        where a.nombre = ${d.a.nombre} and a.telefono = ${d.a.telefono} and a.creado_por is null
+          and b.nombre = ${d.b.nombre} and b.telefono = ${d.b.telefono} and b.creado_por is null
+          and not exists (select 1 from visitante_distinto x
+                          where (x.visitante_id = a.id and x.distinto_de_id = b.id) or (x.visitante_id = b.id and x.distinto_de_id = a.id))
+        limit 1
+        returning id`;
+      distintos += filas.length;
+    }
+    return { sucursales, usuarios, asignaciones, alcances, facultades, visitantes, distintos };
   });
 }
 
@@ -211,7 +236,7 @@ async function principal() {
     const r = await cargarDatosPrueba(sql, { entorno });
     console.log(
       `Datos ficticios nuevos: ${r.sucursales} sucursales, ${r.usuarios} usuarios, ${r.asignaciones} asignaciones, ` +
-        `${r.alcances} alcances generales, ${r.facultades} facultades y ${r.visitantes} expedientes de visitantes.`,
+        `${r.alcances} alcances generales, ${r.facultades} facultades, ${r.visitantes} expedientes de visitantes y ${r.distintos} confirmaciones de personas distintas.`,
     );
   } catch (e) {
     console.error(`No se pudieron cargar los datos ficticios: ${e.message}`);

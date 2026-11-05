@@ -8,6 +8,7 @@
  */
 import { redirect } from "next/navigation";
 import { corregirVisitante } from "@/lib/correccion-visitantes";
+import { fusionarVisitantes, prepararFusion, type CampoFusion, type ErrorFusion, type FichaFusion, type Lado } from "@/lib/fusion-visitantes";
 import { interpretarConsulta, validarCorreccion, validarVisitante, type ErroresVisitante } from "@/lib/datos-visitante";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
@@ -102,6 +103,7 @@ const MENSAJES_CORRECCION = {
   sin_cambios: "No hay cambios que guardar.",
   motivo: "Explica el motivo de la corrección (de 5 a 300 caracteres).",
   bloqueado_produccion: "Los expedientes están desactivados hasta aprobar el aviso de privacidad.",
+  unida: "Esta ficha se unió a otra. Corrige la ficha activa.",
 } as const;
 
 /** Corrección de un expediente, por POST. Permisos, versión y coincidencias se comprueban en el servidor. */
@@ -148,4 +150,90 @@ export async function accionCorregirVisitante(previo: EstadoCorreccion, datos: F
     };
   }
   return { error: MENSAJES_CORRECCION[r.error], valores, intento };
+}
+
+export type EstadoFusion = {
+  error?: string;
+  /** Explicación cuando la fusión está bloqueada (por ejemplo, personas confirmadas como distintas). */
+  bloqueo?: ErrorFusion;
+  a?: FichaFusion;
+  b?: FichaFusion;
+  valores?: Record<string, string>;
+  intento: number;
+} | null;
+
+const MENSAJES_FUSION: Record<ErrorFusion, string> = {
+  no_encontrada: "No encontrada.",
+  misma_ficha: "Elige una ficha distinta de la que estás revisando.",
+  ya_unida: "Una de las fichas ya se unió a otra.",
+  sin_permiso: "Para unir estas fichas necesitas el permiso de fusión en la sucursal donde se creó cada una.",
+  confirmados_distintos:
+    "No se pueden unir: ya se confirmó que son personas distintas. Compartir nombre o teléfono por sí solo no demuestra que sean la misma persona.",
+  modificada: "Una de las fichas cambió mientras la revisabas. Revisa los datos actualizados antes de confirmar.",
+  motivo: "Escribe el motivo de la fusión (de 5 a 300 caracteres).",
+  eleccion_invalida: "Elige la ficha que queda activa y de cuál ficha se toma cada dato.",
+  bloqueado_produccion: "Los expedientes están desactivados hasta aprobar el aviso de privacidad.",
+};
+
+function leerTexto(datos: FormData, campo: string, max = 300) {
+  const v = datos.get(campo);
+  return typeof v === "string" ? v.slice(0, max) : "";
+}
+
+/** Prepara la comparación de dos fichas. Solo lectura; los teléfonos llegan enmascarados. */
+export async function accionPrepararFusion(previo: EstadoFusion, datos: FormData): Promise<EstadoFusion> {
+  const sesion = await obtenerSesionActual();
+  if (!sesion) redirect("/iniciar-sesion");
+  const sql = obtenerBaseDatos();
+  if (!sql) throw new Error("Sin base de datos");
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await prepararFusion(sql, sesion.usuarioId, leerTexto(datos, "codigo", 10), leerTexto(datos, "a", 40), leerTexto(datos, "b", 40));
+  if (!r.ok) return { error: MENSAJES_FUSION[r.error], bloqueo: r.error, intento };
+  return { a: r.a, b: r.b, intento };
+}
+
+/** Guarda la fusión. Todo se vuelve a comprobar en el servidor, en la misma transacción. */
+export async function accionFusionar(previo: EstadoFusion, datos: FormData): Promise<EstadoFusion> {
+  const sesion = await obtenerSesionActual();
+  if (!sesion) redirect("/iniciar-sesion");
+  const sql = obtenerBaseDatos();
+  if (!sql) throw new Error("Sin base de datos");
+  const codigo = leerTexto(datos, "codigo", 10);
+  const lado = (campo: string) => leerTexto(datos, campo, 2) as Lado;
+  const valores = {
+    activa: leerTexto(datos, "activa", 2),
+    nombre: leerTexto(datos, "nombre", 2),
+    telefono: leerTexto(datos, "telefono", 2),
+    estado_procedencia: leerTexto(datos, "estado_procedencia", 2),
+    motivo: leerTexto(datos, "motivo"),
+  };
+  const intento = (previo?.intento ?? 0) + 1;
+  /** Si hay que corregir algo, se vuelve a mostrar la comparación con los datos actuales del servidor. */
+  const volverAMostrar = async (error: string): Promise<EstadoFusion> => {
+    const r = await prepararFusion(sql, sesion.usuarioId, codigo, leerTexto(datos, "a", 40), leerTexto(datos, "b", 40));
+    if (!r.ok) return { error: MENSAJES_FUSION[r.error], bloqueo: r.error, intento };
+    return { a: r.a, b: r.b, error, valores, intento };
+  };
+
+  if (datos.get("entiendo") !== "si") return volverAMostrar("Confirma que entiendes que la fusión no se puede deshacer desde la pantalla.");
+  const tomar = { nombre: lado("nombre"), telefono: lado("telefono"), estado_procedencia: lado("estado_procedencia") } as Record<CampoFusion, Lado>;
+  const r = await fusionarVisitantes(
+    sql,
+    sesion.usuarioId,
+    codigo,
+    {
+      a: leerTexto(datos, "a", 40),
+      b: leerTexto(datos, "b", 40),
+      versionA: Number(leerTexto(datos, "versionA", 10)) || 0,
+      versionB: Number(leerTexto(datos, "versionB", 10)) || 0,
+      activa: lado("activa"),
+      tomar,
+    },
+    valores.motivo,
+    { entorno: leerEntorno() },
+  );
+  if (r.ok) redirect(`/sucursales/${codigo}/visitantes/${r.activaId}?aviso=fusionado`);
+  const bloqueante = ["no_encontrada", "misma_ficha", "ya_unida", "sin_permiso", "confirmados_distintos", "bloqueado_produccion"].includes(r.error);
+  if (bloqueante) return { error: MENSAJES_FUSION[r.error], bloqueo: r.error, intento };
+  return volverAMostrar(MENSAJES_FUSION[r.error]);
 }

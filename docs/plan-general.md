@@ -51,8 +51,10 @@ Confirmados el 4 nov 2026.
 ### Bloque 2. Expedientes de visitantes y búsqueda (en curso, solo datos ficticios)
 1. Expediente: alta, corrección con historial y motivo, búsqueda por nombre o teléfono. Pruebas con homónimos, errores de escritura y teléfono compartido.
    - ~~Primer flujo: búsqueda, elección entre coincidencias y alta.~~ Hecho con reglas provisionales (opciones en [`decisiones-bloque-2.md`](decisiones-bloque-2.md)). La búsqueda y el alta se envían por POST: el nombre y el teléfono nunca quedan en la dirección. **Probado en el sitio el 4 nov 2026 con Recepción Tenango:** búsqueda «maria hernandez» con 2 coincidencias distinguidas por teléfono enmascarado (0101 Tenango, 0102 Santiago); elección de la de Santiago; alta de Diego Martínez Ruiz con el teléfono compartido de Luis y Ana, confirmando que es otra persona.
-   - Corrección de expedientes: en revisión. Corrigen Encargado y Dirección, solo expedientes creados en una sucursal donde tengan el permiso; motivo obligatorio; se conserva dato anterior, nuevo, quién, desde qué sucursal y cuándo; el historial de correcciones solo lo ve quien puede corregir ese expediente, con el teléfono enmascarado (Recepción y Administración ven solo la ficha actual); si la corrección produce coincidencias se avisa y las fichas siguen separadas.
+   - ~~Corrección de expedientes.~~ Hecha. Corrigen Encargado y Dirección, solo expedientes creados en una sucursal donde tengan el permiso; motivo obligatorio; se conserva dato anterior, nuevo, quién, desde qué sucursal y cuándo; el historial de correcciones solo lo ve quien puede corregir ese expediente, con el teléfono enmascarado. **Probada en el sitio el 4 nov 2026:** Encargado Tenango corrigió la procedencia de Diego Martínez Ruiz (Estado de México → Querétaro) y el cambio apareció en el historial con motivo, quién y desde Tenango; Recepción Tenango vio la ficha actualizada sin el historial ni el botón «Corregir datos».
 2. Coincidencias al crear y fusión manual autorizada.
+   - ~~Coincidencias al crear.~~ Hecho con el alta (confirmación «es otra persona» registrada).
+   - Fusión manual: en revisión. Solo para dos fichas de la misma persona creadas por error. Solo Dirección con el permiso `visitante.fusionar` en la sucursal de cada ficha; elige la ficha activa y de cuál se toma cada dato, con teléfonos enmascarados, vista previa, motivo obligatorio y aviso de que no se deshace desde la pantalla. La otra ficha se conserva con su historial y un vínculo a la activa; sale de la búsqueda; un enlace anterior lleva a la activa solo con permiso de consulta. Bloqueada si ya se confirmaron como personas distintas. Deshacer queda pendiente.
 3. Vistas del expediente por perfil y cobertura del historial.
 - **Reporte básico:** expedientes creados por sucursal y periodo; posibles duplicados pendientes.
 - **Decisiones que necesita:** privacidad del expediente (decisión 3) antes de cualquier dato real; qué ve recepción de otras sucursales.
@@ -68,6 +70,8 @@ Confirmados el 4 nov 2026.
 
 ### Bloque 4. Visitas, cobros y movimientos de efectivo
 1. Operación individual y grupal: un cobro, un pase por visitante, cada uno ligado a su expediente.
+   - Una sola ficha por visitante para todo Fitnessland: en otra sucursal, Recepción busca y usa esa misma ficha. Cada visita guarda la **sucursal donde ocurrió**, aunque la ficha se haya creado en otra.
+   - Las visitas de una ficha unida se muestran en la ficha activa.
 2. Formas de pago con los estados acordados; el efectivo entra a la bolsa del turno; tarjeta y transferencia no aumentan el efectivo.
 3. Protección contra duplicados por doble clic o reintento.
 4. Apertura manual por pase, separada de las entradas confirmadas.

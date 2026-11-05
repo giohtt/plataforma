@@ -15,6 +15,7 @@ import {
   cargarDatosPrueba,
   FACULTADES_PRUEBA,
   VISITANTES_PRUEBA,
+  DISTINTOS_PRUEBA,
   SUCURSALES_PRUEBA,
   USUARIOS_PRUEBA,
 } from "../../scripts/datos-prueba.mjs";
@@ -128,9 +129,10 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(filas.every((f) => f.bloque <= 2 && !f.es_autorizacion)).toBe(true);
       const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso).sort();
       expect(recepcion).toEqual(["sucursal.consultar", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
-      // Corregir: solo Encargado y Dirección. Fusionar e historial general no se asignan todavía.
+      // Corregir: Encargado y Dirección. Fusionar: solo Dirección. Historial general: nadie todavía.
       expect(filas.filter((f) => f.permiso === "visitante.corregir").map((f) => f.rol).sort()).toEqual(["direccion", "encargado"]);
-      expect(filas.some((f) => ["visitante.fusionar", "visitante.historial_general"].includes(f.permiso))).toBe(false);
+      expect(filas.filter((f) => f.permiso === "visitante.fusionar").map((f) => f.rol)).toEqual(["direccion"]);
+      expect(filas.some((f) => f.permiso === "visitante.historial_general")).toBe(false);
     });
 
     it("una facultad de autorización no puede formar parte de un rol", async () => {
@@ -198,9 +200,10 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
         alcances: ALCANCES_PRUEBA.length,
         facultades: FACULTADES_PRUEBA.length,
         visitantes: VISITANTES_PRUEBA.length,
+        distintos: DISTINTOS_PRUEBA.length,
       });
       const segunda = await cargarDatosPrueba(sql, { entorno: "pruebas" });
-      expect(segunda).toEqual({ sucursales: 0, usuarios: 0, asignaciones: 0, alcances: 0, facultades: 0, visitantes: 0 });
+      expect(segunda).toEqual({ sucursales: 0, usuarios: 0, asignaciones: 0, alcances: 0, facultades: 0, visitantes: 0, distintos: 0 });
 
       const [{ n }] = await sql`select count(*)::int as n from usuario where es_prueba`;
       expect(n).toBe(USUARIOS_PRUEBA.length);
