@@ -61,19 +61,22 @@ Confirmados el 4 nov 2026.
 - **Pendiente antes de capturar datos reales:** campos obligatorios y quién puede ver el teléfono completo (hoy, opción A provisional: solo el nombre es obligatorio y el teléfono se enmascara para todos), además del aviso de privacidad y la conservación de datos (decisión 3). El umbral de «nombre muy parecido» (70 %) también es provisional.
 - **Se retoma en el bloque 4:** qué historial de otras sucursales ve Recepción.
 
-### Bloque 3. Apertura de turno y lugares de efectivo (en curso, solo datos ficticios)
+### Bloque 3. Apertura de turno y lugares de efectivo (cerrado para el entorno de pruebas el 4 nov 2026)
 1. Turno de recepción por sucursal y usuario.
 2. **Bolsa de visitas** y **cajón de mensualidades** como lugares de efectivo separados, con responsable por periodo (pueden ser la misma persona o distintas).
-3. Apertura con importe contado y relación con la entrega del turno anterior.
+3. Apertura con importe contado. ~~Relación con la entrega del turno anterior~~: pasa al bloque 5, junto con la entrega entre turnos y el cierre.
 4. Cajón de mensualidades marcado **«no conciliado: faltan datos de Open Desk»**.
-5. No se abre turno en una sucursal inactiva (comprobado en el servidor, también por solicitud directa).
+5. No se abre turno en una sucursal inactiva (comprobado en el servidor, también por solicitud directa). Hecho, con prueba automática.
    - **~~Primer paso: apertura de turno.~~ Hecho. Probado en el sitio el 4 nov 2026 con Recepción Tenango:** sin escribir nada pidió llenar ambos totales; se abrió el turno con $0 en la bolsa y $1,200 en el cajón (cantidades ficticias), mostrados por separado, con la misma recepcionista como responsable de ambos y el cajón «No conciliado: faltan datos de Open Desk». El turno ficticio de Tenango queda abierto hasta que exista el cierre (bloque 5). Detalle: un solo turno de Recepción abierto a la vez por sucursal, validado en el servidor y por la base (también con dos aperturas simultáneas). Al abrir se registra solo el total contado de la bolsa de visitas y del cajón de mensualidades, por separado, sin fondo fijo ni desglose; $0 es válido y un campo vacío no. Se registra por separado quién es responsable de cada lugar. El cajón muestra «No conciliado: faltan datos de Open Desk». Abrir no registra cobros ni movimientos. La entrega entre turnos es del bloque 5.
    - **Provisional:** quien abre queda como responsable de la bolsa y del cajón (falta confirmar si siempre es la misma persona). Abre turno solo Recepción; consultan Recepción, Encargado, Administración y Dirección.
-- **Reporte básico:** turnos abiertos y responsables de cada lugar de efectivo. En revisión (`/reportes/turnos`): por sucursal, fecha y hora de apertura, quién abrió y responsable de la bolsa y del cajón por separado; solo consulta para Encargado, Administración y Dirección en sus sucursales (permiso `reporte.turnos`). Recepción sigue viendo su turno, pero no el reporte.
+- **Reporte básico:** turnos abiertos y responsables de cada lugar de efectivo. Hecho (`/reportes/turnos`): por sucursal, fecha y hora de apertura, quién abrió y responsable de la bolsa y del cajón por separado; solo consulta para Encargado, Administración y Dirección en sus sucursales (permiso `reporte.turnos`). Recepción sigue viendo su turno, pero no el reporte. **Probado en el sitio el 4 nov 2026 con el turno ficticio de Tenango:** Encargado Tenango vio 1 turno abierto (Tenango, 4 nov 2026, 7:58 p.m., abierto por Recepción Tenango, responsable de la bolsa y del cajón en columnas separadas); Administración (Tenango y Santiago) vio además Santiago «Sin turno abierto»; Recepción Tenango vio su turno ($0.00 en la bolsa, $1,200.00 en el cajón, «No conciliado: faltan datos de Open Desk») y recibió «No encontrada» al abrir el reporte por enlace directo.
+- **Cierre para el entorno de pruebas:** funciona con reglas provisionales y solo con datos ficticios.
+- **Siguen provisionales:** que la misma recepcionista sea responsable de la bolsa y del cajón; que solo Recepción abra turnos; el horario real de los turnos (sin confirmar).
+- **Pasan al bloque 5:** la entrega entre turnos (y su relación con la apertura) y el cierre de turno. El turno ficticio de Tenango sigue abierto hasta entonces.
 - **Decisiones que necesita:** si una misma recepcionista custodia siempre ambos lugares (el diseño admite las dos opciones).
 
 ### Bloque 4. Visitas, cobros y movimientos de efectivo
-1. Operación individual y grupal: un cobro, un pase por visitante, cada uno ligado a su expediente.
+1. Operación individual y grupal: un cobro, un pase por visitante, cada uno ligado a su expediente. En el registro grupal, un pase por persona y un total para el grupo. Primero se revisa el ejemplo individual.
    - Una sola ficha por visitante para todo Fitnessland: en otra sucursal, Recepción busca y usa esa misma ficha. Cada visita guarda la **sucursal donde ocurrió**, aunque la ficha se haya creado en otra.
    - Las visitas de una ficha unida se muestran en la ficha activa.
 2. Formas de pago con los estados acordados; el efectivo entra a la bolsa del turno; tarjeta y transferencia no aumentan el efectivo.
