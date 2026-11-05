@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { abrirTurno, estadoTurno } from "@/lib/turnos";
-import { confirmarVisita, impedimentoRegistroVisita, pantallaCobro, visitasDelTurno } from "@/lib/visitas";
+import { cobrosDelTurno, confirmarVisita, detalleCobro, impedimentoRegistroVisita, pantallaCobro, visitasDeHoy } from "@/lib/visitas";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
 
@@ -53,15 +53,15 @@ const conteos = async (codigo: string) => {
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const revisar = (u: string, codigo: string, _visitanteId?: string) => pantallaCobro(sql, u, codigo, "pruebas");
 /** Lo que envía la pantalla al confirmar: una clave nueva, el turno mostrado, la ficha y lo recibido. */
-async function revisada(u: string, codigo: string, visitanteId: string, recibido: string | null = null, cambio: string | null = null) {
+async function revisada(u: string, codigo: string, visitantes: string | string[], recibido: string | null = null, cambio: string | null = null) {
   const p = await revisar(u, codigo);
   if (!p.ok) throw new Error(p.error);
-  return { clave: randomUUID(), turnoId: p.turnoId, visitante: { id: visitanteId }, recibido, cambio };
+  return { clave: randomUUID(), turnoId: p.turnoId, visitanteIds: ([] as string[]).concat(visitantes), recibido, cambio };
 }
-const confirmar = (u: string, codigo: string, r: { clave: string; turnoId: string; visitante: { id: string }; recibido: string | null; cambio: string | null }) =>
-  confirmarVisita(sql, u, codigo, { clave: r.clave, turnoId: r.turnoId, visitanteId: r.visitante.id, recibido: r.recibido, cambio: r.cambio }, PRUEBAS);
+type Envio = Awaited<ReturnType<typeof revisada>>;
+const confirmar = (u: string, codigo: string, r: Envio) => confirmarVisita(sql, u, codigo, r, PRUEBAS);
 
-describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
+describe.skipIf(!URL_ADMIN)("cobro de visitas en efectivo: individual y grupal", () => {
   beforeAll(async () => {
     ({ sql, cerrar } = await crearBaseTemporal({ conexiones: 6 }));
     await cargarDatosPrueba(sql, { entorno: "pruebas" });
@@ -82,7 +82,7 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
       const { codigo, recep, turnoId } = await escenario();
       const v = await ficha();
       const c = await confirmar(recep, codigo, await revisada(recep, codigo, v));
-      expect(c).toMatchObject({ ok: true, repetida: false, cobro: { total: "50.00", recibido: null, cambio: null } });
+      expect(c).toMatchObject({ ok: true, repetida: false, cobro: { personas: 1, total: "50.00", recibido: null, cambio: null } });
       expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 1, movimientos: 1, suma: "50.00" });
 
       const [p] = await sql`select p.visitante_id, p.sucursal_id, p.tarifa::text, p.descuento::text, p.total::text from pase_visita p
@@ -97,11 +97,11 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
 
       // La bolsa: contado al abrir $0 + $50 = $50 esperado. El cajón no cambia y su esperado no se calcula.
       const e = (await estadoTurno(sql, recep, codigo))!;
-      expect(e.turno!.lugares.map((l) => [l.tipo, l.contadoAlAbrir, l.entradas, l.cantidadEntradas, l.esperado])).toEqual([
-        ["bolsa_visitas", "0.00", "50.00", 1, "50.00"],
-        ["cajon_mensualidades", "1200.00", "0.00", 0, null],
+      expect(e.turno!.lugares.map((l) => [l.tipo, l.contadoAlAbrir, l.entradas, l.cantidadEntradas, l.visitasEntradas, l.esperado])).toEqual([
+        ["bolsa_visitas", "0.00", "50.00", 1, 1, "50.00"],
+        ["cajon_mensualidades", "1200.00", "0.00", 0, 0, null],
       ]);
-      expect((await visitasDelTurno(sql, turnoId)).map((x) => [x.total, x.formaPago])).toEqual([["50.00", "efectivo"]]);
+      expect((await cobrosDelTurno(sql, turnoId)).map((x) => [x.personas, x.total, x.formaPago])).toEqual([[1, "50.00", "efectivo"]]);
     });
 
     it("con $100 recibidos: cambio de $50 guardado en el cobro; a la bolsa entran solo $50", async () => {
@@ -115,12 +115,41 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
 
     it("la base rechaza un cobro con lo recibido menor que el total o un cambio mal calculado", async () => {
       const { codigo, recep, turnoId } = await escenario();
-      const [o] = await sql`insert into operacion_visita (clave, sucursal_id, turno_id, registrada_por, total)
-                            values (${randomUUID()}, ${ids[codigo]}, ${turnoId}, ${recep}, 50) returning id`;
       for (const [recibido, cambio] of [["20.00", "0.00"], ["100.00", "40.00"], ["100.00", null]]) {
-        await expect(sql`insert into cobro_visita (operacion_id, forma_pago, estado, importe, recibido, cambio)
-                         values (${o.id}, 'efectivo', 'confirmado', 50, ${recibido}, ${cambio})`).rejects.toThrow();
+        await expect(sql.begin(async (tx) => {
+          const [o] = await tx`insert into operacion_visita (clave, sucursal_id, turno_id, registrada_por, total)
+                               values (${randomUUID()}, ${ids[codigo]}, ${turnoId}, ${recep}, 50) returning id`;
+          await tx`insert into cobro_visita (operacion_id, forma_pago, estado, importe, recibido, cambio)
+                   values (${o.id}, 'efectivo', 'confirmado', 50, ${recibido}, ${cambio})`;
+        })).rejects.toThrow();
       }
+    });
+
+    it("la base rechaza una operación que no cuadra: sin pases, pases que no suman el total o efectivo distinto", async () => {
+      const { codigo, recep, turnoId } = await escenario();
+      const v1 = await ficha();
+      const v2 = await ficha();
+      const [bolsa] = await sql`select id from lugar_efectivo where sucursal_id = ${ids[codigo]} and tipo = 'bolsa_visitas'`;
+      const intento = (pases: string[], cobro: number, efectivo: number) => sql.begin(async (tx) => {
+        const [o] = await tx`insert into operacion_visita (clave, sucursal_id, turno_id, registrada_por, total)
+                             values (${randomUUID()}, ${ids[codigo]}, ${turnoId}, ${recep}, 100) returning id`;
+        const [c] = await tx`insert into cobro_visita (operacion_id, forma_pago, estado, importe)
+                             values (${o.id}, 'efectivo', 'confirmado', ${cobro}) returning id`;
+        for (const [i, v] of pases.entries()) {
+          await tx`insert into pase_visita (operacion_id, visitante_id, sucursal_id, tarifa, descuento, total, orden)
+                   values (${o.id}, ${v}, ${ids[codigo]}, 50, 0, 50, ${i + 1})`;
+        }
+        await tx`insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, cobro_id, responsable_id, registrado_por)
+                 values (${bolsa.id}, ${turnoId}, 'entrada_cobro_visita', ${efectivo}, ${c.id}, ${recep}, ${recep})`;
+      });
+      await expect(intento([], 100, 100)).rejects.toThrow(/no cuadra/);
+      await expect(intento([v1], 100, 100)).rejects.toThrow(/no cuadra/);
+      await expect(intento([v1, v2], 50, 100)).rejects.toThrow(/no cuadra/);
+      await expect(intento([v1, v2], 100, 50)).rejects.toThrow(/no cuadra/);
+      await expect(intento([v1, v1], 100, 100)).rejects.toThrow();
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 0 });
+      await intento([v1, v2], 100, 100); // cuadra
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 1, pases: 2, suma: "100.00" });
     });
   });
 
@@ -135,13 +164,29 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
       expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 1, movimientos: 1, suma: "50.00" });
     });
 
-    it("reintento tras perder la conexión, aun con otro «Recibido»: responde con el cobro ya guardado y no cobra otra vez", async () => {
+    it("reintento tras perder la conexión con los mismos datos: responde con el cobro ya guardado y no cobra otra vez", async () => {
       const { codigo, recep } = await escenario();
       const r = await revisada(recep, codigo, await ficha(), "100.00", "50.00");
       expect((await confirmar(recep, codigo, r)).ok).toBe(true); // se guardó, pero la respuesta no llegó
-      const otra = await confirmar(recep, codigo, { ...r, recibido: "200.00", cambio: "150.00" });
-      expect(otra).toMatchObject({ ok: true, repetida: true, cobro: { recibido: "100.00", cambio: "50.00" } });
+      expect(await confirmar(recep, codigo, r)).toMatchObject({ ok: true, repetida: true, cobro: { recibido: "100.00", cambio: "50.00" } });
       expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 1, movimientos: 1, suma: "50.00" });
+    });
+
+    it("la misma clave con otros datos (otro «Recibido», otras personas u otro orden) se rechaza y no guarda nada", async () => {
+      const { codigo, recep } = await escenario();
+      const [a, b, c] = [await ficha(), await ficha(), await ficha()];
+      const r = await revisada(recep, codigo, [a, b], "100.00", "0.00");
+      expect((await confirmar(recep, codigo, r)).ok).toBe(true);
+      for (const otra of [
+        { ...r, recibido: "200.00", cambio: "100.00" },
+        { ...r, recibido: null, cambio: null },
+        { ...r, visitanteIds: [a], recibido: "100.00", cambio: "50.00" },
+        { ...r, visitanteIds: [a, b, c], recibido: "150.00", cambio: "0.00" },
+        { ...r, visitanteIds: [b, a] },
+      ]) {
+        expect(await confirmar(recep, codigo, otra)).toEqual({ ok: false, error: "datos_distintos" });
+      }
+      expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 2, movimientos: 1, suma: "100.00" });
     });
 
     it("cinco envíos simultáneos de la misma confirmación (doble clic): una sola visita", async () => {
@@ -249,7 +294,7 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
       const p = await escenario();
       const rp = await revisada(p.recep, p.codigo, v);
       expect(await pantallaCobro(sql, p.recep, p.codigo, "produccion")).toEqual({ ok: false, error: "bloqueado_produccion" });
-      expect(await confirmarVisita(sql, p.recep, p.codigo, { clave: rp.clave, turnoId: rp.turnoId, visitanteId: v, recibido: null, cambio: null }, { entorno: "produccion" }))
+      expect(await confirmarVisita(sql, p.recep, p.codigo, { ...rp, visitanteIds: [v] }, { entorno: "produccion" }))
         .toEqual({ ok: false, error: "bloqueado_produccion" });
       expect(await conteos(e.codigo)).toMatchObject({ operaciones: 0 });
       expect(await conteos(p.codigo)).toMatchObject({ operaciones: 0 });
@@ -261,11 +306,115 @@ describe.skipIf(!URL_ADMIN)("visita individual de $50 en efectivo", () => {
       const unida = await ficha();
       const r = await revisada(recep, codigo, unida);
       await sql`update visitante set fusionado_en = now(), fusionado_en_id = ${activa} where id = ${unida}`;
-      expect(await confirmar(recep, codigo, r)).toEqual({ ok: false, error: "visitante_unido" });
-      expect(await confirmar(recep, codigo, await revisada(recep, codigo, unida))).toEqual({ ok: false, error: "visitante_unido" });
+      expect(await confirmar(recep, codigo, r)).toMatchObject({ ok: false, error: "visitante_unido" });
+      expect(await confirmar(recep, codigo, await revisada(recep, codigo, unida))).toMatchObject({ ok: false, error: "visitante_unido" });
       expect(await confirmar(recep, codigo, await revisada(recep, codigo, randomUUID()))).toEqual({ ok: false, error: "visitante_no_encontrado" });
       expect(await confirmar(recep, codigo, await revisada(recep, codigo, "no-es-id"))).toEqual({ ok: false, error: "visitante_no_encontrado" });
       expect(await conteos(codigo)).toMatchObject({ operaciones: 0 });
+    });
+  });
+
+  describe("cobro grupal", () => {
+    it("tres personas: una operación, un cobro de $150, un pase por persona y una sola entrada de $150 a la bolsa", async () => {
+      const { codigo, recep, turnoId } = await escenario();
+      const ana = await ficha("Ana Prueba Grupal");
+      const luis = await ficha("Luis Prueba Grupal");
+      const diego = await ficha("Diego Prueba Grupal");
+      const c = await confirmar(recep, codigo, await revisada(recep, codigo, [ana, luis, diego], "200.00", "50.00"));
+      expect(c).toMatchObject({
+        ok: true, repetida: false,
+        cobro: { personas: 3, visitantes: ["Ana Prueba Grupal", "Luis Prueba Grupal", "Diego Prueba Grupal"], total: "150.00", recibido: "200.00", cambio: "50.00" },
+      });
+      expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 3, movimientos: 1, suma: "150.00" });
+      const pases = await sql`select p.visitante_id, p.orden, p.total::text, p.sucursal_id from pase_visita p
+                              join operacion_visita o on o.id = p.operacion_id where o.turno_id = ${turnoId} order by p.orden`;
+      expect(pases.map((p) => [p.visitante_id, p.orden, p.total, p.sucursal_id])).toEqual([
+        [ana, 1, "50.00", ids[codigo]], [luis, 2, "50.00", ids[codigo]], [diego, 3, "50.00", ids[codigo]],
+      ]);
+      // La bolsa: 1 cobro que cubre 3 visitas; el turno lista una línea por cobro.
+      const bolsa = (await estadoTurno(sql, recep, codigo))!.turno!.lugares[0];
+      expect([bolsa.entradas, bolsa.cantidadEntradas, bolsa.visitasEntradas, bolsa.esperado]).toEqual(["150.00", 1, 3, "150.00"]);
+      expect((await cobrosDelTurno(sql, turnoId)).map((x) => [x.personas, x.total])).toEqual([[3, "150.00"]]);
+    });
+
+    it("el detalle del cobro muestra visitantes y pases con teléfono enmascarado, solo a quien ve los turnos de la sucursal", async () => {
+      const { codigo, recep } = await escenario();
+      const [a, b] = [await ficha("Primera Persona Detalle"), await ficha("Segunda Persona Detalle")];
+      const c = await confirmar(recep, codigo, await revisada(recep, codigo, [a, b]));
+      if (!c.ok) throw new Error(c.error);
+      const d = (await detalleCobro(sql, recep, codigo, c.operacionId))!;
+      expect(d).toMatchObject({ total: "100.00", entradaBolsa: "100.00", responsableBolsa: `Visita ${n}`, recibido: null });
+      expect(d.pases.map((p) => [p.orden, p.nombre, p.telefono, p.fichaDe, p.total])).toEqual([
+        [1, "Primera Persona Detalle", "•• •••• 0201", "Atlacomulco", "50.00"],
+        [2, "Segunda Persona Detalle", "•• •••• 0201", "Atlacomulco", "50.00"],
+      ]);
+      expect(JSON.stringify(d)).not.toMatch(/0000000201/);
+      const encargado = await cuenta([["encargado", codigo]]);
+      expect((await detalleCobro(sql, encargado, codigo, c.operacionId))?.pases).toHaveLength(2);
+      expect(await detalleCobro(sql, await cuenta([["encargado", "TEN"]]), codigo, c.operacionId)).toBeNull();
+      expect(await detalleCobro(sql, recep, "TEN", c.operacionId)).toBeNull();
+      expect(await detalleCobro(sql, recep, codigo, randomUUID())).toBeNull();
+    });
+
+    it("rechaza un grupo vacío, de más de 20, con alguien repetido o con lo recibido menor que el total del grupo", async () => {
+      const { codigo, recep } = await escenario();
+      const a = await ficha();
+      const veintiuno = await Promise.all(Array.from({ length: 21 }, () => ficha()));
+      expect(await confirmar(recep, codigo, await revisada(recep, codigo, []))).toEqual({ ok: false, error: "grupo_vacio" });
+      expect(await confirmar(recep, codigo, await revisada(recep, codigo, veintiuno))).toEqual({ ok: false, error: "grupo_grande" });
+      expect(await confirmar(recep, codigo, await revisada(recep, codigo, [a, a]))).toEqual({ ok: false, error: "persona_repetida" });
+      const [b] = [await ficha()];
+      expect(await confirmar(recep, codigo, await revisada(recep, codigo, [a, b], "50.00", "0.00"))).toEqual({ ok: false, error: "recibido_menor" });
+      expect(await confirmar(recep, codigo, await revisada(recep, codigo, [a, b], "150.00", "100.00"))).toEqual({ ok: false, error: "recibido_menor" });
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 0 });
+      // Veinte sí.
+      const c = await confirmar(recep, codigo, await revisada(recep, codigo, veintiuno.slice(0, 20)));
+      expect(c).toMatchObject({ ok: true, cobro: { personas: 20, total: "1000.00" } });
+    });
+
+    it("si una ficha del grupo se unió a otra, no se guarda nada y se indica cuál", async () => {
+      const { codigo, recep } = await escenario();
+      const a = await ficha();
+      const unida = await ficha("Ficha Que Se Unio");
+      const r = await revisada(recep, codigo, [a, unida]);
+      await sql`update visitante set fusionado_en = now(), fusionado_en_id = ${a} where id = ${unida}`;
+      expect(await confirmar(recep, codigo, r)).toEqual({ ok: false, error: "visitante_unido", detalle: "Ficha Que Se Unio" });
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 0 });
+    });
+
+    it("cinco envíos simultáneos del mismo cobro grupal: una sola operación con sus tres pases", async () => {
+      const { codigo, recep } = await escenario();
+      const r = await revisada(recep, codigo, [await ficha(), await ficha(), await ficha()]);
+      const todos = await Promise.all(Array.from({ length: 5 }, () => confirmar(recep, codigo, r)));
+      expect(todos.every((x) => x.ok)).toBe(true);
+      expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 3, movimientos: 1, suma: "150.00" });
+    });
+  });
+
+  describe("aviso de visita registrada hoy", () => {
+    it("indica quién ya tiene visita hoy, en esta u otra sucursal, también por una ficha unida; no bloquea", async () => {
+      const { codigo, recep } = await escenario();
+      const otra = await escenario();
+      const [aqui, alla, nueva, absorbida] = [await ficha(), await ficha(), await ficha(), await ficha()];
+      expect((await confirmar(recep, codigo, await revisada(recep, codigo, aqui))).ok).toBe(true);
+      expect((await confirmar(otra.recep, otra.codigo, await revisada(otra.recep, otra.codigo, [alla, absorbida]))).ok).toBe(true);
+      await sql`update visitante set fusionado_en = now(), fusionado_en_id = ${nueva} where id = ${absorbida}`;
+      const r = await visitasDeHoy(sql, recep, codigo, [aqui, alla, nueva, randomUUID()]);
+      const por = Object.fromEntries(r!.map((x) => [x.id, [x.visitasHoy, x.enEstaSucursal]]));
+      expect(por[aqui]).toEqual([1, true]);
+      expect(por[alla]).toEqual([1, false]);
+      expect(por[nueva]).toEqual([1, false]); // por la ficha que se le unió
+      // No bloquea: se puede cobrar otra visita (la regla de reingreso está pendiente).
+      expect((await confirmar(recep, codigo, await revisada(recep, codigo, aqui))).ok).toBe(true);
+      // Una visita de ayer no cuenta.
+      const ayer = await ficha();
+      expect((await confirmar(recep, codigo, await revisada(recep, codigo, ayer))).ok).toBe(true);
+      await sql`alter table pase_visita disable trigger pase_visita_inmutable`;
+      await sql`update pase_visita set creado_en = now() - interval '1 day' where visitante_id = ${ayer}`;
+      await sql`alter table pase_visita enable trigger pase_visita_inmutable`;
+      expect((await visitasDeHoy(sql, recep, codigo, [ayer]))![0].visitasHoy).toBe(0);
+      // Sin permiso de registrar visitas en la sucursal: null.
+      expect(await visitasDeHoy(sql, await cuenta([["encargado", codigo]]), codigo, [aqui])).toBeNull();
     });
   });
 

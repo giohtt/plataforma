@@ -8,14 +8,22 @@
  */
 import { leerImporte } from "@/lib/datos-turno";
 
+const centavos = (importe: string) => Math.round(Number(importe) * 100);
+const pesos = (c: number) => (c / 100).toFixed(2);
+
 export const TARIFA_VISITA = "50.00";
+
+/** Máximo PROVISIONAL de personas en un mismo cobro (indicado el 5 nov 2026). */
+export const MAXIMO_PERSONAS = 20;
+
+/** Total de un cobro de `personas` visitas a la tarifa base. */
+export function totalVisitas(personas: number): string {
+  return pesos(centavos(TARIFA_VISITA) * personas);
+}
 
 export type Recibido =
   | { ok: true; recibido: string | null; cambio: string | null }
   | { ok: false; motivo: "formato" | "maximo" | "menor" };
-
-const centavos = (importe: string) => Math.round(Number(importe) * 100);
-const pesos = (c: number) => (c / 100).toFixed(2);
 
 /** Vacío = no lo escribió (se puede confirmar). Con valor: debe cubrir el total. */
 export function leerRecibido(entrada: unknown, total: string = TARIFA_VISITA): Recibido {
@@ -26,8 +34,15 @@ export function leerRecibido(entrada: unknown, total: string = TARIFA_VISITA): R
   return { ok: true, recibido: r.valor, cambio: pesos(cambio) };
 }
 
+/** Mensaje de «menor» con el total a la vista: «… menor que el total ($150.00) …». */
+export function mensajeRecibido(motivo: "formato" | "maximo" | "menor", total: string = TARIFA_VISITA): string {
+  if (motivo !== "menor") return MENSAJES_RECIBIDO[motivo];
+  const t = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(total));
+  return `Lo recibido es menor que el total (${t}). No se puede confirmar así.`;
+}
+
 export const MENSAJES_RECIBIDO = {
   formato: "Escribe solo la cantidad en pesos, por ejemplo 100, o deja el campo vacío.",
   maximo: "La cantidad es demasiado alta. Revísala.",
-  menor: "Lo recibido es menor que el total de la visita ($50.00). No se puede confirmar así.",
+  menor: "Lo recibido es menor que el total. No se puede confirmar así.",
 } as const;

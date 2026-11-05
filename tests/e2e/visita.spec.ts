@@ -79,18 +79,18 @@ const conteos = async (codigo: string) => {
   return r;
 };
 
-/** Desde el turno: Registrar visita → buscar → Elegir. Deja la pantalla de cobro con la ficha elegida. */
+/** Desde el turno: Registrar visita → buscar → Agregar. Deja la pantalla de cobro con la ficha en el grupo. */
 async function elegir(page: Page, codigo: string, nombre: string) {
   await page.goto(`/sucursales/${codigo}/turno`);
   await page.getByRole("link", { name: "Registrar visita" }).click();
   await expect(page).toHaveURL(new RegExp(`/sucursales/${codigo}/turno/visita$`));
   await lista(page);
-  await page.getByLabel(/Busca la ficha del visitante/).fill(nombre);
+  await page.getByLabel(/nombre completo o teléfono/).fill(nombre);
   await page.getByRole("button", { name: "Buscar" }).click();
-  await page.getByTestId("visitante").filter({ hasText: nombre }).getByRole("button", { name: "Elegir" }).click();
+  await page.getByTestId("visitante").filter({ hasText: nombre }).getByRole("button", { name: "Agregar" }).click();
   await expect(page.getByTestId("datos-cobro")).toContainText(nombre);
 }
-const confirmar = (page: Page) => page.getByRole("button", { name: "Confirmar cobro · $50.00" });
+const confirmar = (page: Page, total = "$50.00") => page.getByRole("button", { name: `Confirmar cobro · ${total}` });
 const aviso = (page: Page) => page.locator("[data-testid=datos-cobro] [role=alert]");
 /** Intercepta solo el envío del cobro (lleva la clave), no la búsqueda. */
 const esCobro = (route: Route) => route.request().method() === "POST" && (route.request().postData() ?? "").includes("clave");
@@ -103,11 +103,11 @@ test("una sola pantalla: Recibido $100 muestra $50 de cambio ahí mismo; se regi
   await expect(pantalla).toContainText(`•• •••• ${e.telefono.slice(6)}`);
   await expect(pantalla).toContainText(`Visitas ${e.codigo}`);
   await expect(page.getByTestId("total")).toHaveText("$50.00 en efectivo");
-  await expect(pantalla.getByRole("button")).toHaveText([/Confirmar cobro · \$50\.00/, "Cambiar visitante"]);
+  await expect(pantalla.getByRole("button")).toHaveText(["Quitar", /Confirmar cobro · \$50\.00/, "Empezar de nuevo"]);
 
   // Menos que el total: el error aparece junto al campo y no deja confirmar.
   await page.getByLabel("Recibido (opcional)").fill("20");
-  await expect(page.locator("#recibido-error")).toHaveText("Lo recibido es menor que el total de la visita ($50.00). No se puede confirmar así.");
+  await expect(page.locator("#recibido-error")).toHaveText("Lo recibido es menor que el total ($50.00). No se puede confirmar así.");
   await expect(page.getByLabel("Recibido (opcional)")).toHaveAttribute("aria-invalid", "true");
   await expect(confirmar(page)).toBeDisabled();
 
@@ -132,6 +132,7 @@ test("una sola pantalla: Recibido $100 muestra $50 de cambio ahí mismo; se regi
   // «Nueva visita» deja la búsqueda vacía para el siguiente visitante.
   await listo.getByRole("button", { name: "Nueva visita" }).click();
   await expect(page.getByLabel(/Busca la ficha del visitante/)).toHaveValue("");
+  await expect(page.getByTestId("datos-cobro")).toHaveCount(0);
   await expect(page.getByTestId("resultados")).toHaveCount(0);
 
   // En el turno: la bolsa suma los $50; el cajón queda igual y sin efectivo esperado calculado.
@@ -143,8 +144,9 @@ test("una sola pantalla: Recibido $100 muestra $50 de cambio ahí mismo; se regi
   const cajon = page.getByTestId("lugar-cajon_mensualidades");
   await expect(cajon.getByTestId("contado-al-abrir")).toHaveText("$1,200.00");
   await expect(cajon.getByTestId("esperado")).toHaveText("No calculado: faltan datos de Open Desk");
-  await expect(page.getByTestId("visita-turno")).toHaveCount(1);
-  await expect(page.getByTestId("visita-turno")).toContainText(`${e.nombre} ·`);
+  await expect(bolsa).toContainText("Cobros de visitas en efectivo (1 cobro · 1 visita)");
+  await expect(page.getByTestId("cobro-turno")).toHaveCount(1);
+  await expect(page.getByTestId("cobro-turno")).toContainText("1 persona · $50.00 en efectivo");
 });
 
 test("sin escribir lo recibido también se registra el cobro de $50", async ({ page }) => {
@@ -170,7 +172,7 @@ test("si lo recibido llega al servidor menor que el total, se rechaza y el error
     await route.continue({ postData: cuerpo });
   });
   await confirmar(page).click();
-  await expect(page.locator("#recibido-error")).toHaveText("Lo recibido es menor que el total de la visita ($50.00). No se puede confirmar así.");
+  await expect(page.locator("#recibido-error")).toHaveText("Lo recibido es menor que el total ($50.00). No se puede confirmar así.");
   expect(await conteos(e.codigo)).toMatchObject({ operaciones: 0, movimientos: 0 });
 });
 
@@ -196,7 +198,7 @@ test("se pierde la conexión después de guardar: al reintentar muestra «Cobro 
   });
   await confirmar(page).click();
   await expect(aviso(page)).toHaveText(
-    "Se perdió la conexión y no sabemos si el cobro se guardó. Vuelve a tocar «Confirmar cobro»: si ya se había guardado, no se cobrará dos veces.");
+    "Se perdió la conexión y no sabemos si el cobro se guardó. Vuelve a tocar «Confirmar cobro»: si ya se había guardado, no se cobrará dos veces. Mientras tanto no se puede cambiar el grupo ni lo recibido.");
   expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 1, movimientos: 1, suma: "50.00" });
 
   await confirmar(page).click();
@@ -264,4 +266,185 @@ test("si el turno cambia mientras se cobra, no se guarda nada", async ({ page })
   await expect(aviso(page)).toHaveText(
     "El turno cambió mientras cobrabas. No se guardó nada: vuelve a abrir «Registrar visita» desde el turno.");
   expect(await conteos(e.codigo)).toMatchObject({ operaciones: 0, movimientos: 0 });
+});
+
+// ---------------------------------------------------------------------------
+// Cobro grupal
+// ---------------------------------------------------------------------------
+
+/** Tres fichas ficticias que comparten teléfono (como Ana, Luis y Diego), sin visitas registradas hoy. */
+async function tresQueCompartenTelefono() {
+  const telefono = "000" + String(Math.floor(Math.random() * 1e7)).padStart(7, "0");
+  const apellidos = `${nombrePropio()} ${nombrePropio()}`;
+  const nombres = [`${nombrePropio()} ${apellidos}`, `${nombrePropio()} ${apellidos}`, `${nombrePropio()} ${apellidos}`];
+  for (const n of nombres) {
+    await sql`insert into visitante (nombre, telefono, sucursal_alta_id) select ${n}, ${telefono}, id from sucursal where codigo = 'TEN'`;
+  }
+  return { telefono, nombres };
+}
+async function buscar(page: Page, texto: string) {
+  await page.getByLabel(/nombre completo o teléfono/).fill(texto);
+  await page.getByRole("button", { name: "Buscar" }).click();
+  await expect(page.getByTestId("resultados")).toBeVisible();
+}
+const tarjeta = (page: Page, nombre: string) => page.getByTestId("resultados").getByTestId("visitante").filter({ hasText: nombre });
+async function abrirCobro(page: Page, codigo: string) {
+  await page.goto(`/sucursales/${codigo}/turno/visita`);
+  await lista(page);
+}
+
+test("grupo de tres: sin repetir, quitar y volver a agregar; total $150, cambio de $50 y una sola entrada de $150", async ({ page }) => {
+  const e = await escenario();
+  const g = await tresQueCompartenTelefono();
+  await entrar(page, e.recep.correo);
+  await abrirCobro(page, e.codigo);
+  await buscar(page, g.telefono);
+  for (const n of g.nombres) await tarjeta(page, n).getByRole("button", { name: "Agregar" }).click();
+  await expect(page.getByTestId("en-grupo")).toHaveCount(3);
+  // La misma persona no se agrega dos veces.
+  for (const n of g.nombres) await expect(tarjeta(page, n).getByRole("button", { name: "Ya está en el grupo" })).toBeDisabled();
+  await expect(page.getByTestId("total")).toHaveText("$150.00 en efectivo (3 × $50.00)");
+
+  // Quitar antes de confirmar recalcula el total; se puede volver a agregar.
+  await page.getByRole("button", { name: `Quitar a ${g.nombres[1]}` }).click();
+  await expect(page.getByTestId("en-grupo")).toHaveCount(2);
+  await expect(page.getByTestId("total")).toHaveText("$100.00 en efectivo (2 × $50.00)");
+  await expect(confirmar(page, "$100.00")).toBeVisible();
+  await tarjeta(page, g.nombres[1]).getByRole("button", { name: "Agregar" }).click();
+  await expect(page.getByTestId("total")).toHaveText("$150.00 en efectivo (3 × $50.00)");
+
+  await page.getByLabel("Recibido (opcional)").fill("100");
+  await expect(page.locator("#recibido-error")).toHaveText("Lo recibido es menor que el total ($150.00). No se puede confirmar así.");
+  await expect(confirmar(page, "$150.00")).toBeDisabled();
+  await page.getByLabel("Recibido (opcional)").fill("200");
+  await expect(page.getByTestId("cambio")).toHaveText("Cambio: $50.00");
+  await expect(page.getByTestId("aviso-visita-hoy")).toHaveCount(0);
+  expect(page.url()).not.toContain(g.telefono);
+
+  await confirmar(page, "$150.00").click();
+  const listo = page.getByTestId("cobro-registrado");
+  await expect(listo.getByRole("heading")).toHaveText("Cobro registrado");
+  await expect(listo).toContainText("3 personas");
+  await expect(page.getByTestId("registrados").locator("li")).toHaveText([g.nombres[0], g.nombres[2], g.nombres[1]]);
+  await expect(page.getByTestId("cambio-registrado")).toHaveText("$50.00");
+  await expect(page.getByTestId("bolsa-registrado")).toHaveText("$150.00");
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 3, movimientos: 1, suma: "150.00" });
+
+  // En el turno: una línea por cobro, con acceso al detalle de visitantes y pases.
+  await listo.getByRole("link", { name: "Ver el turno" }).click();
+  await expect(page.getByTestId("lugar-bolsa_visitas")).toContainText("Cobros de visitas en efectivo (1 cobro · 3 visitas)");
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText("$150.00");
+  await expect(page.getByTestId("cobro-turno")).toHaveCount(1);
+  await expect(page.getByTestId("cobro-turno")).toContainText("3 personas · $150.00 en efectivo");
+  await page.getByTestId("cobro-turno").getByRole("link", { name: "Ver detalle" }).click();
+  await expect(page.getByTestId("detalle-total")).toHaveText("$150.00");
+  await expect(page.getByTestId("detalle-bolsa")).toContainText("$150.00");
+  await expect(page.getByTestId("pase")).toHaveCount(3);
+  await expect(page.getByTestId("pase").first()).toContainText(`1. ${g.nombres[0]}`);
+  await expect(page.getByTestId("detalle-pases")).toContainText(`•• •••• ${g.telefono.slice(6)}`);
+  await expect(page.getByTestId("detalle-pases")).not.toContainText(g.telefono);
+});
+
+test("crear una ficha desde la misma pantalla conserva el grupo; una coincidencia se puede agregar sin crear otra", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  await expect(page.getByTestId("en-grupo")).toHaveCount(1);
+
+  // Ficha nueva sin coincidencias: se crea y entra al grupo.
+  const nuevo = `${nombrePropio()} ${nombrePropio()} ${nombrePropio()}`;
+  await buscar(page, nuevo);
+  await page.getByTestId("crear-visitante").click();
+  await expect(page.getByTestId("alta-visitante")).toContainText("El grupo que ya armaste se conserva.");
+  await expect(page.getByLabel("Nombre completo")).toHaveValue(nuevo);
+  await page.getByRole("button", { name: "Crear expediente" }).click();
+  await expect(page.getByTestId("en-grupo")).toHaveCount(2);
+  await expect(page.getByTestId("en-grupo").nth(1)).toContainText(nuevo);
+  await expect(page.getByTestId("alta-visitante")).toHaveCount(0);
+  expect((await sql`select count(*)::int as n from visitante where nombre = ${nuevo}`)[0].n).toBe(1);
+
+  // Intentar crear de nuevo a la primera persona: aparece la coincidencia y se agrega esa ficha, sin crear otra.
+  const otra = await tresQueCompartenTelefono();
+  await buscar(page, `${nombrePropio()} ${nombrePropio()}`);
+  await page.getByTestId("crear-visitante").click();
+  await lista(page);
+  await page.getByLabel("Nombre completo").fill(otra.nombres[0]);
+  await page.getByRole("button", { name: "Crear expediente" }).click();
+  const coincidencia = page.getByTestId("coincidencias").getByTestId("visitante").filter({ hasText: otra.nombres[0] });
+  await coincidencia.getByRole("button", { name: "Agregar" }).click();
+  await expect(page.getByTestId("en-grupo")).toHaveCount(3);
+  expect((await sql`select count(*)::int as n from visitante where nombre = ${otra.nombres[0]}`)[0].n).toBe(1);
+
+  await confirmar(page, "$150.00").click();
+  await expect(page.getByTestId("cobro-registrado")).toContainText("3 personas");
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 3, movimientos: 1, suma: "150.00" });
+});
+
+test("si alguien del grupo ya tiene una visita hoy, se avisa antes de confirmar (sin bloquear)", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.recep.correo);
+  await elegir(page, e.codigo, e.nombre);
+  await expect(page.getByTestId("visita-hoy")).toHaveCount(0);
+  await confirmar(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toBeVisible();
+
+  await page.getByRole("button", { name: "Nueva visita" }).click();
+  await buscar(page, e.nombre);
+  await tarjeta(page, e.nombre).getByRole("button", { name: "Agregar" }).click();
+  await expect(page.getByTestId("visita-hoy")).toHaveText(`Ya tiene una visita registrada hoy en Visitas ${e.codigo}`);
+  await expect(page.getByTestId("aviso-visita-hoy")).toContainText(`${e.nombre} ya tiene una visita registrada hoy. La regla de reingreso está pendiente`);
+  await expect(confirmar(page)).toBeEnabled();
+});
+
+test("grupo: se pierde la conexión después de guardar; el grupo y lo recibido quedan fijos y el reintento no cobra dos veces", async ({ page }) => {
+  const e = await escenario();
+  const g = await tresQueCompartenTelefono();
+  await entrar(page, e.recep.correo);
+  await abrirCobro(page, e.codigo);
+  await buscar(page, g.telefono);
+  for (const n of g.nombres) await tarjeta(page, n).getByRole("button", { name: "Agregar" }).click();
+  await page.getByLabel("Recibido (opcional)").fill("200");
+  let cortes = 0;
+  await page.route("**/*", async (route) => {
+    if (!esCobro(route) || cortes > 0) return route.continue();
+    cortes++;
+    await route.fetch();
+    await route.abort("internetdisconnected");
+  });
+  await confirmar(page, "$150.00").click();
+  await expect(aviso(page)).toContainText("Mientras tanto no se puede cambiar el grupo ni lo recibido.");
+  await expect(page.getByRole("button", { name: /^Quitar a / }).first()).toBeDisabled();
+  await expect(page.getByLabel("Recibido (opcional)")).toHaveAttribute("readonly", "");
+  await expect(page.getByRole("button", { name: "Buscar" })).toBeDisabled();
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 3, movimientos: 1, suma: "150.00" });
+
+  await confirmar(page, "$150.00").click();
+  await expect(page.getByTestId("cobro-registrado")).toContainText("3 personas");
+  await expect(page.getByTestId("cambio-registrado")).toHaveText("$50.00");
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 3, movimientos: 1, suma: "150.00" });
+});
+
+test("la misma clave enviada con otro grupo se rechaza en el servidor", async ({ page }) => {
+  const e = await escenario();
+  const g = await tresQueCompartenTelefono();
+  await entrar(page, e.recep.correo);
+  await abrirCobro(page, e.codigo);
+  await buscar(page, g.telefono);
+  for (const n of g.nombres) await tarjeta(page, n).getByRole("button", { name: "Agregar" }).click();
+  // Primer envío: se guarda pero la respuesta no llega. El reintento se altera en el camino: sin la tercera persona.
+  let envios = 0;
+  await page.route("**/*", async (route) => {
+    if (!esCobro(route)) return route.continue();
+    envios++;
+    if (envios === 1) { await route.fetch(); return route.abort("internetdisconnected"); }
+    const partes = (route.request().postData() ?? "").split(/(?=------)/);
+    let vistos = 0;
+    const cuerpo = partes.filter((p) => !(p.includes('visitanteId"') && ++vistos === 3)).join("");
+    await route.continue({ postData: cuerpo });
+  });
+  await confirmar(page, "$150.00").click();
+  await expect(aviso(page)).toContainText("Se perdió la conexión");
+  await confirmar(page, "$150.00").click();
+  await expect(aviso(page)).toHaveText("Este cobro ya se había enviado con otras personas o con otro importe recibido. No se guardó nada.");
+  expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 3, movimientos: 1, suma: "150.00" });
 });
