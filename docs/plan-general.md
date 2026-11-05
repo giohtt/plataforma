@@ -123,8 +123,9 @@ Confirmados el 4 nov 2026.
 2. Cálculo de elegibilidad con motivo, como función probada aparte.
 3. Aplicación en el registro: tarifa original, descuento, total y versión; pases gratuitos sin cobro ficticio.
 4. Pronto pago: beneficios y pases de cortesía con canje único; solo datos de prueba hasta decidir la fuente del pago.
-- **Reporte básico:** pases por promoción; pases de cortesía otorgados, usados y disponibles.
-- **Decisiones que necesita:** definición comercial de visitante nuevo (decisión 1); fuente del pago (decisión 2); historial anterior (decisión 4).
+5. **[Propuesta, no aprobada]** Programa de fidelidad: por cada cinco visitas pagadas que cumplan las reglas, una visita gratis, ligada a la ficha global y sin depender de Wallet. Recepción ve el avance y las cortesías al registrar una visita. Las cortesías no acumulan; tarjeta y transferencia cuentan según su estado de confirmación. Diseño y pendientes en [`propuesta-fidelidad.md`](propuesta-fidelidad.md).
+- **Reporte básico:** pases por promoción; pases de cortesía otorgados, usados y disponibles; recompensas de fidelidad generadas, canjeadas y vencidas (si se aprueba).
+- **Decisiones que necesita:** definición comercial de visitante nuevo (decisión 1); fuente del pago (decisión 2); historial anterior (decisión 4). Para fidelidad: sucursales participantes, fecha desde la que acumula, vigencia de las recompensas y pagos devueltos o cancelados (F1 a F4 de la propuesta).
 
 ### Bloque 8. Pases QR e integraciones
 1. Generación del código opaco, estados, vigencia, sucursales y cancelación; presentación en pantalla; reintentos sin duplicar.
@@ -134,6 +135,7 @@ Confirmados el 4 nov 2026.
 - **Decisiones que necesita:** canal de envío (decisión 5); respuestas del proveedor del lector; regla de acceso con transferencia sin abono verificado.
 
 ### Después
+- **Apple Wallet y Google Wallet** (integración posterior al bloque 8): mostrar la tarjeta de fidelidad y encontrar la ficha del visitante con un QR. No será requisito para acumular ni canjear. Puede tener costo: se avisará antes de contratar.
 Reportes avanzados de visitantes (nuevos y recurrentes, frecuencia, comparaciones), contabilidad y los demás módulos de la visión completa.
 
 ## Las cinco decisiones pendientes
