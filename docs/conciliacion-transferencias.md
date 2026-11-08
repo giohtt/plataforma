@@ -88,3 +88,20 @@ acceso.
 - Un folio repetido en distinta fecha o cuenta se trata como dos abonos distintos.
 - Sin permiso, o habiendo registrado el cobro: no se carga, no se liga y no se verifica, tampoco por solicitud
   directa.
+
+## 7. Confirmación automática: opciones revisadas el 8 nov 2026
+
+**Decisión [Indicado, 8 nov 2026]:** no contratar por ahora un procesador de pagos ni un servicio adicional de
+Banorte. Se mantienen el registro de transferencias y la verificación manual. La confirmación automática queda
+**pendiente** hasta encontrar una forma confiable de comprobar el abono con las cuentas actuales.
+
+| Opción | Qué se comprobó | Estado |
+|---|---|---|
+| **CEP de Banxico, consulta individual** | Prueba manual con un SPEI real recibido en la cuenta de Tenango, sin guardar sus datos. La consulta del estado del pago no valida la cuenta. **Al descargar el CEP con la CLABE de la cuenta, Banxico lo entregó, y con el monto cambiado a $501 no lo entregó**: cruza cuenta receptora, clave de rastreo e importe. El CEP en XML trae sello digital, fecha de operación, clave de rastreo, cuenta beneficiaria y monto, además de datos personales que **no** se guardarían. Un SPEI hecho tarde puede tener la **fecha de operación del día hábil siguiente**. | Comprobado a mano. Falta saber cómo validar el sello. |
+| **CEP de Banxico por lotes** (oficial) | Archivo TXT de hasta 500 pagos y 6 campos; devuelve un ZIP con CEP y `resumen.txt`; cubre 45 días hábiles; pide un código de seguridad al subir y al bajar. Se preparó una plantilla para probarlo con dos pagos de Tenango. | Pendiente de probar. Sería semiautomático: la plataforma genera el TXT e importa el ZIP. |
+| **CEP consultado automáticamente por el servidor** | Hay librerías de código abierto que lo hacen. No se confirmó que sea un servicio oficial ni sus condiciones de uso. | No adoptado. |
+| **Archivo de movimientos de la cuenta** (conciliación por lote) | El estado de cuenta de Banorte trae, en cada SPEI recibido, la clave de rastreo, el banco emisor, la hora, la referencia y el monto. El PDF es mensual. Los traspasos internos no traen una referencia única. La cuenta también recibe mensualidades y otros pagos. | Pendiente de saber si la banca en línea permite **descargar los movimientos a diario** (CSV o Excel). |
+| **CLABE única por cobro con un procesador** | Comisión publicada: Conekta «desde $12.50 + IVA» por transferencia (≈ 29 % de una visita de $50); Stripe «4 % + $3» + IVA, sin confirmar que aplique a SPEI nacional. El dinero pasa por el saldo del proveedor. | **Descartado por ahora** (8 nov 2026). |
+| **Servicio adicional de Banorte** (cobranza referenciada o avisos) | No se consultó. | **Descartado por ahora** (8 nov 2026). |
+
+Los traspasos que no pasan por SPEI siguen en revisión manual en cualquier opción.
