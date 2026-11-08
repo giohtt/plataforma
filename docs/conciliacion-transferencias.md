@@ -1,7 +1,8 @@
 # Conciliación de transferencias por lote
 
-Fecha: 5 de noviembre de 2026. Estado: **propuesta, no programada**. Es un paso previo al despliegue en varias
-sucursales. Convención: **[Indicado]** lo pidió Fitnessland; **[Propuesta]** diseño sugerido; **[Pendiente]** falta
+Fecha: 5 de noviembre de 2026 (actualizado el 8 nov 2026). Estado: **propuesta, no programada; opción de respaldo**.
+Requiere que una persona descargue y cargue los movimientos: **no es una confirmación completamente automática**,
+que sigue pendiente (§7). Convención: **[Indicado]** lo pidió Fitnessland; **[Propuesta]** diseño sugerido; **[Pendiente]** falta
 decidir.
 
 ## 1. Por qué
@@ -98,10 +99,14 @@ Banorte. Se mantienen el registro de transferencias y la verificación manual. L
 | Opción | Qué se comprobó | Estado |
 |---|---|---|
 | **CEP de Banxico, consulta individual** | Prueba manual con un SPEI real recibido en la cuenta de Tenango, sin guardar sus datos. La consulta del estado del pago no valida la cuenta. **Al descargar el CEP con la CLABE de la cuenta, Banxico lo entregó, y con el monto cambiado a $501 no lo entregó**: cruza cuenta receptora, clave de rastreo e importe. El CEP en XML trae sello digital, fecha de operación, clave de rastreo, cuenta beneficiaria y monto, además de datos personales que **no** se guardarían. Un SPEI hecho tarde puede tener la **fecha de operación del día hábil siguiente**. | Comprobado a mano. Falta saber cómo validar el sello. |
-| **CEP de Banxico por lotes** (oficial) | Archivo TXT de hasta 500 pagos y 6 campos; devuelve un ZIP con CEP y `resumen.txt`; cubre 45 días hábiles; pide un código de seguridad al subir y al bajar. Se preparó una plantilla para probarlo con dos pagos de Tenango. | Pendiente de probar. Sería semiautomático: la plataforma genera el TXT e importa el ZIP. |
+| **CEP de Banxico por lotes** (oficial) | Archivo TXT de hasta 500 pagos y 6 campos; devuelve un ZIP con CEP y `resumen.txt`; pide un código de seguridad al subir y al bajar. Se preparó una plantilla para probarlo con dos pagos de Tenango. El plazo de consulta no se toma como regla vigente: se confirmará al probarlo. | **Opción de respaldo, pendiente de probar. Requiere una persona**: la plataforma generaría el TXT, pero alguien lo sube a Banxico, captura el código, descarga el ZIP y lo importa. |
 | **CEP consultado automáticamente por el servidor** | Hay librerías de código abierto que lo hacen. No se confirmó que sea un servicio oficial ni sus condiciones de uso. | No adoptado. |
-| **Archivo de movimientos de la cuenta** (conciliación por lote) | El estado de cuenta de Banorte trae, en cada SPEI recibido, la clave de rastreo, el banco emisor, la hora, la referencia y el monto. El PDF es mensual. Los traspasos internos no traen una referencia única. La cuenta también recibe mensualidades y otros pagos. | Pendiente de saber si la banca en línea permite **descargar los movimientos a diario** (CSV o Excel). |
+| **Archivo de movimientos de la cuenta** (conciliación por lote) | El estado de cuenta de Banorte trae, en cada SPEI recibido, la clave de rastreo, el banco emisor, la hora, la referencia y el monto. El PDF es mensual. Los traspasos internos no traen una referencia única. La cuenta también recibe mensualidades y otros pagos. | **Opción de respaldo. Requiere una persona** que descargue y cargue el archivo; la comparación sí sería automática. Pendiente de saber si la banca en línea permite **descargar los movimientos a diario** (CSV o Excel). |
 | **CLABE única por cobro con un procesador** | Comisión publicada: Conekta «desde $12.50 + IVA» por transferencia (≈ 29 % de una visita de $50); Stripe «4 % + $3» + IVA, sin confirmar que aplique a SPEI nacional. El dinero pasa por el saldo del proveedor. | **Descartado por ahora** (8 nov 2026). |
 | **Servicio adicional de Banorte** (cobranza referenciada o avisos) | No se consultó. | **Descartado por ahora** (8 nov 2026). |
+
+**Ninguna de las opciones de respaldo es completamente automática:** el CEP por lotes y la carga de movimientos
+requieren que una persona intervenga. La confirmación **completamente automática** con las cuentas actuales sigue
+**pendiente**.
 
 Los traspasos que no pasan por SPEI siguen en revisión manual en cualquier opción.
