@@ -24,6 +24,7 @@ const ESTADO: Record<EstadoCobro, string> = {
   pendiente_abono: "Pendiente de verificar abono",
   abono_verificado: "Abono verificado",
   no_localizado: "No localizado",
+  cancelado: "Cancelado",
 };
 
 /** Clave del cobro: se crea al agregar a la primera persona y se conserva hasta que el cobro se guarda. */
