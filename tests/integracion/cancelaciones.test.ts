@@ -181,6 +181,41 @@ describe.skipIf(!URL_ADMIN)("cancelación de un cobro duplicado en efectivo", ()
     });
   });
 
+  describe("solo la responsable de la bolsa del turno abierto", () => {
+    it("Tenango, dos cuentas de Recepción: la responsable la pide; la otra no, ni por envío directo; Dirección Tenango la aprueba", async () => {
+      const responsable = await cuenta([["recepcion", "TEN"]]);
+      const otra = await cuenta([["recepcion", "TEN"]]);
+      const t = await abrirTurno(sql, responsable, "TEN", { bolsa: "150.00", cajon: "0.00" }, PRUEBAS);
+      if (!t.ok) throw new Error(t.error);
+      const luis = await ficha("Luis Prueba");
+      const ana = await ficha("Ana Prueba");
+      await cobrar(responsable, "TEN", [luis]);
+      const correcto = await cobrar(responsable, "TEN", [ana]);
+      const duplicado = await cobrar(responsable, "TEN", [ana]);
+      expect((await bolsa(responsable, "TEN")).esperado).toBe("300.00");
+
+      // La otra cuenta tiene el permiso en Tenango, pero no tiene a su cargo la bolsa: ni la pantalla ni el envío directo.
+      expect(await pantallaSolicitud(sql, otra, "TEN", duplicado, "pruebas")).toEqual({ ok: false, error: "no_responsable" });
+      expect(await solicitar(otra, "TEN", duplicado, correcto)).toEqual({ ok: false, error: "no_responsable" });
+      const [{ n: ninguna }] = await sql<{ n: number }[]>`select count(*)::int as n from cancelacion_cobro where sucursal_id = ${ids.TEN}`;
+      expect(ninguna).toBe(0);
+
+      // La responsable sí.
+      const p = await pantallaSolicitud(sql, responsable, "TEN", duplicado, "pruebas");
+      expect(p.ok && p.candidatos.map((c) => c.operacionId)).toEqual([correcto]);
+      const x = await solicitada(responsable, "TEN", duplicado, correcto);
+      // Con la solicitud ya hecha, la otra cuenta tampoco puede repetirla ni pedir otra.
+      expect(await solicitar(otra, "TEN", duplicado, correcto)).toEqual({ ok: false, error: "no_responsable" });
+
+      // La autorización sigue aparte: Dirección Tenango (facultad de los datos de prueba, hasta $150).
+      const [dir] = await sql<{ id: string }[]>`select id from usuario where correo = 'direccion@prueba.fitnessland.invalid'`;
+      expect(await aprobar(responsable, "TEN", x)).toEqual({ ok: false, error: "no_encontrada" });
+      expect(await aprobar(otra, "TEN", x)).toEqual({ ok: false, error: "no_encontrada" });
+      expect(await aprobar(dir.id, "TEN", x)).toEqual({ ok: true });
+      expect((await bolsa(responsable, "TEN")).esperado).toBe("250.00");
+    });
+  });
+
   describe("aprobación", () => {
     it("bolsa de $300 a $250: un solo ajuste de −$50, el duplicado y su pase cancelados, el historial se conserva", async () => {
       const e = await escenario();
@@ -233,31 +268,37 @@ describe.skipIf(!URL_ADMIN)("cancelación de un cobro duplicado en efectivo", ()
     });
 
     it("quien pidió la cancelación o registró el cobro no puede aprobarla", async () => {
-      // Recepción con la facultad: abre el turno, cobra y luego otra recepcionista pide la cancelación.
+      // La responsable de la bolsa tiene además la facultad: cobra y pide la cancelación ella misma.
       k++;
       const codigo = `C${k}`;
       const [s] = await sql<{ id: string }[]>`insert into sucursal (nombre, codigo) values (${"Sucursal cancela " + k}, ${codigo}) returning id`;
       ids[codigo] = s.id;
       const registra = await cuenta([["recepcion", codigo]], { codigo, limite: 150 });
-      const pide = await cuenta([["recepcion", codigo]], { codigo, limite: 150 });
       const t = await abrirTurno(sql, registra, codigo, { bolsa: "0.00", cajon: "0.00" }, PRUEBAS);
       if (!t.ok) throw new Error(t.error);
       const ana = await ficha("Ana Prueba");
       const correcto = await cobrar(registra, codigo, [ana]);
       const duplicado = await cobrar(registra, codigo, [ana]);
-      const x = await solicitada(pide, codigo, duplicado, correcto);
+      const x = await solicitada(registra, codigo, duplicado, correcto);
 
-      expect(await aprobar(pide, codigo, x)).toEqual({ ok: false, error: "propia" });
-      expect(await aprobar(registra, codigo, x)).toEqual({ ok: false, error: "registro_propio" });
-      const bandeja = await cancelacionesPorAutorizar(sql, registra, codigo);
-      expect(bandeja?.pendientes.map((p) => p.impedimento)).toEqual(["registro_propio"]);
-      expect((await cancelacionesPorAutorizar(sql, pide, codigo))?.pendientes.map((p) => p.impedimento)).toEqual(["propia"]);
-      // Tampoco rechazarla.
-      expect(await resolverCancelacion(sql, pide, codigo, x.id, { version: x.version, decision: "rechazar", motivo: "No procede" }, PRUEBAS))
+      expect(await aprobar(registra, codigo, x)).toEqual({ ok: false, error: "propia" });
+      expect((await cancelacionesPorAutorizar(sql, registra, codigo))?.pendientes.map((p) => p.impedimento)).toEqual(["propia"]);
+      expect(await resolverCancelacion(sql, registra, codigo, x.id, { version: x.version, decision: "rechazar", motivo: "No procede" }, PRUEBAS))
         .toEqual({ ok: false, error: "propia" });
       // La base tampoco deja que la resuelva quien la pidió.
-      await expect(sql`update cancelacion_cobro set estado = 'rechazada', resuelta_por = ${pide}, resuelta_en = now(),
+      await expect(sql`update cancelacion_cobro set estado = 'rechazada', resuelta_por = ${registra}, resuelta_en = now(),
         motivo_rechazo = 'Prueba directa', version = version + 1 where id = ${x.id}`).rejects.toThrow(/cancelacion_otra_persona_resuelve/);
+
+      // Aunque otra persona hubiera pedido la cancelación (simulado en la base), quien registró el cobro no la aprueba.
+      const otra = await cuenta([["recepcion", codigo]]);
+      await sql`update cancelacion_cobro set estado = 'rechazada', resuelta_por = ${otra}, resuelta_en = now(),
+        motivo_rechazo = 'Se repite para la prueba', version = version + 1 where id = ${x.id}`;
+      const [y] = await sql<{ id: string; version: number }[]>`
+        insert into cancelacion_cobro (cobro_id, conserva_cobro_id, tipo, explicacion, sucursal_id, solicitada_por)
+        values (${await cobroId(duplicado)}, ${await cobroId(correcto)}, 'duplicado', 'Pedida por otra persona', ${s.id}, ${otra})
+        returning id, version`;
+      expect(await aprobar(registra, codigo, y)).toEqual({ ok: false, error: "registro_propio" });
+      expect((await cancelacionesPorAutorizar(sql, registra, codigo))?.pendientes.map((p) => p.impedimento)).toEqual(["registro_propio"]);
     });
 
     it("sin la facultad en la sucursal: «No encontrada», también para Dirección con el rol pero sin facultad", async () => {
@@ -308,10 +349,9 @@ describe.skipIf(!URL_ADMIN)("cancelación de un cobro duplicado en efectivo", ()
 
     it("dos solicitudes cruzadas no pueden cancelar ambos cobros", async () => {
       const e = await escenario();
-      const otra = await cuenta([["recepcion", e.codigo]]);
-      // La primera conserva el correcto; la segunda (de otra persona) intentaría conservar el duplicado.
+      // La primera conserva el correcto; la segunda intentaría conservar el duplicado.
       await solicitada(e.recep, e.codigo, e.duplicado, e.correcto);
-      expect(await solicitar(otra, e.codigo, e.correcto, e.duplicado)).toEqual({ ok: false, error: "conserva_invalido" });
+      expect(await solicitar(e.recep, e.codigo, e.correcto, e.duplicado)).toEqual({ ok: false, error: "conserva_invalido" });
     });
   });
 

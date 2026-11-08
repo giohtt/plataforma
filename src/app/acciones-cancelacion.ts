@@ -16,6 +16,7 @@ const SOLICITUD: Record<ErrorSolicitud, string> = {
   sin_permiso: "Tu cuenta no puede solicitar cancelaciones en esta sucursal.",
   no_cancelable: "Solo se puede pedir la cancelación de un cobro en efectivo vigente.",
   turno_no_abierto: "El cobro es de un turno que ya no está abierto. Los turnos cerrados se verán en otro paso.",
+  no_responsable: "Solo la responsable de la bolsa de este turno puede solicitar la cancelación.",
   ya_solicitada: "Este cobro ya tiene una solicitud de cancelación.",
   conserva_invalido: "Elige el cobro correcto que se conserva: del mismo turno, en efectivo, por el mismo total y con las mismas personas.",
   explicacion: "Explica qué pasó (de 5 a 300 caracteres).",

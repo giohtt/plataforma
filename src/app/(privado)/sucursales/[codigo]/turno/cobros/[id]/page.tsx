@@ -131,6 +131,11 @@ export default async function DetalleCobro({ params, searchParams }: PageProps<"
           </ul>
         </section>
       ) : null}
+      {!solicitud.ok && solicitud.error === "no_responsable" ? (
+        <p className="aviso aviso-info" data-testid="cancelacion-no-responsable">
+          Si este cobro está duplicado, la cancelación la solicita la responsable de la bolsa de este turno.
+        </p>
+      ) : null}
       {solicitud.ok ? <FormularioCancelacion codigo={codigo} operacionId={id} total={d.total} candidatos={solicitud.candidatos} /> : null}
       <section className="tarjeta" aria-labelledby="t-pases" data-testid="detalle-pases">
         <h2 id="t-pases" className="titulo-seccion">Visitantes y pases ({d.pases.length})</h2>

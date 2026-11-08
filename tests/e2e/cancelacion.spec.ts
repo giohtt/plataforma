@@ -171,3 +171,81 @@ test("el rechazo pide motivo y deja el cobro vigente", async ({ page }) => {
   await expect(page.getByTestId("ajustes")).toHaveCount(0);
   await expect(page.getByTestId("ventas-efectivo")).toHaveText("$100.00");
 });
+
+test("Tenango, dos cuentas de Recepción: solo la responsable de la bolsa puede pedir la cancelación, ni la otra por envío directo", async ({ page }, info) => {
+  // Un solo turno abierto por sucursal: esta prueba usa Tenango y corre solo en escritorio.
+  test.skip(info.project.name !== "escritorio", "Tenango admite un solo turno abierto");
+  const responsable = await crearCuenta("recepcion", "TEN", "Recepción responsable " + letras(4));
+  const otra = await crearCuenta("recepcion", "TEN", "Recepción sin bolsa " + letras(4));
+  const dir = await crearCuenta("direccion", "TEN", "Dirección Tenango " + letras(4), 150);
+  const [t] = await sql<{ id: string }[]>`
+    insert into turno (sucursal_id, abierto_por) select id, ${responsable.id} from sucursal where codigo = 'TEN' returning id`;
+  await sql`insert into responsable_lugar (lugar_id, turno_id, usuario_id)
+            select l.id, ${t.id}, ${responsable.id} from lugar_efectivo l join sucursal s on s.id = l.sucursal_id where s.codigo = 'TEN'`;
+  await sql`insert into conteo_efectivo (turno_id, lugar_id, momento, importe, contado_por)
+            select ${t.id}, l.id, 'apertura', case l.tipo when 'bolsa_visitas' then 150 else 0 end, ${responsable.id}
+            from lugar_efectivo l join sucursal s on s.id = l.sucursal_id where s.codigo = 'TEN'`;
+  const ana = `${nombrePropio()} ${nombrePropio()} ${nombrePropio()}`;
+  await sql`insert into visitante (nombre, telefono, estado_procedencia, sucursal_alta_id)
+            select ${ana}, ${"000" + String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}, 'Querétaro', id from sucursal where codigo = 'ATL'`;
+
+  await entrar(page, responsable.correo);
+  await cobrar(page, "TEN", ana);
+  await cobrar(page, "TEN", ana);
+  const [{ id: duplicado }, { id: correcto }] = await sql<{ id: string }[]>`
+    select id from operacion_visita where turno_id = ${t.id} order by registrada_en desc, id`;
+
+  // La otra cuenta de Recepción ve el detalle, pero no el formulario.
+  await entrar(page, otra.correo);
+  await page.goto(`/sucursales/TEN/turno/cobros/${duplicado}`);
+  await expect(page.getByTestId("detalle-cobro")).toBeVisible();
+  await expect(page.getByTestId("solicitar-cancelacion")).toHaveCount(0);
+  await expect(page.getByTestId("cancelacion-no-responsable")).toBeVisible();
+
+  // Envío directo: se toma el formulario de la responsable y se envía con la sesión de la otra cuenta.
+  await entrar(page, responsable.correo);
+  await page.goto(`/sucursales/TEN/turno/cobros/${duplicado}`);
+  const formulario = page.getByTestId("solicitar-cancelacion");
+  await formulario.getByLabel("Qué pasó").fill("Se capturó dos veces el mismo pago");
+  await formulario.getByLabel(/El dinero de este cobro no entró/).check();
+  const cookiesResponsable = await page.context().cookies();
+  const otraContexto = await page.context().browser()!.newContext();
+  const otraPagina = await otraContexto.newPage();
+  await entrar(otraPagina, otra.correo);
+  await page.context().clearCookies();
+  await page.context().addCookies(await otraContexto.cookies());
+  await otraContexto.close();
+  await formulario.getByRole("button", { name: "Solicitar cancelación" }).click();
+  await expect(formulario.getByRole("alert")).toHaveText("Solo la responsable de la bolsa de este turno puede solicitar la cancelación.");
+  const contar = async () => (await sql<{ n: number }[]>`
+    select count(*)::int as n from cancelacion_cobro x join cobro_visita c on c.id = x.cobro_id where c.operacion_id = ${duplicado}`)[0].n;
+  expect(await contar()).toBe(0);
+
+  // La responsable sí puede.
+  await page.context().clearCookies();
+  await page.context().addCookies(cookiesResponsable);
+  await page.goto(`/sucursales/TEN/turno/cobros/${duplicado}`);
+  await expect(formulario.getByTestId("candidato").getByRole("radio")).toHaveValue(correcto);
+  await formulario.getByLabel("Qué pasó").fill("Se capturó dos veces el mismo pago");
+  await formulario.getByLabel(/El dinero de este cobro no entró/).check();
+  await formulario.getByRole("button", { name: "Solicitar cancelación" }).click();
+  await expect(page.getByTestId("cancelacion")).toContainText("Pendiente de autorizar");
+  expect(await contar()).toBe(1);
+
+  // La autorización sigue aparte, con Dirección Tenango; ninguna cuenta de Recepción la ve.
+  for (const correo of [responsable.correo, otra.correo]) {
+    await entrar(page, correo);
+    await page.goto("/sucursales/TEN/cancelaciones");
+    await expect(page.getByRole("heading", { name: "No encontrada" })).toBeVisible();
+  }
+  await entrar(page, dir.correo);
+  await page.goto("/sucursales/TEN/cancelaciones");
+  const solicitud = page.getByTestId("solicitud").filter({ hasText: responsable.nombre });
+  await solicitud.getByRole("button", { name: "Aprobar cancelación" }).click();
+  await expect(page.getByRole("status")).toContainText("Cancelación aprobada");
+  await entrar(page, responsable.correo);
+  await page.goto("/sucursales/TEN/turno");
+  await expect(bolsa(page).getByTestId("entradas")).toHaveText("+ $100.00");
+  await expect(bolsa(page).getByTestId("ajustes")).toHaveText("− $50.00");
+  await expect(bolsa(page).getByTestId("esperado")).toHaveText("$200.00");
+});

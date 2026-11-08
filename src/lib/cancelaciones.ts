@@ -55,6 +55,7 @@ export type ErrorSolicitud =
   | "sin_permiso"
   | "no_cancelable"
   | "turno_no_abierto"
+  | "no_responsable"
   | "ya_solicitada"
   | "conserva_invalido"
   | "explicacion"
@@ -87,6 +88,16 @@ async function cobroCancelable(tx: Tx, usuarioId: string, codigo: string, operac
   if (!c) return { ok: false, error: "no_encontrada" };
   if (c.forma_pago !== "efectivo" || c.estado !== "confirmado") return { ok: false, error: "no_cancelable" };
   if (!c.abierto) return { ok: false, error: "turno_no_abierto" };
+  // Solo quien tiene a su cargo la bolsa de ese turno abierto (la responsable vigente) puede pedirla.
+  const responsable = bloquear
+    ? await tx<{ usuario_id: string }[]>`
+        select r.usuario_id from responsable_lugar r join lugar_efectivo l on l.id = r.lugar_id and l.tipo = 'bolsa_visitas'
+        where r.turno_id = ${c.turno_id} and r.hasta is null
+        for share of r`
+    : await tx<{ usuario_id: string }[]>`
+        select r.usuario_id from responsable_lugar r join lugar_efectivo l on l.id = r.lugar_id and l.tipo = 'bolsa_visitas'
+        where r.turno_id = ${c.turno_id} and r.hasta is null`;
+  if (responsable.length !== 1 || responsable[0].usuario_id !== usuarioId) return { ok: false, error: "no_responsable" };
   return { ok: true, c: { sucursalId: s.id, turnoId: c.turno_id, cobroId: c.cobro_id, total: c.total, registradaPor: c.registrada_por } };
 }
 
