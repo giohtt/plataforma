@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { FormularioCancelacion } from "@/components/Cancelaciones";
+import { cancelacionesDeCobro, pantallaSolicitud } from "@/lib/cancelaciones";
 import { obtenerBaseDatos } from "@/lib/db";
+import { leerEntorno } from "@/lib/entorno";
 import { requerirSesion } from "@/lib/sesion-servidor";
 import { NOMBRE_REFERENCIA } from "@/lib/datos-visita";
 import { detalleCobro, type EstadoCobro } from "@/lib/visitas";
@@ -15,23 +18,42 @@ const ESTADO: Record<EstadoCobro, string> = {
   pendiente_abono: "Pendiente de verificar abono",
   abono_verificado: "Abono verificado",
   no_localizado: "No localizado",
+  cancelado: "Cancelado",
 };
 const MEDIO = { efectivo: "en efectivo", tarjeta: "con tarjeta", transferencia: "por transferencia" } as const;
 const dia = new Intl.DateTimeFormat("es-MX", { timeZone: "UTC", dateStyle: "medium" });
 const hora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
 
 /** Detalle de un cobro de visitas: visitantes y sus pases. Sin permiso de ver turnos en la sucursal: «No encontrada». */
-export default async function DetalleCobro({ params }: PageProps<"/sucursales/[codigo]/turno/cobros/[id]">) {
+export default async function DetalleCobro({ params, searchParams }: PageProps<"/sucursales/[codigo]/turno/cobros/[id]">) {
   const sesion = await requerirSesion();
   const { codigo, id } = await params;
-  const d = await detalleCobro(obtenerBaseDatos()!, sesion.usuarioId, codigo, id);
+  const sql = obtenerBaseDatos()!;
+  const d = await detalleCobro(sql, sesion.usuarioId, codigo, id);
   if (!d) notFound();
+  const [cancelaciones, solicitud] = await Promise.all([
+    cancelacionesDeCobro(sql, d.cobroId),
+    pantallaSolicitud(sql, sesion.usuarioId, codigo, id, leerEntorno()),
+  ]);
+  const { aviso } = await searchParams;
+  const ESTADO_SOLICITUD = { solicitada: "Pendiente de autorizar", aprobada: "Aprobada", rechazada: "Rechazada" } as const;
 
   return (
     <main className="contenedor contenedor-medio">
       <p className="sub"><Link href={`/sucursales/${codigo}/turno`}>← Turno</Link></p>
       <h1 className="cabecera-titulo">Detalle del cobro</h1>
       <p className="sub">Solo datos ficticios.</p>
+      {aviso === "solicitada" ? (
+        <p className="aviso aviso-ok" role="status">Cancelación solicitada. Nada cambia hasta que otra persona con permiso la autorice.</p>
+      ) : null}
+      {cancelaciones.comoConservado.length ? (
+        <p className="aviso aviso-info" data-testid="es-conservado">
+          Este es el cobro que se conserva en lugar de un duplicado
+          {cancelaciones.comoConservado.map((c) => (
+            <span key={c.operacionId}> · <Link href={`/sucursales/${codigo}/turno/cobros/${c.operacionId}`}>ver duplicado ({c.estado === "aprobada" ? "cancelado" : "cancelación pendiente"})</Link></span>
+          ))}
+        </p>
+      ) : null}
       <section className="tarjeta" aria-labelledby="t-cobro" data-testid="detalle-cobro">
         <h2 id="t-cobro" className="titulo-seccion">
           {d.pases.length} {d.pases.length === 1 ? "persona" : "personas"} · {$(d.total)} {MEDIO[d.formaPago]}
@@ -93,6 +115,28 @@ export default async function DetalleCobro({ params }: PageProps<"/sucursales/[c
           </ul>
         </section>
       ) : null}
+      {cancelaciones.propias.length ? (
+        <section className="tarjeta" aria-labelledby="t-cancelacion" data-testid="detalle-cancelacion">
+          <h2 id="t-cancelacion" className="titulo-seccion">Cancelación por duplicado</h2>
+          <ul className="lista-simple">
+            {cancelaciones.propias.map((c) => (
+              <li key={c.id} data-testid="cancelacion">
+                <strong>{ESTADO_SOLICITUD[c.estado]}</strong> · pidió {c.solicitadaPor} el {hora.format(new Date(c.solicitadaEn))} · «{c.explicacion}» ·{" "}
+                <Link href={`/sucursales/${codigo}/turno/cobros/${c.conservaOperacionId}`}>cobro que se conserva</Link>
+                {c.resueltaPor && c.resueltaEn ? ` · ${c.estado === "aprobada" ? "aprobó" : "rechazó"} ${c.resueltaPor} el ${hora.format(new Date(c.resueltaEn))}` : ""}
+                {c.motivoRechazo ? ` · Motivo: ${c.motivoRechazo}` : ""}
+                {c.ajuste ? ` · ajuste en la bolsa: ${$(c.ajuste)}` : ""}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {!solicitud.ok && solicitud.error === "no_responsable" ? (
+        <p className="aviso aviso-info" data-testid="cancelacion-no-responsable">
+          Si este cobro está duplicado, la cancelación la solicita la responsable de la bolsa de este turno.
+        </p>
+      ) : null}
+      {solicitud.ok ? <FormularioCancelacion codigo={codigo} operacionId={id} total={d.total} candidatos={solicitud.candidatos} /> : null}
       <section className="tarjeta" aria-labelledby="t-pases" data-testid="detalle-pases">
         <h2 id="t-pases" className="titulo-seccion">Visitantes y pases ({d.pases.length})</h2>
         <ul className="lista-visitantes">

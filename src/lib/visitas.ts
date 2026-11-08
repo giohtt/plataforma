@@ -100,7 +100,7 @@ export type CobroRegistrado = {
   tipoReferencia: TipoReferencia | null;
 };
 
-export type EstadoCobro = "confirmado" | "confirmado_operativamente" | "pendiente_abono" | "abono_verificado" | "no_localizado";
+export type EstadoCobro = "confirmado" | "confirmado_operativamente" | "pendiente_abono" | "abono_verificado" | "no_localizado" | "cancelado";
 
 /**
  * Cobro previo con la misma autorización (tarjeta) o la misma referencia (transferencia), que se muestra antes de
@@ -317,6 +317,8 @@ export async function confirmarVisita(
 export type CobroDelTurno = {
   id: string; registradaEn: Date; personas: number; total: string; formaPago: FormaPago;
   estado: EstadoCobro; conciliacion: "pendiente" | null;
+  /** Hay una solicitud de cancelación pendiente de autorizar. */
+  cancelacionSolicitada: boolean;
 };
 
 /** Cobros de visitas de un turno, una línea por cobro, el más reciente primero. Quien llama ya comprobó que puede ver el turno. */
@@ -324,6 +326,7 @@ export async function cobrosDelTurno(sql: Sql | Tx, turnoId: string): Promise<Co
   return sql<CobroDelTurno[]>`
     select o.id, o.registrada_en as "registradaEn", c.importe::text as total, c.forma_pago as "formaPago",
            c.estado, c.conciliacion,
+           exists (select 1 from cancelacion_cobro x where x.cobro_id = c.id and x.estado = 'solicitada') as "cancelacionSolicitada",
            (select count(*)::int from pase_visita p where p.operacion_id = o.id) as personas
     from operacion_visita o
     join cobro_visita c on c.operacion_id = o.id
@@ -333,6 +336,7 @@ export async function cobrosDelTurno(sql: Sql | Tx, turnoId: string): Promise<Co
 
 export type DetalleCobro = {
   id: string;
+  cobroId: string;
   sucursal: { codigo: string; nombre: string };
   registradaEn: Date;
   registradaPor: string;
@@ -362,7 +366,7 @@ export type DetalleCobro = {
 export async function detalleCobro(sql: Sql, usuarioId: string, codigo: string, operacionId: string): Promise<DetalleCobro | null> {
   if (!/^[A-Z0-9]{2,5}$/.test(codigo) || !esIdentificadorValido(operacionId)) return null;
   return sql.begin("isolation level repeatable read read only", async (tx) => {
-    const [o] = await tx<(Omit<DetalleCobro, "pases" | "sucursal" | "cambios"> & { codigo: string; sucursal_nombre: string; cobro_id: string })[]>`
+    const [o] = await tx<(Omit<DetalleCobro, "pases" | "sucursal" | "cambios" | "cobroId"> & { codigo: string; sucursal_nombre: string; cobro_id: string })[]>`
       select o.id, s.codigo, s.nombre as sucursal_nombre, o.registrada_en as "registradaEn", u.nombre as "registradaPor",
              c.forma_pago as "formaPago", c.estado, c.autorizacion, c.conciliacion, c.importe::text as total, c.recibido::text as recibido, c.cambio::text as cambio,
              c.referencia, c.tipo_referencia as "tipoReferencia", c.abono_fecha::text as "abonoFecha",
@@ -372,7 +376,7 @@ export async function detalleCobro(sql: Sql, usuarioId: string, codigo: string, 
       join sucursal s on s.id = o.sucursal_id
       join usuario u on u.id = o.registrada_por
       join cobro_visita c on c.operacion_id = o.id
-      left join movimiento_efectivo m on m.cobro_id = c.id
+      left join movimiento_efectivo m on m.cobro_id = c.id and m.tipo = 'entrada_cobro_visita'
       left join usuario ur on ur.id = m.responsable_id
       left join usuario uv on uv.id = c.verificado_por
       where o.id = ${operacionId} and s.codigo = ${codigo}
@@ -392,9 +396,9 @@ export async function detalleCobro(sql: Sql, usuarioId: string, codigo: string, 
       from cobro_cambio_estado h join usuario u on u.id = h.usuario_id
       where h.cobro_id = ${o.cobro_id} order by h.en, h.id`;
     const { codigo: cod, sucursal_nombre, cobro_id, ...resto } = o;
-    void cobro_id;
     return {
       ...resto,
+      cobroId: cobro_id,
       cambios: [...cambios],
       sucursal: { codigo: cod, nombre: sucursal_nombre },
       pases: pases.map(({ tel, ...p }) => ({ ...p, telefono: enmascararTelefono(tel) })),
@@ -425,7 +429,7 @@ export async function visitasDeHoy(sql: Sql, usuarioId: string, codigo: string, 
              coalesce(bool_or(p.sucursal_id = hoy.id), false) as "enEstaSucursal"
       from unnest(${ids}::uuid[]) as x(id)
       cross join hoy
-      left join pase_visita p on p.visitante_id in (select visitante_grupo(x.id)) and p.creado_en >= hoy.desde
+      left join pase_visita p on p.visitante_id in (select visitante_grupo(x.id)) and p.creado_en >= hoy.desde and p.cancelado_en is null
       group by x.id`;
     return [...filas];
   });

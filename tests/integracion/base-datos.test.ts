@@ -128,7 +128,7 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(filas.length).toBeGreaterThan(0);
       expect(filas.every((f) => f.bloque <= 4 && !f.es_autorizacion)).toBe(true);
       const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso).sort();
-      expect(recepcion).toEqual(["sucursal.consultar", "turno.abrir", "turno.consultar", "visita.registrar", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
+      expect(recepcion).toEqual(["sucursal.consultar", "turno.abrir", "turno.consultar", "visita.registrar", "visita.solicitar_cancelacion", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
       // Registrar visitas: solo Recepción (provisional); además, solo la responsable de la bolsa.
       expect(filas.filter((f) => f.permiso === "visita.registrar").map((f) => f.rol)).toEqual(["recepcion"]);
       // Verificar abonos de transferencias: Administración y Dirección (provisional). Recepción no.

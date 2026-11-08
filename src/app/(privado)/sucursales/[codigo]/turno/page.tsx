@@ -32,6 +32,11 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
     return { n: lista.length, total: lista.reduce((suma, c) => suma + Math.round(Number(c.total) * 100), 0) / 100 };
   };
   const [tPend, tVer, tNoLoc] = [porEstado("pendiente_abono"), porEstado("abono_verificado"), porEstado("no_localizado")];
+  // Ventas: los cobros cancelados (duplicados) ya no cuentan.
+  const vigentes = cobros.filter((c) => c.estado !== "cancelado");
+  const cancelados = cobros.filter((c) => c.estado === "cancelado");
+  const centavos = (lista: typeof cobros) => lista.reduce((suma, c) => suma + Math.round(Number(c.total) * 100), 0) / 100;
+  const ventasPor = (medio: string) => vigentes.filter((c) => c.formaPago === medio);
   const ESTADO_TRANSFERENCIA: Record<string, string> = {
     pendiente_abono: "Pendiente de verificar abono", abono_verificado: "Abono verificado", no_localizado: "No localizado",
   };
@@ -66,6 +71,12 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                     <>
                       <dt>Cobros de visitas en efectivo ({l.cantidadEntradas} {l.cantidadEntradas === 1 ? "cobro" : "cobros"} · {l.visitasEntradas} {l.visitasEntradas === 1 ? "visita" : "visitas"})</dt>
                       <dd data-testid="entradas">+ {pesos.format(Number(l.entradas))}</dd>
+                      {l.cantidadAjustes ? (
+                        <>
+                          <dt>Cancelaciones aprobadas ({l.cantidadAjustes} {l.cantidadAjustes === 1 ? "cobro duplicado" : "cobros duplicados"})</dt>
+                          <dd data-testid="ajustes">− {pesos.format(-Number(l.ajustes))}</dd>
+                        </>
+                      ) : null}
                     </>
                   ) : null}
                   <dt>Efectivo esperado</dt>
@@ -82,6 +93,28 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
               </section>
             ))}
           </div>
+          <section className="tarjeta" aria-labelledby="t-ventas" data-testid="ventas-turno">
+            <h2 id="t-ventas" className="titulo-seccion">Ventas de visitas del turno</h2>
+            <dl className="cuentas-lugar">
+              {(["efectivo", "tarjeta", "transferencia"] as const).map((medio) => {
+                const lista = ventasPor(medio);
+                return (
+                  <div key={medio} style={{ display: "contents" }}>
+                    <dt>{medio === "efectivo" ? "Efectivo" : medio === "tarjeta" ? "Tarjeta" : "Transferencia"} ({lista.length} {lista.length === 1 ? "cobro" : "cobros"})</dt>
+                    <dd data-testid={`ventas-${medio}`}>{pesos.format(centavos(lista))}</dd>
+                  </div>
+                );
+              })}
+              <dt>Total ({vigentes.length} {vigentes.length === 1 ? "cobro" : "cobros"} · {(() => { const v = vigentes.reduce((n, c) => n + c.personas, 0); return `${v} ${v === 1 ? "visita" : "visitas"}`; })()})</dt>
+              <dd data-testid="ventas-total"><strong>{pesos.format(centavos(vigentes))}</strong></dd>
+            </dl>
+            {cancelados.length ? (
+              <p className="sub" data-testid="ventas-excluidas">
+                No cuentan {cancelados.length} {cancelados.length === 1 ? "cobro cancelado" : "cobros cancelados"} por duplicado ({pesos.format(centavos(cancelados))}).
+              </p>
+            ) : null}
+            <p className="sub">Las transferencias cuentan como venta aunque su abono esté pendiente de verificar.</p>
+          </section>
           <section className="tarjeta" aria-labelledby="t-tarjeta" data-testid="tarjeta-turno">
             <h2 id="t-tarjeta" className="titulo-seccion">Cobros con tarjeta</h2>
             <dl className="cuentas-lugar">
@@ -118,7 +151,10 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                       ? "con tarjeta · confirmado operativamente · liquidación pendiente de conciliar"
                       : c.formaPago === "transferencia"
                       ? `por transferencia · ${ESTADO_TRANSFERENCIA[c.estado]}`
-                      : "en efectivo"} ·{" "}
+                      : c.estado === "cancelado"
+                      ? <>en efectivo · <strong data-testid="marca-cancelado">Cancelado (duplicado)</strong></>
+                      : "en efectivo"}
+                    {c.cancelacionSolicitada ? <> · <strong data-testid="marca-solicitada">Cancelación solicitada</strong></> : null} ·{" "}
                     <Link href={`/sucursales/${codigo}/turno/cobros/${c.id}`}>Ver detalle</Link>
                   </li>
                 ))}
