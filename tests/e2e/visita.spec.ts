@@ -706,12 +706,33 @@ test("quien registró la transferencia no la puede verificar; «No localizado» 
   const nl = page.getByTestId("no-localizadas").getByTestId("transferencia");
   await expect(nl).toContainText("Motivo: No aparece en el estado de cuenta de hoy");
   await expect(nl.getByRole("button", { name: "No localizado" })).toHaveCount(0);
+
+  // En el turno: la no localizada se muestra aparte y no suma al total confirmado; la bolsa no cambia.
+  await page.goto(`/sucursales/${e.codigo}/turno`);
+  const esperadoAntes = await page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado").textContent();
+  await expect(page.getByTestId("ventas-transferencia")).toHaveText("$0.00");
+  await expect(page.getByTestId("ventas-no-localizadas")).toHaveText("$50.00");
+  await expect(page.getByTestId("ventas-pendientes")).toHaveText("$0.00");
+  await expect(page.getByTestId("ventas-total")).toHaveText("$0.00");
+  await page.goto(`/sucursales/${e.codigo}/transferencias`);
   await nl.getByLabel("Importe que llegó").fill("50");
   await nl.getByLabel("Fecha del abono").fill(hoyMx());
   await nl.getByLabel(/Comprobé en el estado de cuenta/).check();
   await nl.getByRole("button", { name: "Abono verificado" }).click();
   await expect(page.locator("p.aviso[role=status]")).toContainText("Abono verificado");
   expect((await estadoTransferencia(e.codigo))[0].estado).toBe("abono_verificado");
+
+  // Se localizó: el mismo cobro pasa a verificadas y suma una sola vez.
+  await page.goto(`/sucursales/${e.codigo}/turno`);
+  await expect(page.getByTestId("ventas-transferencia")).toHaveText("$50.00");
+  await expect(page.getByTestId("ventas-no-localizadas")).toHaveText("$0.00");
+  await expect(page.getByTestId("ventas-total")).toHaveText("$50.00");
+  await expect(page.getByTestId("cobro-turno")).toHaveCount(1);
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText(esperadoAntes!);
+  await page.getByTestId("cobro-turno").getByRole("link", { name: "Ver detalle" }).click();
+  await expect(page.getByTestId("cambio-estado")).toHaveCount(2);
+  await expect(page.getByTestId("cambio-estado").nth(0)).toContainText("Pendiente de verificar abono → No localizado");
+  await expect(page.getByTestId("cambio-estado").nth(1)).toContainText("No localizado → Abono verificado");
 });
 
 test("referencia repetida: muestra el cobro previo y pide confirmar que es otra transferencia", async ({ page }) => {
