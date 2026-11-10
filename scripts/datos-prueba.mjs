@@ -37,6 +37,7 @@ export const USUARIOS_PRUEBA = [
   { correo: "recepcion.santiago@prueba.fitnessland.invalid", nombre: "Recepción Santiago (prueba)" },
   { correo: "encargado.tenango@prueba.fitnessland.invalid", nombre: "Encargado Tenango (prueba)" },
   { correo: "administracion@prueba.fitnessland.invalid", nombre: "Administración (prueba)" },
+  { correo: "administracion.tenango@prueba.fitnessland.invalid", nombre: "Administración Tenango (prueba)" },
   { correo: "direccion@prueba.fitnessland.invalid", nombre: "Dirección (prueba)" },
   { correo: "direccion.general@prueba.fitnessland.invalid", nombre: "Dirección general (prueba)" },
   { correo: "sin.asignaciones@prueba.fitnessland.invalid", nombre: "Sin asignaciones (prueba)" },
@@ -52,6 +53,8 @@ export const ASIGNACIONES_PRUEBA = [
   { correo: `encargado.tenango${D}`, rol: "encargado", codigo: "TEN" },
   { correo: `administracion${D}`, rol: "administracion", codigo: "TEN" },
   { correo: `administracion${D}`, rol: "administracion", codigo: "STG" },
+  // Indicado el 10 nov 2026: Administración asignada solo a Tenango, para probar el alcance del historial.
+  { correo: `administracion.tenango${D}`, rol: "administracion", codigo: "TEN" },
   { correo: `direccion${D}`, rol: "direccion", codigo: "TEN" },
   { correo: `direccion.general${D}`, rol: "direccion", codigo: "TEN" },
   { correo: `recepcion.vencida${D}`, rol: "recepcion", codigo: "TEN", vencida: true },
