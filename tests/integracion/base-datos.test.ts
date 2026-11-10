@@ -213,7 +213,8 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(primera).toEqual({
         sucursales: SUCURSALES_PRUEBA.length,
         usuarios: USUARIOS_PRUEBA.length,
-        asignaciones: ASIGNACIONES_PRUEBA.length,
+        // Las que dependen de una sucursal creada solo en el sitio (Santa Ana) no aplican en una base nueva.
+        asignaciones: ASIGNACIONES_PRUEBA.filter((a) => !("siExiste" in a)).length,
         alcances: ALCANCES_PRUEBA.length,
         facultades: FACULTADES_PRUEBA.length,
         visitantes: VISITANTES_PRUEBA.length,
