@@ -67,7 +67,9 @@ export default async function ExpedienteVisitante({ params, searchParams }: Page
         <dl className="datos-expediente">
           <dt>Teléfono</dt><dd>{e.telefono ?? "No registrado"}</dd>
           <dt>Estado de procedencia</dt><dd>{e.estadoProcedencia ?? "No registrado"}</dd>
-          <dt>Expediente creado</dt><dd>En {e.sucursalAlta}, el {fecha.format(e.creadoEn)}</dd>
+          {e.sucursalAlta && e.creadoEn ? (
+            <><dt>Expediente creado</dt><dd data-testid="expediente-creado">En {e.sucursalAlta}, el {fecha.format(e.creadoEn)}</dd></>
+          ) : null}
         </dl>
       </section>
       {historial ? <HistorialVisitante h={historial} /> : null}

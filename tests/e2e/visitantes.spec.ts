@@ -65,13 +65,16 @@ test("Recepción busca por nombre: varias coincidencias, teléfono enmascarado, 
   await expect(visitantes(page)).toHaveCount(2);
   await expect(page.getByTestId("resultados")).toContainText("Hay varias personas posibles");
   await expect(page.getByTestId("resultados")).toContainText("•• •••• 0101");
-  await expect(page.getByTestId("resultados")).toContainText("Registrado en Santiago");
+  // La sucursal de alta solo se ve donde Recepción tiene detalle (Tenango); la ficha de Santiago no la muestra.
+  await expect(page.getByTestId("resultados")).toContainText("Registrado en Tenango");
+  await expect(page.getByTestId("resultados")).not.toContainText("Registrado en Santiago");
   expect(await page.content()).not.toMatch(/0000000101|0000000102/);
 
-  await visitantes(page).filter({ hasText: "Santiago" }).getByRole("link", { name: "Es esta persona" }).click();
+  await visitantes(page).filter({ hasText: "0102" }).getByRole("link", { name: "Es esta persona" }).click();
   await expect(page.locator("p.aviso[role=status]")).toHaveText("Expediente elegido.");
   await expect(page.getByTestId("expediente")).toContainText("•• •••• 0102");
-  await expect(page.getByTestId("expediente")).toContainText("En Santiago");
+  await expect(page.getByTestId("expediente")).not.toContainText("Santiago");
+  await expect(page.getByTestId("expediente-creado")).toHaveCount(0);
 });
 
 test("por teléfono completo encuentra a quienes lo comparten; un pedazo de teléfono no se acepta", async ({ page }) => {

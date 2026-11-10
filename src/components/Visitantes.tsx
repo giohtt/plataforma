@@ -20,7 +20,9 @@ export function TarjetaVisitante({ v, codigo, mostrarMotivos, accion }: { v: Res
         <span className="sub">
           Tel. {v.telefono ?? "no registrado"} · {v.estadoProcedencia ?? "procedencia no registrada"}
         </span>
-        <span className="sub">Registrado en {v.sucursalAlta} el {fecha.format(new Date(v.creadoEn))}</span>
+        {v.sucursalAlta && v.creadoEn ? (
+          <span className="sub" data-testid="registrado-en">Registrado en {v.sucursalAlta} el {fecha.format(new Date(v.creadoEn))}</span>
+        ) : null}
         {v.historial ? (
           <span className="historial-resumen" data-testid="historial-resumen">
             <span>

@@ -141,3 +141,63 @@ test("Recepción ve el detalle de su sucursal y de la otra solo conteo y última
   await expect(page.getByTestId("cobertura")).toContainText("datos confiables desde el 4 nov 2026");
   await expect(page.getByTestId("historial-incompleto")).toBeVisible();
 });
+
+test("ficha creada en otra sucursal: Administración con una sola sucursal no ve esa sucursal ni en la tarjeta ni en el expediente", async ({ page }) => {
+  const a = await escenario();
+  const b = await escenario();
+  const nombreB = `Accesos ${b.codigo}`;
+  // La ficha se crea en B (como «Santiago»); tiene una visita en A y después otra en B.
+  const persona = `${nombrePropio()} ${nombrePropio()} ${nombrePropio()}`;
+  await sql`insert into visitante (nombre, telefono, estado_procedencia, sucursal_alta_id)
+            select ${persona}, '0000000458', 'Querétaro', id from sucursal where codigo = ${b.codigo}`;
+  await entrar(page, a.recep.correo);
+  await cobrar(page, a.codigo, [persona]);
+  await entrar(page, b.recep.correo);
+  await cobrar(page, b.codigo, [persona]);
+
+  // Administración solo de A: la tarjeta completa y el expediente completo sin B, tampoco en el HTML recibido.
+  await entrar(page, a.admin.correo);
+  await page.goto(`/sucursales/${a.codigo}/visitantes`);
+  await page.waitForLoadState("networkidle");
+  await page.getByLabel("Nombre completo o teléfono").fill(persona);
+  await page.getByRole("button", { name: "Buscar" }).click();
+  const tarjeta = page.getByTestId("visitante").filter({ hasText: persona });
+  await expect(tarjeta.getByTestId("historial-resumen")).toContainText("1 visita registrada · Última el");
+  await expect(tarjeta.getByTestId("historial-resumen")).toContainText(`en Accesos ${a.codigo}`);
+  await expect(tarjeta.getByTestId("registrado-en")).toHaveCount(0);
+  await expect(tarjeta).not.toContainText(nombreB);
+  await expect(tarjeta).not.toContainText("Registrado en");
+  await expect(page.locator("body")).not.toContainText(nombreB);
+  expect(await page.content()).not.toContain(b.codigo);
+
+  await tarjeta.getByTestId("ver-historial").click();
+  await expect(page.getByTestId("nombre-visitante")).toHaveText(persona);
+  await expect(page.getByTestId("expediente-creado")).toHaveCount(0);
+  await expect(page.getByTestId("expediente")).not.toContainText("Expediente creado");
+  await expect(page.getByTestId("historial-total")).toContainText("1 visita registrada");
+  await expect(page.locator("body")).not.toContainText(nombreB);
+  expect(await page.content()).not.toContain(b.codigo);
+
+  // Recepción de A: tampoco ve el alta en B, pero conserva el conteo y la última visita registrada en B.
+  await entrar(page, a.recep.correo);
+  await page.goto(`/sucursales/${a.codigo}/visitantes`);
+  await page.waitForLoadState("networkidle");
+  await page.getByLabel("Nombre completo o teléfono").fill(persona);
+  await page.getByRole("button", { name: "Buscar" }).click();
+  const tr = page.getByTestId("visitante").filter({ hasText: persona });
+  await expect(tr.getByTestId("historial-resumen")).toContainText(`2 visitas registradas · Última el`);
+  await expect(tr.getByTestId("historial-resumen")).toContainText(`en ${nombreB}`);
+  await expect(tr.getByTestId("registrado-en")).toHaveCount(0);
+  await tr.getByTestId("ver-historial").click();
+  await expect(page.getByTestId("expediente-creado")).toHaveCount(0);
+
+  // Administración de B sí ve dónde y cuándo se creó.
+  await entrar(page, b.admin.correo);
+  await page.goto(`/sucursales/${b.codigo}/visitantes`);
+  await page.waitForLoadState("networkidle");
+  await page.getByLabel("Nombre completo o teléfono").fill(persona);
+  await page.getByRole("button", { name: "Buscar" }).click();
+  await expect(page.getByTestId("visitante").filter({ hasText: persona }).getByTestId("registrado-en")).toContainText(`Registrado en ${nombreB} el`);
+  await page.getByTestId("visitante").filter({ hasText: persona }).getByTestId("ver-historial").click();
+  await expect(page.getByTestId("expediente-creado")).toContainText(`En ${nombreB}, el`);
+});

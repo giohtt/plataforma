@@ -32,8 +32,12 @@ export type ResultadoVisitante = {
   /** Ya enmascarado o completo, según la regla provisional. */
   telefono: string | null;
   estadoProcedencia: string | null;
-  sucursalAlta: string;
-  creadoEn: Date;
+  /**
+   * Sucursal y fecha de alta de la ficha: solo si la cuenta tiene permiso de detalle (visita.consultar)
+   * en esa sucursal. Si no, null y no se muestran.
+   */
+  sucursalAlta: string | null;
+  creadoEn: Date | null;
   motivos: ("mismo_telefono" | "mismo_nombre" | "nombre_parecido")[];
   /** Visitas registradas y última visita, dentro del alcance de la cuenta (src/lib/historial.ts). */
   historial?: ResumenHistorial;
@@ -45,8 +49,8 @@ export type Fila = {
   nombre_clave: string;
   telefono: string | null;
   estado_procedencia: string | null;
-  sucursal_alta: string;
-  creado_en: Date;
+  sucursal_alta: string | null;
+  creado_en: Date | null;
   contiene: boolean;
   parecido: number;
 };
@@ -82,6 +86,16 @@ export function presentar(f: Fila, telefonoEscrito: string | null, claveEscrita:
   };
 }
 
+/**
+ * Columnas de alta de la ficha, recortadas al alcance: la sucursal y la fecha solo salen de la base si la
+ * cuenta tiene permiso de detalle (visita.consultar) en la sucursal donde se creó la ficha.
+ */
+function alta(q: Tx | Sql, usuarioId: string) {
+  return q`
+    case when tiene_permiso(${usuarioId}, 'visita.consultar', v.sucursal_alta_id) then s.nombre end as sucursal_alta,
+    case when tiene_permiso(${usuarioId}, 'visita.consultar', v.sucursal_alta_id) then v.creado_en end as creado_en`;
+}
+
 export async function sucursalConPermiso(tx: Tx | Sql, usuarioId: string, codigo: string, permiso: string) {
   if (!/^[A-Z0-9]{2,5}$/.test(codigo)) return null;
   const [s] = await tx<{ id: string; nombre: string }[]>`
@@ -100,14 +114,14 @@ export async function buscarVisitantes(sql: Sql, usuarioId: string, codigo: stri
   const filas =
     consulta.modo === "telefono"
       ? await sql<Fila[]>`
-          select v.id, v.nombre, v.nombre_clave, v.telefono, v.estado_procedencia, s.nombre as sucursal_alta, v.creado_en,
+          select v.id, v.nombre, v.nombre_clave, v.telefono, v.estado_procedencia, ${alta(sql, usuarioId)},
                  false as contiene, 0::real as parecido
           from visitante v join sucursal s on s.id = v.sucursal_alta_id
           where v.telefono = ${consulta.telefono} and v.fusionado_en_id is null
           order by v.nombre_clave, v.creado_en
           limit ${LIMITE + 1}`
       : await sql<Fila[]>`
-          select v.id, v.nombre, v.nombre_clave, v.telefono, v.estado_procedencia, s.nombre as sucursal_alta, v.creado_en,
+          select v.id, v.nombre, v.nombre_clave, v.telefono, v.estado_procedencia, ${alta(sql, usuarioId)},
                  v.nombre_clave like all(${sql.array(consulta.palabras.map(patron))}) as contiene,
                  similarity(v.nombre_clave, ${consulta.clave}) as parecido
           from visitante v join sucursal s on s.id = v.sucursal_alta_id
@@ -130,10 +144,10 @@ export async function buscarVisitantes(sql: Sql, usuarioId: string, codigo: stri
 
 /** Posibles coincidencias para un alta: mismo teléfono, mismo nombre o nombre parecido. */
 /** Posibles coincidencias. `excluirId` deja fuera al propio expediente cuando se corrige. */
-export async function coincidencias(tx: Tx, datos: DatosVisitante, clave: string, excluirId: string | null = null): Promise<ResultadoVisitante[]> {
+export async function coincidencias(tx: Tx, usuarioId: string, datos: DatosVisitante, clave: string, excluirId: string | null = null): Promise<ResultadoVisitante[]> {
   const palabras = clave.split(" ").filter(Boolean);
   const filas = await tx<Fila[]>`
-    select v.id, v.nombre, v.nombre_clave, v.telefono, v.estado_procedencia, s.nombre as sucursal_alta, v.creado_en,
+    select v.id, v.nombre, v.nombre_clave, v.telefono, v.estado_procedencia, ${alta(tx, usuarioId)},
            v.nombre_clave like all(${tx.array(palabras.map(patron))}) as contiene,
            similarity(v.nombre_clave, ${clave}) as parecido
     from visitante v join sucursal s on s.id = v.sucursal_alta_id
@@ -177,7 +191,7 @@ export async function crearVisitante(
 
     // Una sola alta a la vez: así dos recepciones no crean dos veces a la misma persona sin verse.
     await tx`select pg_advisory_xact_lock(hashtext('alta_visitante'))`;
-    const posibles = await coincidencias(tx, datos, clave);
+    const posibles = await coincidencias(tx, usuarioId, datos, clave);
     if (posibles.some((p) => !confirmados.has(p.id))) return { ok: false, error: "coincidencias", coincidencias: posibles };
 
     const [v] = await tx<{ id: string }[]>`
@@ -207,7 +221,7 @@ export async function consultarVisitante(sql: Sql, usuarioId: string, codigo: st
   if (!esIdentificadorValido(id)) return null;
   if (!(await sucursalConPermiso(sql, usuarioId, codigo, "visitante.consultar"))) return null;
   const [f] = await sql<(Fila & { distintos: number })[]>`
-    select v.id, v.nombre, v.nombre_clave, v.telefono, v.estado_procedencia, s.nombre as sucursal_alta, v.creado_en,
+    select v.id, v.nombre, v.nombre_clave, v.telefono, v.estado_procedencia, ${alta(sql, usuarioId)},
            false as contiene, 0::real as parecido,
            (select count(*)::int from visitante_distinto d where d.visitante_id = v.id or d.distinto_de_id = v.id) as distintos
     from visitante v join sucursal s on s.id = v.sucursal_alta_id

@@ -6,7 +6,7 @@ import { historialVisitante, registrarCobertura, resumenesHistorial } from "@/li
 import { abrirTurno } from "@/lib/turnos";
 import { confirmarVisita, pantallaCobro, type CobroDelTurno } from "@/lib/visitas";
 import { interpretarConsulta } from "@/lib/datos-visitante";
-import { buscarVisitantes } from "@/lib/visitantes";
+import { buscarVisitantes, consultarVisitante, crearVisitante } from "@/lib/visitantes";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
 
@@ -138,6 +138,36 @@ describe.skipIf(!URL_ADMIN)("historial del visitante entre sucursales", () => {
     const a = await buscarVisitantes(sql, adminTen, "TEN", consulta);
     if (!a.ok) throw new Error(a.error);
     expect(a.resultados[0].historial).toMatchObject({ visitas: 2, ultima: { sucursal: "Tenango" } });
+  });
+
+  it("ficha creada en Santiago: sucursal y fecha de alta solo con permiso de detalle en Santiago; Administración solo Tenango no ve Santiago", async () => {
+    const consulta = interpretarConsulta("mariela ficticia");
+    // Administración con acceso solo a Tenango: ni en la tarjeta de búsqueda ni en el expediente completo.
+    const a = await buscarVisitantes(sql, adminTen, "TEN", consulta);
+    if (!a.ok) throw new Error(a.error);
+    expect(a.resultados[0]).toMatchObject({ id: mariela, sucursalAlta: null, creadoEn: null });
+    expect(JSON.stringify(a)).not.toContain("Santiago");
+    const e = await consultarVisitante(sql, adminTen, "TEN", mariela);
+    expect(e).toMatchObject({ id: mariela, sucursalAlta: null, creadoEn: null });
+    const h = await historialVisitante(sql, adminTen, "TEN", mariela);
+    expect(JSON.stringify({ e, h })).not.toContain("Santiago");
+
+    // Recepción Tenango tampoco ve el alta (no tiene detalle en Santiago), pero conserva conteo y última visita.
+    const r = await buscarVisitantes(sql, recepTen, "TEN", consulta);
+    if (!r.ok) throw new Error(r.error);
+    expect(r.resultados[0]).toMatchObject({ sucursalAlta: null, creadoEn: null, historial: { visitas: 4, ultima: { sucursal: "Santiago" } } });
+    expect(await consultarVisitante(sql, recepTen, "TEN", mariela)).toMatchObject({ sucursalAlta: null, creadoEn: null });
+    // Tampoco en las posibles coincidencias del alta.
+    const alta = await crearVisitante(sql, recepTen, "TEN", { nombre: "Mariela Ficticia Ruiz", telefono: null, estadoProcedencia: null }, [], PRUEBAS);
+    expect(alta).toMatchObject({ ok: false, error: "coincidencias" });
+    if (alta.ok || alta.error !== "coincidencias") throw new Error("se esperaban coincidencias");
+    expect(alta.coincidencias.find((c) => c.id === mariela)).toMatchObject({ sucursalAlta: null, creadoEn: null });
+
+    // Con permiso de detalle en Santiago sí aparece.
+    expect(await consultarVisitante(sql, adminAmbas, "TEN", mariela)).toMatchObject({ sucursalAlta: "Santiago", creadoEn: expect.any(Date) });
+    const s = await buscarVisitantes(sql, recepStg, "STG", consulta);
+    if (!s.ok) throw new Error(s.error);
+    expect(s.resultados.find((x) => x.id === mariela)).toMatchObject({ sucursalAlta: "Santiago" });
   });
 
   it("cobertura: la registra solo Dirección; incompleto mientras falte alguna sucursal del alcance o el inicio", async () => {
