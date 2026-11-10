@@ -381,20 +381,34 @@ test("crear una ficha desde la misma pantalla conserva el grupo; una coincidenci
   expect(await conteos(e.codigo)).toEqual({ operaciones: 1, pases: 3, movimientos: 1, suma: "150.00" });
 });
 
-test("si alguien del grupo ya tiene una visita hoy, se avisa antes de confirmar (sin bloquear)", async ({ page }) => {
+test("si alguien ya tiene pase de hoy en esta sucursal, no se cobra otra visita: se ofrece registrar su entrada o reingreso", async ({ page }) => {
   const e = await escenario();
   await entrar(page, e.recep.correo);
   await elegir(page, e.codigo, e.nombre);
   await expect(page.getByTestId("visita-hoy")).toHaveCount(0);
+  await expect(page.getByTestId("pase-aqui")).toHaveCount(0);
   await confirmar(page).click();
   await expect(page.getByTestId("cobro-registrado")).toBeVisible();
 
   await page.getByRole("button", { name: "Nueva visita" }).click();
   await buscar(page, e.nombre);
   await tarjeta(page, e.nombre).getByRole("button", { name: "Agregar" }).click();
-  await expect(page.getByTestId("visita-hoy")).toHaveText(`Ya tiene una visita registrada hoy en Visitas ${e.codigo}`);
-  await expect(page.getByTestId("aviso-visita-hoy")).toContainText(`${e.nombre} ya tiene una visita registrada hoy. La regla de reingreso está pendiente`);
-  await expect(confirmar(page)).toBeEnabled();
+  await expect(page.getByTestId("pase-aqui")).toContainText(`Ya tiene pase de hoy en Visitas ${e.codigo}: no se cobra otra visita.`);
+  await expect(page.getByTestId("aviso-pase-aqui")).toContainText("no se cobra otra visita");
+  await expect(confirmar(page)).toBeDisabled();
+  await page.getByTestId("ir-pase").click();
+  await expect(page.getByTestId("entradas")).toBeVisible();
+  await page.getByRole("button", { name: "Registrar entrada" }).click();
+  await expect(page.getByRole("status")).toHaveText("Entrada registrada.");
+
+  // Ya entró: ahora se ofrece el reingreso, también desde la búsqueda.
+  await abrirCobro(page, e.codigo);
+  await buscar(page, e.nombre);
+  await tarjeta(page, e.nombre).getByRole("button", { name: "Agregar" }).click();
+  await expect(page.getByTestId("pase-aqui")).toContainText("y ya entró");
+  await expect(page.getByTestId("ir-pase")).toHaveText("Registrar reingreso");
+  await expect(page.getByRole("button", { name: /Cobrar otra visita/ })).toHaveCount(0);
+  expect(await conteos(e.codigo)).toMatchObject({ operaciones: 1, pases: 1 });
 });
 
 test("grupo: se pierde la conexión después de guardar; el grupo y lo recibido quedan fijos y el reintento no cobra dos veces", async ({ page }) => {
@@ -619,7 +633,7 @@ test("transferencia: queda pendiente sin tocar la bolsa; Administración verific
   await elegir(page, e.codigo, e.nombre);
   await page.getByRole("radio", { name: "Transferencia" }).check();
   await expect(page.getByTestId("datos-cobro")).toContainText("Pide al visitante que transfiera $50.00 a la cuenta de Fitnessland");
-  await expect(page.getByTestId("aviso-acceso")).toContainText("La regla para dar acceso con el comprobante está pendiente de decisión.");
+  await expect(page.getByTestId("aviso-acceso")).toContainText("Para entrar antes, necesita la autorización de Encargado.");
   // Sin tipo ni referencia: error junto al campo.
   await registrarTransferencia(page).click();
   await expect(page.locator("#referencia-error")).toHaveText("Indica si es una clave de rastreo o un folio bancario.");

@@ -87,6 +87,7 @@ async function contexto(
 type Ficha = { id: string; nombre: string; telefono: string | null; sucursal_alta: string; unida: boolean };
 
 export type CobroRegistrado = {
+  operacionId: string;
   personas: number;
   visitantes: string[];
   total: string;
@@ -167,7 +168,7 @@ async function operacionExistente(tx: Tx, pedido: Pedido, usuarioId: string, cod
   return {
     ok: true, operacionId: o.id, repetida,
     cobro: {
-      personas: pases.length, visitantes: pases.map((p) => p.nombre), total: o.total, formaPago: o.formaPago, estado: o.estado,
+      operacionId: o.id, personas: pases.length, visitantes: pases.map((p) => p.nombre), total: o.total, formaPago: o.formaPago, estado: o.estado,
       recibido: o.recibido, cambio: o.cambio, autorizacion: o.autorizacion, conciliacion: o.conciliacion,
       referencia: o.referencia, tipoReferencia: o.tipoReferencia,
     },
@@ -406,7 +407,16 @@ export async function detalleCobro(sql: Sql, usuarioId: string, codigo: string, 
   });
 }
 
-export type VisitaHoy = { id: string; visitasHoy: number; enEstaSucursal: boolean };
+/**
+ * `paseAqui`: pase de hoy en esta sucursal que todavía sirve para entrar (no cancelado ni con transferencia no
+ * localizada). Con él no se cobra otra visita: se registra la entrada o el reingreso con el mismo pase.
+ */
+export type VisitaHoy = {
+  id: string;
+  visitasHoy: number;
+  enEstaSucursal: boolean;
+  paseAqui: { operacionId: string; entro: boolean } | null;
+};
 
 /**
  * Personas que ya tienen una visita registrada hoy (fecha de la sucursal), en cualquier sucursal y contando
@@ -426,11 +436,17 @@ export async function visitasDeHoy(sql: Sql, usuarioId: string, codigo: string, 
       )
       select x.id,
              count(p.id)::int as "visitasHoy",
-             coalesce(bool_or(p.sucursal_id = hoy.id), false) as "enEstaSucursal"
+             coalesce(bool_or(p.sucursal_id = hoy.id), false) as "enEstaSucursal",
+             (select json_build_object('operacionId', pa.operacion_id,
+                                       'entro', exists (select 1 from acceso a where a.pase_id = pa.id and a.tipo = 'entrada'))
+              from pase_visita pa join cobro_visita ca on ca.operacion_id = pa.operacion_id
+              where pa.visitante_id in (select visitante_grupo(x.id)) and pa.sucursal_id = hoy.id and pa.creado_en >= hoy.desde
+                and pa.cancelado_en is null and ca.estado not in ('cancelado', 'no_localizado')
+              order by pa.creado_en desc limit 1) as "paseAqui"
       from unnest(${ids}::uuid[]) as x(id)
       cross join hoy
       left join pase_visita p on p.visitante_id in (select visitante_grupo(x.id)) and p.creado_en >= hoy.desde and p.cancelado_en is null
-      group by x.id`;
+      group by x.id, hoy.id, hoy.desde`;
     return [...filas];
   });
 }

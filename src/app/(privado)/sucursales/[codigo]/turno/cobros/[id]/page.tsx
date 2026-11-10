@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { EntradasDelCobro } from "@/components/Accesos";
 import { FormularioCancelacion } from "@/components/Cancelaciones";
+import { accesosDelCobro } from "@/lib/accesos";
 import { cancelacionesDeCobro, pantallaSolicitud } from "@/lib/cancelaciones";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
@@ -31,9 +33,10 @@ export default async function DetalleCobro({ params, searchParams }: PageProps<"
   const sql = obtenerBaseDatos()!;
   const d = await detalleCobro(sql, sesion.usuarioId, codigo, id);
   if (!d) notFound();
-  const [cancelaciones, solicitud] = await Promise.all([
+  const [cancelaciones, solicitud, accesos] = await Promise.all([
     cancelacionesDeCobro(sql, d.cobroId),
     pantallaSolicitud(sql, sesion.usuarioId, codigo, id, leerEntorno()),
+    accesosDelCobro(sql, sesion.usuarioId, codigo, id),
   ]);
   const { aviso } = await searchParams;
   const ESTADO_SOLICITUD = { solicitada: "Pendiente de autorizar", aprobada: "Aprobada", rechazada: "Rechazada" } as const;
@@ -45,6 +48,12 @@ export default async function DetalleCobro({ params, searchParams }: PageProps<"
       <p className="sub">Solo datos ficticios.</p>
       {aviso === "solicitada" ? (
         <p className="aviso aviso-ok" role="status">Cancelación solicitada. Nada cambia hasta que otra persona con permiso la autorice.</p>
+      ) : null}
+      {aviso === "autorizacion" ? (
+        <p className="aviso aviso-ok" role="status">Autorización pedida. Encargado la responde desde su sesión; aquí verás si la aprueba o no.</p>
+      ) : null}
+      {aviso === "entrada" || aviso === "reingreso" ? (
+        <p className="aviso aviso-ok" role="status">{aviso === "entrada" ? "Entrada registrada." : "Reingreso registrado con el mismo pase, sin cobrar."}</p>
       ) : null}
       {cancelaciones.comoConservado.length ? (
         <p className="aviso aviso-info" data-testid="es-conservado">
@@ -101,6 +110,7 @@ export default async function DetalleCobro({ params, searchParams }: PageProps<"
           </dd>
         </dl>
       </section>
+      {accesos ? <EntradasDelCobro codigo={codigo} operacionId={id} datos={accesos} /> : null}
       {d.cambios.length ? (
         <section className="tarjeta" aria-labelledby="t-cambios" data-testid="detalle-cambios">
           <h2 id="t-cambios" className="titulo-seccion">Cambios de estado</h2>

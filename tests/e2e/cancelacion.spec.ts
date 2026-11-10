@@ -66,14 +66,33 @@ async function cobrar(page: Page, codigo: string, nombre: string) {
   await page.getByRole("button", { name: "Confirmar cobro · $50.00" }).click();
   await expect(page.getByTestId("cobro-registrado")).toContainText("Cobro registrado");
 }
+/**
+ * Duplicado como ocurre en la práctica: el mismo cobro capturado en dos pestañas antes de confirmar la primera.
+ * (Con el pase de hoy ya registrado, la pantalla ya no deja cobrar otra visita a la misma persona.)
+ */
+async function cobrarDuplicado(page: Page, codigo: string, nombre: string) {
+  const otra = await page.context().newPage();
+  for (const p of [page, otra]) {
+    await p.goto(`/sucursales/${codigo}/turno/visita`);
+    await p.waitForLoadState("networkidle");
+    await p.getByLabel(/nombre completo o teléfono/).fill(nombre);
+    await p.getByRole("button", { name: "Buscar" }).click();
+    await p.getByTestId("visitante").filter({ hasText: nombre }).getByRole("button", { name: "Agregar" }).click();
+    await expect(p.getByTestId("en-grupo")).toHaveCount(1);
+  }
+  for (const p of [page, otra]) {
+    await p.getByRole("button", { name: "Confirmar cobro · $50.00" }).click();
+    await expect(p.getByTestId("cobro-registrado")).toContainText("Cobro registrado");
+  }
+  await otra.close();
+}
 const bolsa = (page: Page) => page.getByTestId("lugar-bolsa_visitas");
 
 test("Recepción pide cancelar el duplicado de Ana y Dirección lo aprueba: la bolsa vuelve de $300 a $250 y las ventas no lo cuentan", async ({ page }) => {
   const e = await escenario();
   await entrar(page, e.recep.correo);
   await cobrar(page, e.codigo, e.luis);
-  await cobrar(page, e.codigo, e.ana);
-  await cobrar(page, e.codigo, e.ana);
+  await cobrarDuplicado(page, e.codigo, e.ana);
 
   await page.goto(`/sucursales/${e.codigo}/turno`);
   await expect(bolsa(page).getByTestId("esperado")).toHaveText("$300.00");
@@ -146,8 +165,7 @@ test("Recepción pide cancelar el duplicado de Ana y Dirección lo aprueba: la b
 test("el rechazo pide motivo y deja el cobro vigente", async ({ page }) => {
   const e = await escenario();
   await entrar(page, e.recep.correo);
-  await cobrar(page, e.codigo, e.ana);
-  await cobrar(page, e.codigo, e.ana);
+  await cobrarDuplicado(page, e.codigo, e.ana);
   await page.goto(`/sucursales/${e.codigo}/turno`);
   await page.getByTestId("cobro-turno").first().getByRole("link", { name: "Ver detalle" }).click();
   const formulario = page.getByTestId("solicitar-cancelacion");
@@ -190,8 +208,7 @@ test("Tenango, dos cuentas de Recepción: solo la responsable de la bolsa puede 
             select ${ana}, ${"000" + String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}, 'Querétaro', id from sucursal where codigo = 'ATL'`;
 
   await entrar(page, responsable.correo);
-  await cobrar(page, "TEN", ana);
-  await cobrar(page, "TEN", ana);
+  await cobrarDuplicado(page, "TEN", ana);
   const [{ id: duplicado }, { id: correcto }] = await sql<{ id: string }[]>`
     select id from operacion_visita where turno_id = ${t.id} order by registrada_en desc, id`;
 
