@@ -8,6 +8,7 @@ import {
 } from "@/lib/datos-visitante";
 import { claveNombre } from "@/lib/datos-sucursal";
 import type { Entorno } from "@/lib/entorno";
+import { resumenesHistorial, type ResumenHistorial } from "@/lib/historial";
 import { esIdentificadorValido } from "@/lib/permisos";
 
 /**
@@ -34,6 +35,8 @@ export type ResultadoVisitante = {
   sucursalAlta: string;
   creadoEn: Date;
   motivos: ("mismo_telefono" | "mismo_nombre" | "nombre_parecido")[];
+  /** Visitas registradas y última visita, dentro del alcance de la cuenta (src/lib/historial.ts). */
+  historial?: ResumenHistorial;
 };
 
 export type Fila = {
@@ -116,7 +119,13 @@ export async function buscarVisitantes(sql: Sql, usuarioId: string, codigo: stri
 
   const telefono = consulta.modo === "telefono" ? consulta.telefono : null;
   const clave = consulta.modo === "nombre" ? consulta.clave : null;
-  return { ok: true, resultados: filas.slice(0, LIMITE).map((f) => presentar(f, telefono, clave)), limitado: filas.length > LIMITE };
+  const resultados = filas.slice(0, LIMITE).map((f) => presentar(f, telefono, clave));
+  const historial = await sql.begin("read only", (tx) => resumenesHistorial(tx, usuarioId, resultados.map((r) => r.id)));
+  for (const r of resultados) {
+    const h = historial.get(r.id);
+    if (h) r.historial = h;
+  }
+  return { ok: true, resultados, limitado: filas.length > LIMITE };
 }
 
 /** Posibles coincidencias para un alta: mismo teléfono, mismo nombre o nombre parecido. */

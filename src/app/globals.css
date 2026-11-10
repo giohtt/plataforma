@@ -804,3 +804,18 @@ fieldset.sin-marco {
   color: var(--info);
   white-space: normal;
 }
+
+/* Historial del visitante (bloque 4). */
+.historial-resumen {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chip-incompleto {
+  background: var(--warn-soft, #fdecc8);
+  color: var(--warn);
+}
+.subtitulo {
+  font-size: 0.95rem;
+  margin: 12px 0 4px;
+}

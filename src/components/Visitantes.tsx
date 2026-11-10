@@ -21,6 +21,22 @@ export function TarjetaVisitante({ v, codigo, mostrarMotivos, accion }: { v: Res
           Tel. {v.telefono ?? "no registrado"} · {v.estadoProcedencia ?? "procedencia no registrada"}
         </span>
         <span className="sub">Registrado en {v.sucursalAlta} el {fecha.format(new Date(v.creadoEn))}</span>
+        {v.historial ? (
+          <span className="historial-resumen" data-testid="historial-resumen">
+            <span>
+              {v.historial.visitas
+                ? <><strong>{v.historial.visitas} {v.historial.visitas === 1 ? "visita registrada" : "visitas registradas"}</strong>
+                    {v.historial.ultima ? ` · Última el ${fecha.format(new Date(v.historial.ultima.en))} en ${v.historial.ultima.sucursal}` : ""}</>
+                : "Sin visitas registradas"}
+            </span>
+            <span>
+              {v.historial.incompleto ? <span className="chip-estado chip-incompleto" data-testid="historial-incompleto">Historial incompleto</span> : null}{" "}
+              <Link href={`/sucursales/${codigo}/visitantes/${v.id}#historial`} target={accion ? "_blank" : undefined} data-testid="ver-historial">
+                Ver historial
+              </Link>
+            </span>
+          </span>
+        ) : null}
         {mostrarMotivos && v.motivos.length ? (
           <span className="motivos-coincidencia">{v.motivos.map((m) => <span key={m} className="chip-estado chip-programada">{MOTIVO[m]}</span>)}</span>
         ) : null}

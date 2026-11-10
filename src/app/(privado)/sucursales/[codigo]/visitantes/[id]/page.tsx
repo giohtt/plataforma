@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { HistorialVisitante } from "@/components/HistorialVisitante";
+import { historialVisitante } from "@/lib/historial";
 import { correccionesDeVisitante, expedienteParaCorregir } from "@/lib/correccion-visitantes";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
@@ -34,11 +36,12 @@ export default async function ExpedienteVisitante({ params, searchParams }: Page
   }
   const e = await consultarVisitante(sql, sesion.usuarioId, codigo, id);
   if (!e) notFound();
-  const [editable, correcciones, fusiones, fusionable] = await Promise.all([
+  const [editable, correcciones, fusiones, fusionable, historial] = await Promise.all([
     expedienteParaCorregir(sql, sesion.usuarioId, codigo, id),
     correccionesDeVisitante(sql, sesion.usuarioId, codigo, id),
     fusionesDeVisitante(sql, sesion.usuarioId, codigo, id),
     puedeFusionarDesde(sql, sesion.usuarioId, codigo, id),
+    historialVisitante(sql, sesion.usuarioId, codigo, id),
   ]);
   const enProduccion = leerEntorno() === "produccion";
   const puedeCorregir = !!editable?.puedeCorregir && !enProduccion;
@@ -67,6 +70,7 @@ export default async function ExpedienteVisitante({ params, searchParams }: Page
           <dt>Expediente creado</dt><dd>En {e.sucursalAlta}, el {fecha.format(e.creadoEn)}</dd>
         </dl>
       </section>
+      {historial ? <HistorialVisitante h={historial} /> : null}
       {fusiones?.length ? (
         <section className="tarjeta" aria-labelledby="t-fusiones" data-testid="fusiones">
           <h2 id="t-fusiones" className="titulo-seccion">Fichas unidas</h2>
