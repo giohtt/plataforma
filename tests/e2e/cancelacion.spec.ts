@@ -66,14 +66,37 @@ async function cobrar(page: Page, codigo: string, nombre: string) {
   await page.getByRole("button", { name: "Confirmar cobro · $50.00" }).click();
   await expect(page.getByTestId("cobro-registrado")).toContainText("Cobro registrado");
 }
+/**
+ * Cobra una vez desde la pantalla y prepara el duplicado directamente en los datos de prueba (misma operación con
+ * otra clave, mismas personas, mismo importe y su entrada a la bolsa): el servidor ya no deja cobrar dos veces a
+ * quien tiene pase de hoy en la sucursal.
+ */
+async function cobrarDuplicado(page: Page, codigo: string, nombre: string) {
+  await cobrar(page, codigo, nombre);
+  await sql.begin(async (tx) => {
+    const [orig] = await tx<{ id: string; cobro: string }[]>`
+      select o.id, c.id as cobro from operacion_visita o join sucursal s on s.id = o.sucursal_id join cobro_visita c on c.operacion_id = o.id
+      where s.codigo = ${codigo} order by o.registrada_en desc limit 1`;
+    const [o] = await tx<{ id: string }[]>`
+      insert into operacion_visita (clave, sucursal_id, turno_id, registrada_por, total)
+      select gen_random_uuid(), sucursal_id, turno_id, registrada_por, total from operacion_visita where id = ${orig.id} returning id`;
+    const [c] = await tx<{ id: string }[]>`
+      insert into cobro_visita (operacion_id, forma_pago, estado, importe, recibido, cambio)
+      select ${o.id}, forma_pago, estado, importe, recibido, cambio from cobro_visita where id = ${orig.cobro} returning id`;
+    await tx`insert into pase_visita (operacion_id, visitante_id, sucursal_id, tarifa, descuento, total, orden)
+             select ${o.id}, visitante_id, sucursal_id, tarifa, descuento, total, orden from pase_visita where operacion_id = ${orig.id}`;
+    await tx`insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, cobro_id, responsable_id, registrado_por)
+             select lugar_id, turno_id, tipo, importe, ${c.id}, responsable_id, registrado_por from movimiento_efectivo
+             where cobro_id = ${orig.cobro} and tipo = 'entrada_cobro_visita'`;
+  });
+}
 const bolsa = (page: Page) => page.getByTestId("lugar-bolsa_visitas");
 
 test("Recepción pide cancelar el duplicado de Ana y Dirección lo aprueba: la bolsa vuelve de $300 a $250 y las ventas no lo cuentan", async ({ page }) => {
   const e = await escenario();
   await entrar(page, e.recep.correo);
   await cobrar(page, e.codigo, e.luis);
-  await cobrar(page, e.codigo, e.ana);
-  await cobrar(page, e.codigo, e.ana);
+  await cobrarDuplicado(page, e.codigo, e.ana);
 
   await page.goto(`/sucursales/${e.codigo}/turno`);
   await expect(bolsa(page).getByTestId("esperado")).toHaveText("$300.00");
@@ -146,8 +169,7 @@ test("Recepción pide cancelar el duplicado de Ana y Dirección lo aprueba: la b
 test("el rechazo pide motivo y deja el cobro vigente", async ({ page }) => {
   const e = await escenario();
   await entrar(page, e.recep.correo);
-  await cobrar(page, e.codigo, e.ana);
-  await cobrar(page, e.codigo, e.ana);
+  await cobrarDuplicado(page, e.codigo, e.ana);
   await page.goto(`/sucursales/${e.codigo}/turno`);
   await page.getByTestId("cobro-turno").first().getByRole("link", { name: "Ver detalle" }).click();
   const formulario = page.getByTestId("solicitar-cancelacion");
@@ -190,8 +212,7 @@ test("Tenango, dos cuentas de Recepción: solo la responsable de la bolsa puede 
             select ${ana}, ${"000" + String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}, 'Querétaro', id from sucursal where codigo = 'ATL'`;
 
   await entrar(page, responsable.correo);
-  await cobrar(page, "TEN", ana);
-  await cobrar(page, "TEN", ana);
+  await cobrarDuplicado(page, "TEN", ana);
   const [{ id: duplicado }, { id: correcto }] = await sql<{ id: string }[]>`
     select id from operacion_visita where turno_id = ${t.id} order by registrada_en desc, id`;
 

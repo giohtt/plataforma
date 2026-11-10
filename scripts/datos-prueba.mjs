@@ -65,6 +65,8 @@ export const FACULTADES_PRUEBA = [
   { correo: `direccion.general${D}`, permiso: "autorizacion.gasto", limite: 1000 },
   // Indicado el 8 nov 2026, solo para la prueba: Dirección Tenango autoriza cancelaciones hasta $150, solo en Tenango.
   { correo: `direccion${D}`, permiso: "autorizacion.devolucion", limite: 150, codigo: "TEN" },
+  // Respaldo de Encargado para autorizar accesos (sin importe): permiso explícito, solo en Tenango.
+  { correo: `direccion${D}`, permiso: "acceso.autorizar", limite: null, codigo: "TEN" },
 ];
 
 /**
@@ -165,7 +167,7 @@ export async function cargarDatosPrueba(sql, { entorno }) {
     for (const f of FACULTADES_PRUEBA) {
       const filas = await tx`
         insert into facultad_otorgada (usuario_id, permiso, sucursal_id, todas_las_sucursales, limite_monto, motivo)
-        select u.id, ${f.permiso}, s.id, s.id is null, ${f.limite}, ${MOTIVO + " (límite ficticio)"}
+        select u.id, ${f.permiso}, s.id, s.id is null, ${f.limite}, ${MOTIVO + (f.limite === null ? "" : " (límite ficticio)")}
         from usuario u left join sucursal s on s.codigo = ${f.codigo ?? null}
         where u.correo = ${f.correo} and (${f.codigo ?? null}::text is null or s.id is not null)
           and not exists (select 1 from facultad_otorgada x where x.usuario_id = u.id and x.permiso = ${f.permiso})

@@ -156,13 +156,15 @@ describe.skipIf(!URL_ADMIN)("permisos y alcance por sucursal", () => {
       expect((await codigos(await de("direccion.general"))).length).toBe(total);
     });
 
-    it("las facultades de prueba son explícitas: Dirección general (gastos) y Dirección Tenango (cancelaciones, $150)", async () => {
+    it("las facultades de prueba son explícitas: Dirección general (gastos) y Dirección Tenango (cancelaciones, $150; respaldo para autorizar accesos)", async () => {
       const r = await resumenAccesos(sql, await de("direccion.general"));
       expect(r.alcancesGenerales.map((g) => g.rol)).toEqual(["direccion"]);
       expect(r.facultades).toMatchObject([{ permiso: "autorizacion.gasto", todas: true, limite: "1000.00" }]);
       const d = (await resumenAccesos(sql, await de("direccion"))).facultades;
-      expect(d).toHaveLength(1);
-      expect(d[0]).toMatchObject({ permiso: "autorizacion.devolucion", todas: false, limite: "150.00" });
+      expect(d.map((f) => [f.permiso, f.todas, f.limite]).sort()).toEqual([
+        ["acceso.autorizar", false, null],
+        ["autorizacion.devolucion", false, "150.00"],
+      ]);
     });
   });
 });

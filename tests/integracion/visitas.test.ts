@@ -213,12 +213,58 @@ describe.skipIf(!URL_ADMIN)("cobro de visitas en efectivo: individual y grupal",
       expect(await conteos(codigo)).toEqual({ operaciones: 1, cobros: 1, pases: 1, movimientos: 1, suma: "50.00" });
     });
 
-    it("dos cobros con claves distintas son dos visitas (por ejemplo, la misma persona vuelve más tarde)", async () => {
+    it("la misma persona el mismo día en la misma sucursal: el segundo cobro se rechaza y no guarda nada", async () => {
+      const { codigo, recep } = await escenario();
+      const [v, otra] = [await ficha("Diego Pase Vigente"), await ficha()];
+      const primero = await revisada(recep, codigo, v);
+      const r1 = await confirmar(recep, codigo, primero);
+      if (!r1.ok) throw new Error(r1.error);
+      expect(await confirmar(recep, codigo, await revisada(recep, codigo, v))).toEqual({
+        ok: false, error: "pase_vigente", conPase: [{ visitanteId: v, nombre: "Diego Pase Vigente", operacionId: r1.operacionId, entro: false }],
+      });
+      // En un grupo: indica solo a quien tiene pase; no se guarda nada del grupo.
+      const grupo = await revisada(recep, codigo, [otra, v]);
+      expect(await confirmar(recep, codigo, grupo)).toMatchObject({ ok: false, error: "pase_vigente", conPase: [{ visitanteId: v }] });
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 1, cobros: 1, pases: 1, movimientos: 1, suma: "50.00" });
+      // Recepción quita a esa persona y continúa con la misma clave.
+      expect(await confirmar(recep, codigo, { ...grupo, visitanteIds: [otra] })).toMatchObject({ ok: true, repetida: false });
+      // Un reintento del envío original sigue devolviendo el cobro original.
+      expect(await confirmar(recep, codigo, primero)).toMatchObject({ ok: true, operacionId: r1.operacionId, repetida: true });
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 2, pases: 2, movimientos: 2, suma: "100.00" });
+    });
+
+    it("dos pestañas confirman a la vez a la misma persona: solo una crea el cobro", async () => {
       const { codigo, recep } = await escenario();
       const v = await ficha();
-      expect((await confirmar(recep, codigo, await revisada(recep, codigo, v))).ok).toBe(true);
-      expect((await confirmar(recep, codigo, await revisada(recep, codigo, v))).ok).toBe(true);
-      expect(await conteos(codigo)).toMatchObject({ operaciones: 2, movimientos: 2, suma: "100.00" });
+      const [a, b] = [await revisada(recep, codigo, v), await revisada(recep, codigo, v)];
+      const r = await Promise.all([confirmar(recep, codigo, a), confirmar(recep, codigo, b)]);
+      expect(r.filter((x) => x.ok)).toHaveLength(1);
+      expect(r.find((x) => !x.ok)).toMatchObject({ ok: false, error: "pase_vigente" });
+      expect(await conteos(codigo)).toMatchObject({ operaciones: 1, cobros: 1, pases: 1, movimientos: 1, suma: "50.00" });
+      // Reintentar la pestaña que ganó devuelve su cobro; la otra sigue rechazada.
+      const ganadora = r[0].ok ? a : b;
+      expect(await confirmar(recep, codigo, ganadora)).toMatchObject({ ok: true, repetida: true });
+      expect(await confirmar(recep, codigo, r[0].ok ? b : a)).toMatchObject({ ok: false, error: "pase_vigente" });
+    });
+
+    it("sí se cobra en otra sucursal, con un pase de otro día o si el pase anterior ya no está vigente", async () => {
+      const uno = await escenario();
+      const dos = await escenario();
+      const v = await ficha();
+      expect((await confirmar(uno.recep, uno.codigo, await revisada(uno.recep, uno.codigo, v))).ok).toBe(true);
+      expect((await confirmar(dos.recep, dos.codigo, await revisada(dos.recep, dos.codigo, v))).ok).toBe(true);
+      // Pase de ayer (simulado): hoy se cobra.
+      await sql`alter table pase_visita disable trigger pase_visita_inmutable`;
+      try {
+        await sql`update pase_visita set creado_en = creado_en - interval '1 day' where visitante_id = ${v} and sucursal_id = ${ids[uno.codigo]}`;
+      } finally {
+        await sql`alter table pase_visita enable trigger pase_visita_inmutable`;
+      }
+      expect((await confirmar(uno.recep, uno.codigo, await revisada(uno.recep, uno.codigo, v))).ok).toBe(true);
+      // Una ficha unida cuenta como la misma persona.
+      const nueva = await ficha();
+      await sql`update visitante set fusionado_en = now(), fusionado_en_id = ${nueva} where id = ${v}`;
+      expect(await confirmar(uno.recep, uno.codigo, await revisada(uno.recep, uno.codigo, nueva))).toMatchObject({ ok: false, error: "pase_vigente" });
     });
 
     it("una clave usada por otra persona no confirma nada", async () => {
@@ -710,7 +756,7 @@ describe.skipIf(!URL_ADMIN)("cobro de visitas en efectivo: individual y grupal",
   });
 
   describe("aviso de visita registrada hoy", () => {
-    it("indica quién ya tiene visita hoy, en esta u otra sucursal, también por una ficha unida; no bloquea", async () => {
+    it("indica quién ya tiene visita hoy, en esta u otra sucursal, también por una ficha unida; aquí ofrece su pase", async () => {
       const { codigo, recep } = await escenario();
       const otra = await escenario();
       const [aqui, alla, nueva, absorbida] = [await ficha(), await ficha(), await ficha(), await ficha()];
@@ -722,8 +768,10 @@ describe.skipIf(!URL_ADMIN)("cobro de visitas en efectivo: individual y grupal",
       expect(por[aqui]).toEqual([1, true]);
       expect(por[alla]).toEqual([1, false]);
       expect(por[nueva]).toEqual([1, false]); // por la ficha que se le unió
-      // No bloquea: se puede cobrar otra visita (la regla de reingreso está pendiente).
-      expect((await confirmar(recep, codigo, await revisada(recep, codigo, aqui))).ok).toBe(true);
+      // En esta sucursal ya tiene pase de hoy: se indica con qué cobro y no se cobra otra visita.
+      expect(r!.find((x) => x.id === aqui)?.paseAqui).toMatchObject({ entro: false });
+      expect(r!.find((x) => x.id === alla)?.paseAqui).toBeNull();
+      expect(await confirmar(recep, codigo, await revisada(recep, codigo, aqui))).toMatchObject({ ok: false, error: "pase_vigente" });
       // Una visita de ayer no cuenta.
       const ayer = await ficha();
       expect((await confirmar(recep, codigo, await revisada(recep, codigo, ayer))).ok).toBe(true);

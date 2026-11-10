@@ -781,3 +781,26 @@ fieldset.sin-marco {
   gap: 14px;
   width: 100%;
 }
+
+/* Registro de accesos (bloque 4, piloto de Tenango). */
+.formulario-compacto {
+  gap: 8px;
+  min-width: min(100%, 280px);
+}
+.estado-acceso {
+  font-weight: 600;
+}
+.estado-bien {
+  color: var(--ok);
+}
+.estado-pendiente {
+  color: var(--warn);
+}
+.estado-mal {
+  color: var(--bad);
+}
+.chip-pase-aqui {
+  background: var(--info-soft);
+  color: var(--info);
+  white-space: normal;
+}

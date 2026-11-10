@@ -165,11 +165,14 @@ export function FlujoVisita(props: Props) {
         </dl>
         {registrado.formaPago === "transferencia" ? (
           <p className="aviso aviso-info" data-testid="aviso-acceso">
-            El abono todavía no está verificado. La regla para dar acceso con el comprobante está pendiente de decisión.
+            El abono todavía no está verificado. Para entrar, pide la autorización de Encargado en «Registrar entradas».
           </p>
         ) : null}
         <p className="fila-acciones">
-          <button className="boton boton-principal" type="button" onClick={nuevaVisita}>Nueva visita</button>
+          <Link className="boton boton-principal" href={`/sucursales/${codigo}/turno/cobros/${registrado.operacionId}#entradas`} data-testid="registrar-entradas">
+            {registrado.personas === 1 ? "Registrar entrada" : "Registrar entradas"}
+          </Link>
+          <button className="boton" type="button" onClick={nuevaVisita}>Nueva visita</button>
           <Link className="boton" href={`/sucursales/${codigo}/turno`}>Ver el turno</Link>
         </p>
       </section>
@@ -188,13 +191,15 @@ export function FlujoVisita(props: Props) {
     ? (!tipoReferencia ? MENSAJES_REFERENCIA.tipo : !ref.ok ? MENSAJES_REFERENCIA[ref.motivo] : undefined)
     : error?.referencia;
   const falta = previos !== null && !otraVenta;
-  const conVisitaHoy = grupo.filter((v) => (hoy[v.id]?.visitasHoy ?? 0) > 0);
+  // Con pase de hoy en esta sucursal no se cobra otra visita: se registra la entrada o el reingreso con el mismo pase.
+  const conPaseAqui = grupo.filter((v) => hoy[v.id]?.paseAqui);
+  const conVisitaHoy = grupo.filter((v) => (hoy[v.id]?.visitasHoy ?? 0) > 0 && !hoy[v.id]?.paseAqui);
 
   const confirmar = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (forma !== "efectivo") setIntentoTarjeta(true);
     const faltaDato = (tarjeta && !aut.ok) || (transferencia && (!tipoReferencia || !ref.ok));
-    if (enCurso.current || !vivo.ok || !grupo.length || faltaDato || falta) return; // doble clic: el segundo no sale del navegador
+    if (enCurso.current || !vivo.ok || !grupo.length || faltaDato || falta || conPaseAqui.length) return; // doble clic: el segundo no sale del navegador
     enCurso.current = true;
     setEnviando(true);
     setError(null);
@@ -205,7 +210,21 @@ export function FlujoVisita(props: Props) {
       else {
         // Con una autorización repetida basta el recuadro con el cobro previo y la confirmación.
         if (r.previos) { setPrevios(r.previos); setError(null); }
-        else setError({ general: r.error, recibido: r.errorRecibido, autorizacion: r.errorAutorizacion, referencia: r.errorReferencia });
+        else {
+          // Pase vigente hoy aquí: el grupo se conserva y cada persona con pase muestra «Registrar entrada/reingreso».
+          const conPase = r.conPase;
+          if (conPase) {
+            setHoy((h) => {
+              const nuevo = { ...h };
+              for (const p of conPase) {
+                nuevo[p.visitanteId] = { id: p.visitanteId, visitasHoy: Math.max(h[p.visitanteId]?.visitasHoy ?? 0, 1), enEstaSucursal: true,
+                  paseAqui: { operacionId: p.operacionId, entro: p.entro } };
+              }
+              return nuevo;
+            });
+          }
+          setError({ general: r.error, recibido: r.errorRecibido, autorizacion: r.errorAutorizacion, referencia: r.errorReferencia });
+        }
       }
     } catch {
       // No se sabe si llegó al servidor. Grupo, medio de pago, recibido o autorización y clave se conservan:
@@ -251,9 +270,16 @@ export function FlujoVisita(props: Props) {
                   <span className="lista-grupo-datos">
                     <strong>{v.nombre}</strong>
                     <span className="sub">Tel. {v.telefono ?? "no registrado"} · {$(TARIFA_VISITA)}</span>
-                    {h && h.visitasHoy > 0 ? (
+                    {h?.paseAqui ? (
+                      <span className="chip-estado chip-pase-aqui" data-testid="pase-aqui">
+                        Ya tiene pase de hoy en {sucursal}{h.paseAqui.entro ? " y ya entró" : ""}: no se cobra otra visita.{" "}
+                        <Link href={`/sucursales/${codigo}/turno/cobros/${h.paseAqui.operacionId}#entradas`} data-testid="ir-pase">
+                          {h.paseAqui.entro ? "Registrar reingreso" : "Registrar entrada"}
+                        </Link>
+                      </span>
+                    ) : h && h.visitasHoy > 0 ? (
                       <span className="chip-estado chip-vencida" data-testid="visita-hoy">
-                        Ya tiene una visita registrada hoy {h.enEstaSucursal ? `en ${sucursal}` : "en otra sucursal"}
+                        Ya tiene una visita registrada hoy {h.enEstaSucursal ? `en ${sucursal}` : "en otra sucursal: aquí necesita un pase nuevo"}
                       </span>
                     ) : null}
                   </span>
@@ -271,10 +297,17 @@ export function FlujoVisita(props: Props) {
               <strong>{$(total)}</strong> {MEDIO[forma]}{grupo.length > 1 ? ` (${grupo.length} × ${$(TARIFA_VISITA)})` : ""}
             </dd>
           </dl>
+          {conPaseAqui.length ? (
+            <p className="aviso aviso-error" data-testid="aviso-pase-aqui">
+              {conPaseAqui.length === 1 ? `${conPaseAqui[0].nombre} ya tiene` : `${conPaseAqui.length} personas ya tienen`} pase de hoy
+              en {sucursal}: el pase vale todo el día en esta sucursal, así que no se cobra otra visita. Quítalas del grupo y registra su
+              entrada o reingreso con el mismo pase.
+            </p>
+          ) : null}
           {conVisitaHoy.length ? (
             <p className="aviso aviso-info" data-testid="aviso-visita-hoy">
               {conVisitaHoy.length === 1 ? `${conVisitaHoy[0].nombre} ya tiene` : `${conVisitaHoy.length} personas ya tienen`} una visita
-              registrada hoy. La regla de reingreso está pendiente: confirma solo si corresponde cobrar otra visita.
+              registrada hoy en otra sucursal. Su pase solo vale allá: aquí necesita un pase nuevo.
             </p>
           ) : null}
           {error ? <p className="aviso aviso-error" role="alert">{error.general}</p> : null}
@@ -327,8 +360,8 @@ export function FlujoVisita(props: Props) {
                   Como aparece en el comprobante. No escribas nombres ni números de cuenta. Formato provisional: de 4 a 30 letras o números.
                 </span>
                 <p className="aviso aviso-info" data-testid="aviso-acceso">
-                  El cobro quedará «Pendiente de verificar abono» hasta que Administración o Dirección lo verifique. La regla para dar acceso
-                  con el comprobante está pendiente de decisión.
+                  El cobro quedará «Pendiente de verificar abono» hasta que Administración o Dirección lo verifique. Para entrar antes,
+                  necesita la autorización de Encargado.
                 </p>
               </div>
             ) : tarjeta ? (
@@ -393,7 +426,7 @@ export function FlujoVisita(props: Props) {
             ) : null}
             {forma !== "efectivo" ? null : <p className="sub">Responsable de la bolsa: <strong>{responsableBolsa}</strong></p>}
             <p className="fila-acciones">
-              <button className="boton boton-principal" type="submit" disabled={enviando || !vivo.ok || falta}>
+              <button className="boton boton-principal" type="submit" disabled={enviando || !vivo.ok || falta || conPaseAqui.length > 0}>
                 {enviando
                   ? "Registrando…"
                   : tarjeta ? `Registrar cobro aprobado · ${$(total)}`

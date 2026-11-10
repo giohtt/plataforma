@@ -128,7 +128,7 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(filas.length).toBeGreaterThan(0);
       expect(filas.every((f) => f.bloque <= 4 && !f.es_autorizacion)).toBe(true);
       const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso).sort();
-      expect(recepcion).toEqual(["sucursal.consultar", "turno.abrir", "turno.consultar", "visita.registrar", "visita.solicitar_cancelacion", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
+      expect(recepcion).toEqual(["acceso.registrar_apertura", "sucursal.consultar", "turno.abrir", "turno.consultar", "visita.registrar", "visita.solicitar_cancelacion", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
       // Registrar visitas: solo Recepción (provisional); además, solo la responsable de la bolsa.
       expect(filas.filter((f) => f.permiso === "visita.registrar").map((f) => f.rol)).toEqual(["recepcion"]);
       // Verificar abonos de transferencias: Administración y Dirección (provisional). Recepción no.
@@ -138,6 +138,10 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(filas.filter((f) => f.permiso === "turno.abrir").map((f) => f.rol)).toEqual(["recepcion"]);
       // Reporte de visitas y cobros: Encargado, Administración y Dirección. Recepción no.
       expect(filas.filter((f) => f.permiso === "reporte.visitas").map((f) => f.rol).sort()).toEqual(["administracion", "direccion", "encargado"]);
+      // Accesos: Recepción registra; Encargado autoriza por rol (Dirección solo con permiso explícito); revisan Encargado, Administración y Dirección.
+      expect(filas.filter((f) => f.permiso === "acceso.registrar_apertura").map((f) => f.rol)).toEqual(["recepcion"]);
+      expect(filas.filter((f) => f.permiso === "acceso.autorizar").map((f) => f.rol)).toEqual(["encargado"]);
+      expect(filas.filter((f) => f.permiso === "acceso.consultar").map((f) => f.rol).sort()).toEqual(["administracion", "direccion", "encargado"]);
       // Corregir: Encargado y Dirección. Fusionar: solo Dirección. Historial general: nadie todavía.
       expect(filas.filter((f) => f.permiso === "visitante.corregir").map((f) => f.rol).sort()).toEqual(["direccion", "encargado"]);
       expect(filas.filter((f) => f.permiso === "visitante.fusionar").map((f) => f.rol)).toEqual(["direccion"]);

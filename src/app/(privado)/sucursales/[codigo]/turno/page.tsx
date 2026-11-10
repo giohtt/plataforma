@@ -4,6 +4,8 @@ import { FormularioApertura } from "@/components/FormularioApertura";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { requerirSesion } from "@/lib/sesion-servidor";
+import { resumenAccesosTurno } from "@/lib/accesos";
+import { tienePermiso } from "@/lib/permisos";
 import { estadoTurno, type TipoLugar } from "@/lib/turnos";
 import { ventasDelTurno, type Grupo } from "@/lib/ventas";
 import { cobrosDelTurno, impedimentoRegistroVisita } from "@/lib/visitas";
@@ -25,6 +27,11 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   const sql = obtenerBaseDatos()!;
   const puedeCobrar = t ? (await impedimentoRegistroVisita(sql, sesion.usuarioId, codigo, leerEntorno())) === null : false;
   const cobros = t ? await cobrosDelTurno(sql, t.id) : [];
+  const accesos = t ? await resumenAccesosTurno(sql, t.id) : null;
+  const [puedeRegistrarAcceso, puedeRevisarAccesos] = await Promise.all([
+    tienePermiso(sql, sesion.usuarioId, "acceso.registrar_apertura", e.sucursal.id),
+    tienePermiso(sql, sesion.usuarioId, "acceso.consultar", e.sucursal.id),
+  ]);
   const conTarjeta = cobros.filter((c) => c.formaPago === "tarjeta");
   const totalTarjeta = conTarjeta.reduce((suma, c) => suma + Math.round(Number(c.total) * 100), 0) / 100;
   const transferencias = cobros.filter((c) => c.formaPago === "transferencia");
@@ -92,6 +99,37 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
               </section>
             ))}
           </div>
+          {accesos ? (
+            <section className="tarjeta" aria-labelledby="t-accesos" data-testid="accesos-turno">
+              <h2 id="t-accesos" className="titulo-seccion">Accesos de este turno (registro de aperturas)</h2>
+              <dl className="cuentas-lugar">
+                <dt>Entradas con pase</dt>
+                <dd data-testid="accesos-entradas">{accesos.entradas}</dd>
+                <dt>Reingresos con el mismo pase</dt>
+                <dd data-testid="accesos-reingresos">{accesos.reingresos}</dd>
+                <dt>Entradas con transferencia pendiente (autorizadas)</dt>
+                <dd data-testid="accesos-transferencia">{accesos.conTransferencia}</dd>
+                <dt>Aperturas sin pase</dt>
+                <dd data-testid="accesos-sin-pase">{accesos.sinPase}</dd>
+                <dt>Autorizaciones pendientes</dt>
+                <dd data-testid="accesos-pendientes">{accesos.pendientes}</dd>
+              </dl>
+              {accesos.sinMotivo ? (
+                <p className="aviso aviso-info" data-testid="accesos-sin-motivo">
+                  {accesos.sinMotivo} {accesos.sinMotivo === 1 ? "apertura de emergencia sin motivo" : "aperturas de emergencia sin motivo"}: escríbelo en «Accesos del turno».
+                </p>
+              ) : null}
+              <p className="sub">Registrar accesos no cambia los cobros, la bolsa ni las ventas.</p>
+              <p className="fila-acciones">
+                {puedeRegistrarAcceso ? (
+                  <Link className="boton" href={`/sucursales/${codigo}/turno/accesos`} data-testid="ir-accesos">Accesos del turno</Link>
+                ) : null}
+                {puedeRevisarAccesos ? (
+                  <Link className="boton" href={`/sucursales/${codigo}/accesos`}>Registro de accesos</Link>
+                ) : null}
+              </p>
+            </section>
+          ) : null}
           <section className="tarjeta" aria-labelledby="t-ventas" data-testid="ventas-turno">
             <h2 id="t-ventas" className="titulo-seccion">Ventas de visitas del turno</h2>
             <dl className="cuentas-lugar">

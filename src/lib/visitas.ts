@@ -27,6 +27,7 @@ type Sql = postgres.Sql;
 type Tx = postgres.TransactionSql;
 
 export type ErrorVisita =
+  | "pase_vigente"
   | "no_encontrada"
   | "sin_permiso"
   | "sucursal_inactiva"
@@ -87,6 +88,7 @@ async function contexto(
 type Ficha = { id: string; nombre: string; telefono: string | null; sucursal_alta: string; unida: boolean };
 
 export type CobroRegistrado = {
+  operacionId: string;
   personas: number;
   visitantes: string[];
   total: string;
@@ -115,7 +117,10 @@ export type CobroConMismaAutorizacion = CobroPrevio;
 
 export type ResultadoConfirmacion =
   | { ok: true; operacionId: string; repetida: boolean; cobro: CobroRegistrado }
-  | { ok: false; error: ErrorVisita; detalle?: string; previos?: CobroPrevio[] };
+  | { ok: false; error: ErrorVisita; detalle?: string; previos?: CobroPrevio[]; conPase?: PaseVigente[] };
+
+/** Persona del grupo que ya tiene pase vigente hoy en la sucursal: se registra su entrada o reingreso, no otro cobro. */
+export type PaseVigente = { visitanteId: string; nombre: string; operacionId: string; entro: boolean };
 
 type Pedido = {
   clave: string;
@@ -167,7 +172,7 @@ async function operacionExistente(tx: Tx, pedido: Pedido, usuarioId: string, cod
   return {
     ok: true, operacionId: o.id, repetida,
     cobro: {
-      personas: pases.length, visitantes: pases.map((p) => p.nombre), total: o.total, formaPago: o.formaPago, estado: o.estado,
+      operacionId: o.id, personas: pases.length, visitantes: pases.map((p) => p.nombre), total: o.total, formaPago: o.formaPago, estado: o.estado,
       recibido: o.recibido, cambio: o.cambio, autorizacion: o.autorizacion, conciliacion: o.conciliacion,
       referencia: o.referencia, tipoReferencia: o.tipoReferencia,
     },
@@ -260,6 +265,28 @@ export async function confirmarVisita(
     if (fichas.length !== ids.length) return { ok: false, error: "visitante_no_encontrado" };
     const unida = fichas.find((f) => f.unida);
     if (unida) return { ok: false, error: "visitante_unido", detalle: unida.nombre };
+
+    // El pase vale todo el día en la sucursal: quien ya tiene uno vigente no se cobra otra vez (entra o reingresa
+    // con su pase). Con el turno bloqueado, de dos pestañas que confirman a la vez la segunda ya ve el pase de la
+    // primera. Se rechaza antes de guardar nada: ni cobro, ni pases, ni movimiento de la bolsa.
+    const conPase = await tx<{ visitante_id: string; nombre: string; operacion_id: string; entro: boolean }[]>`
+      select distinct on (x.id) x.id as visitante_id, v.nombre, p.operacion_id,
+             exists (select 1 from acceso a where a.pase_id = p.id and a.tipo = 'entrada') as entro
+      from unnest(${ids}::uuid[]) as x(id)
+      join visitante v on v.id = x.id
+      join pase_visita p on p.visitante_id in (select visitante_grupo(x.id)) and p.sucursal_id = ${r.c.sucursalId}
+                         and p.cancelado_en is null
+                         and dia_en_sucursal(p.sucursal_id, p.creado_en) = dia_en_sucursal(p.sucursal_id, now())
+      join cobro_visita c on c.operacion_id = p.operacion_id and c.estado not in ('cancelado', 'no_localizado')
+      order by x.id, p.creado_en desc`;
+    if (conPase.length) {
+      const orden = (id: string) => ids.indexOf(id);
+      return {
+        ok: false, error: "pase_vigente",
+        conPase: conPase.sort((a, b) => orden(a.visitante_id) - orden(b.visitante_id))
+          .map((p) => ({ visitanteId: p.visitante_id, nombre: p.nombre, operacionId: p.operacion_id, entro: p.entro })),
+      };
+    }
 
     // Misma autorización ya registrada hoy en esta sucursal: puede ser la misma venta capturada dos veces.
     let repetidaConfirmada = false;
@@ -406,7 +433,16 @@ export async function detalleCobro(sql: Sql, usuarioId: string, codigo: string, 
   });
 }
 
-export type VisitaHoy = { id: string; visitasHoy: number; enEstaSucursal: boolean };
+/**
+ * `paseAqui`: pase de hoy en esta sucursal que todavía sirve para entrar (no cancelado ni con transferencia no
+ * localizada). Con él no se cobra otra visita: se registra la entrada o el reingreso con el mismo pase.
+ */
+export type VisitaHoy = {
+  id: string;
+  visitasHoy: number;
+  enEstaSucursal: boolean;
+  paseAqui: { operacionId: string; entro: boolean } | null;
+};
 
 /**
  * Personas que ya tienen una visita registrada hoy (fecha de la sucursal), en cualquier sucursal y contando
@@ -426,11 +462,17 @@ export async function visitasDeHoy(sql: Sql, usuarioId: string, codigo: string, 
       )
       select x.id,
              count(p.id)::int as "visitasHoy",
-             coalesce(bool_or(p.sucursal_id = hoy.id), false) as "enEstaSucursal"
+             coalesce(bool_or(p.sucursal_id = hoy.id), false) as "enEstaSucursal",
+             (select json_build_object('operacionId', pa.operacion_id,
+                                       'entro', exists (select 1 from acceso a where a.pase_id = pa.id and a.tipo = 'entrada'))
+              from pase_visita pa join cobro_visita ca on ca.operacion_id = pa.operacion_id
+              where pa.visitante_id in (select visitante_grupo(x.id)) and pa.sucursal_id = hoy.id and pa.creado_en >= hoy.desde
+                and pa.cancelado_en is null and ca.estado not in ('cancelado', 'no_localizado')
+              order by pa.creado_en desc limit 1) as "paseAqui"
       from unnest(${ids}::uuid[]) as x(id)
       cross join hoy
       left join pase_visita p on p.visitante_id in (select visitante_grupo(x.id)) and p.creado_en >= hoy.desde and p.cancelado_en is null
-      group by x.id`;
+      group by x.id, hoy.id, hoy.desde`;
     return [...filas];
   });
 }
