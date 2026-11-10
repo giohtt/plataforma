@@ -111,6 +111,8 @@ test("Recepción ve el detalle de su sucursal y de la otra solo conteo y última
   await expect(h.getByTestId("detalle-sucursal")).toHaveCount(1);
   await expect(h.getByTestId("estado-pago")).toHaveText("Pendiente de verificar abono");
   await expect(h.getByTestId("detalle-sucursal")).not.toContainText(nombreB);
+  // El aviso anterior al bloque 4 ya no aparece.
+  await expect(page.locator("body")).not.toContainText("Todavía no se registran visitas");
 
   // Administración solo de A: vista y totales solo de A.
   const admin = await crearCuenta("administracion", a.codigo, "Administración " + letras(4));

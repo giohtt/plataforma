@@ -109,13 +109,6 @@ export default async function ExpedienteVisitante({ params, searchParams }: Page
           </ol>
         </section>
       ) : null}
-      <section className="tarjeta">
-        <h2 className="titulo-seccion">Visitas</h2>
-        <p className="sub">
-          Todavía no se registran visitas en la plataforma (llega en el bloque 4). Que no aparezcan visitas no significa que
-          la persona nunca haya asistido.
-        </p>
-      </section>
     </main>
   );
 }
