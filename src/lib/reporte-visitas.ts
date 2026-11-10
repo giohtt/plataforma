@@ -9,6 +9,7 @@ import type { CobroDelTurno } from "@/lib/visitas";
  *   - el estado de cada cobro es el ACTUAL al consultar (una transferencia verificada después pasa a confirmados);
  *   - cobros confirmados por forma de pago (efectivo, tarjeta, transferencias verificadas), transferencias sin
  *     verificar (pendientes y no localizadas) y cancelados por duplicado, cada uno aparte; total registrado;
+ *   - solo aparecen los turnos que se cruzan con el periodo (un turno abierto se cruza hasta el momento de la consulta);
  *   - el saldo de la bolsa es POR TURNO, del turno completo (aunque empiece o termine fuera del periodo): ahora si
  *     está abierto, al cerrar si está cerrado. Los saldos de varios turnos NO se suman (el efectivo entregado al
  *     siguiente turno se contaría dos veces).
@@ -110,8 +111,10 @@ export async function reporteVisitas(
         from movimiento_efectivo me where me.turno_id = t.id and me.lugar_id = l.id
       ) m
       where t.sucursal_id = any(${ids}::uuid[])
-        and (t.abierto_en at time zone 'America/Mexico_City')::date <= ${p.hasta}::date
-        and (t.cerrado_en is null or (t.cerrado_en at time zone 'America/Mexico_City')::date >= ${p.desde}::date)
+        -- Se cruza con el periodo [inicio del día «desde», fin del día «hasta») en hora de México. Un turno abierto
+        -- termina, para este cruce, en el momento de la consulta: un periodo futuro no lo muestra.
+        and t.abierto_en < ((${p.hasta}::date + 1)::timestamp at time zone 'America/Mexico_City')
+        and coalesce(t.cerrado_en, now()) >= (${p.desde}::date::timestamp at time zone 'America/Mexico_City')
       order by t.abierto_en`;
 
     const filas = elegidas.map((s) => {

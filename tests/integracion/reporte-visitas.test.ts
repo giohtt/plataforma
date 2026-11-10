@@ -128,6 +128,35 @@ describe.skipIf(!URL_ADMIN)("reporte «Visitas y cobros»", () => {
     expect((await reporteVisitas(sql, encargado, { codigo: "TEN", desde: manana, hasta: manana }))!.filas[0].registrados).toEqual({ cobros: 0, visitas: 0 });
   });
 
+  it("saldos: solo los turnos que se cruzan con el periodo; un turno abierto se cruza hasta el momento de la consulta", async () => {
+    const dia = (n: number) => new Date(Date.parse(`${hoy}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+    const turnos = async (desde: string, hasta: string) =>
+      (await reporteVisitas(sql, encargado, { codigo: "TEN", desde, hasta }))!.filas[0].turnos.map((t) => t.esperado);
+    // El turno se abrió hace 3 días (simulado) y sigue abierto.
+    const [{ id: turnoId, abierto }] = await sql<{ id: string; abierto: Date }[]>`
+      select id, abierto_en as abierto from turno where sucursal_id = ${ids.TEN} and cerrado_en is null`;
+    await sql`alter table turno disable trigger user`;
+    try {
+      await sql`update turno set abierto_en = now() - interval '3 days' where id = ${turnoId}`;
+      // Empezó antes del periodo y siguió abierto dentro de él: aparece, con el saldo del turno completo.
+      expect(await turnos(dia(-1), dia(-1))).toEqual(["450.00"]);
+      expect(await turnos(dia(-2), dia(0))).toEqual(["450.00"]);
+      // Periodo completamente anterior a la apertura: no aparece.
+      expect(await turnos(dia(-10), dia(-5))).toEqual([]);
+      // Periodo completamente futuro: no aparece, aunque el turno siga abierto.
+      expect(await turnos(dia(1), dia(1))).toEqual([]);
+      expect(await turnos(dia(2), dia(7))).toEqual([]);
+      // Un turno cerrado (simulado) antier: aparece en un periodo que lo cruza, no en uno posterior.
+      await sql`update turno set cerrado_en = now() - interval '2 days' where id = ${turnoId}`;
+      expect(await turnos(dia(-3), dia(-2))).toEqual(["450.00"]);
+      expect(await turnos(dia(-1), dia(0))).toEqual([]);
+    } finally {
+      await sql`update turno set abierto_en = ${abierto}, cerrado_en = null where id = ${turnoId}`;
+      await sql`alter table turno enable trigger user`;
+    }
+    expect(await turnos(dia(0), dia(0))).toEqual(["450.00"]);
+  });
+
   it("varias sucursales: una fila por sucursal; Santiago sin cobros ni turnos", async () => {
     const r = await reporteVisitas(sql, admin, { codigo: null, desde: hoy, hasta: hoy });
     expect(r!.codigo).toBeNull();
