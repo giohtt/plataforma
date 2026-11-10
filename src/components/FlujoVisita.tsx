@@ -300,8 +300,8 @@ export function FlujoVisita(props: Props) {
           {conPaseAqui.length ? (
             <p className="aviso aviso-error" data-testid="aviso-pase-aqui">
               {conPaseAqui.length === 1 ? `${conPaseAqui[0].nombre} ya tiene` : `${conPaseAqui.length} personas ya tienen`} pase de hoy
-              en {sucursal}: el pase vale todo el día en esta sucursal, así que no se cobra otra visita. Quítalas del grupo y registra su
-              entrada o reingreso con el mismo pase.
+              en {sucursal}: el pase vale todo el día en esta sucursal, así que no se cobra otra visita.{" "}
+              {conPaseAqui.length === 1 ? "Quítala del grupo y registra su entrada o reingreso con el mismo pase." : "Quítalas del grupo y registra su entrada o reingreso con el mismo pase."}
             </p>
           ) : null}
           {conVisitaHoy.length ? (

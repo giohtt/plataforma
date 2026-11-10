@@ -394,7 +394,7 @@ test("si alguien ya tiene pase de hoy en esta sucursal, no se cobra otra visita:
   await buscar(page, e.nombre);
   await tarjeta(page, e.nombre).getByRole("button", { name: "Agregar" }).click();
   await expect(page.getByTestId("pase-aqui")).toContainText(`Ya tiene pase de hoy en Visitas ${e.codigo}: no se cobra otra visita.`);
-  await expect(page.getByTestId("aviso-pase-aqui")).toContainText("no se cobra otra visita");
+  await expect(page.getByTestId("aviso-pase-aqui")).toContainText("no se cobra otra visita. Quítala del grupo y registra su entrada o reingreso con el mismo pase.");
   await expect(confirmar(page)).toBeDisabled();
   await page.getByTestId("ir-pase").click();
   await expect(page.getByTestId("entradas")).toBeVisible();
