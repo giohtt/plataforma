@@ -71,7 +71,9 @@ describe.skipIf(!URL_ADMIN)("expedientes de visitantes: búsqueda y alta", () =>
       expect(await nombres(recepcion, "TEN", "  HERNÁNDEZ   maría ")).toEqual(["María Hernández García", "María Hernández García"]);
       const r = await buscar(recepcion, "TEN", "maria hernandez");
       if (!r.ok) throw new Error();
-      expect(r.resultados.map((x) => x.sucursalAlta).sort()).toEqual(["Santiago", "Tenango"]);
+      // Cubre las fichas de ambas sucursales; la sucursal de alta solo se ve donde hay permiso de detalle (Tenango).
+      expect(r.resultados.map((x) => x.sucursalAlta)).toEqual(expect.arrayContaining(["Tenango", null]));
+      expect(JSON.stringify(r)).not.toContain("Santiago");
     });
 
     it("tolera errores de escritura", async () => {
@@ -121,7 +123,8 @@ describe.skipIf(!URL_ADMIN)("expedientes de visitantes: búsqueda y alta", () =>
       const primero = await alta(recepcion, datos);
       expect(primero.ok).toBe(false);
       if (primero.ok || primero.error !== "coincidencias") throw new Error();
-      expect(primero.coincidencias.map((c) => c.sucursalAlta).sort()).toEqual(["Santiago", "Tenango"]);
+      expect(primero.coincidencias.map((c) => c.sucursalAlta)).toEqual(expect.arrayContaining(["Tenango", null]));
+      expect(primero.coincidencias).toHaveLength(2);
       expect(primero.coincidencias.every((c) => c.motivos.includes("mismo_nombre"))).toBe(true);
       const [{ antes }] = await sql`select count(*)::int as antes from visitante`;
 

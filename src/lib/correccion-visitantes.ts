@@ -76,7 +76,7 @@ export async function corregirVisitante(
           from visitante_distinto where visitante_id = ${id} or distinto_de_id = ${id}`).map((r) => r.otro),
       );
       avisadas = (
-        await coincidencias(tx, { nombre: nuevo.nombre!, telefono: nuevo.telefono, estadoProcedencia: nuevo.estado_procedencia }, claveNombre(nuevo.nombre!), id)
+        await coincidencias(tx, usuarioId, { nombre: nuevo.nombre!, telefono: nuevo.telefono, estadoProcedencia: nuevo.estado_procedencia }, claveNombre(nuevo.nombre!), id)
       ).filter((c) => !ya.has(c.id));
       if (avisadas.some((c) => !vistas.has(c.id))) return { ok: false, error: "coincidencias", coincidencias: avisadas };
     }

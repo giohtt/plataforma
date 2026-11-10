@@ -57,7 +57,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, historial] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, historial] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -71,6 +71,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     puedeAutorizarCancelaciones(sql, sesion.usuarioId, sucursal.codigo),
     tienePermiso(sql, sesion.usuarioId, "acceso.autorizar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "acceso.consultar", sucursal.id),
+    tienePermiso(sql, sesion.usuarioId, "historial.cobertura", sucursal.id),
     historialSucursal(sql, sesion.usuarioId, sucursal.id),
   ]);
 
@@ -93,7 +94,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
       {sucursal.estadoOperativo === "inactiva" ? (
         <p className="aviso aviso-info" data-testid="sucursal-inactiva">Esta sucursal está desactivada.</p>
       ) : null}
-      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno || puedeVerReporteTurnos || puedeVerReporteVisitas || puedeVerificarAbonos || puedeAutorizarCancel || puedeAutorizarAcceso || puedeRevisarAccesos ? (
+      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno || puedeVerReporteTurnos || puedeVerReporteVisitas || puedeVerificarAbonos || puedeAutorizarCancel || puedeAutorizarAcceso || puedeRevisarAccesos || puedeCobertura ? (
         <p className="fila-acciones">
           {puedeAbrirTurno || puedeVerTurno ? (
             <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/turno`} data-testid="turno">
@@ -113,6 +114,11 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
           {puedeVerificarAbonos ? (
             <Link className="boton" href={`/sucursales/${sucursal.codigo}/transferencias`} data-testid="transferencias">
               Transferencias por verificar
+            </Link>
+          ) : null}
+          {puedeCobertura ? (
+            <Link className="boton" href={`/sucursales/${sucursal.codigo}/cobertura`} data-testid="cobertura">
+              Cobertura del historial
             </Link>
           ) : null}
           {puedeAutorizarAcceso || puedeRevisarAccesos ? (

@@ -128,7 +128,7 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(filas.length).toBeGreaterThan(0);
       expect(filas.every((f) => f.bloque <= 4 && !f.es_autorizacion)).toBe(true);
       const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso).sort();
-      expect(recepcion).toEqual(["acceso.registrar_apertura", "sucursal.consultar", "turno.abrir", "turno.consultar", "visita.registrar", "visita.solicitar_cancelacion", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
+      expect(recepcion).toEqual(["acceso.registrar_apertura", "sucursal.consultar", "turno.abrir", "turno.consultar", "visita.consultar", "visita.registrar", "visita.resumen_otras", "visita.solicitar_cancelacion", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
       // Registrar visitas: solo Recepción (provisional); además, solo la responsable de la bolsa.
       expect(filas.filter((f) => f.permiso === "visita.registrar").map((f) => f.rol)).toEqual(["recepcion"]);
       // Verificar abonos de transferencias: Administración y Dirección (provisional). Recepción no.
@@ -142,6 +142,10 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(filas.filter((f) => f.permiso === "acceso.registrar_apertura").map((f) => f.rol)).toEqual(["recepcion"]);
       expect(filas.filter((f) => f.permiso === "acceso.autorizar").map((f) => f.rol)).toEqual(["encargado"]);
       expect(filas.filter((f) => f.permiso === "acceso.consultar").map((f) => f.rol).sort()).toEqual(["administracion", "direccion", "encargado"]);
+      // Historial: detalle por sucursal para los cuatro roles; resumen de otras solo Recepción y Encargado; cobertura, Dirección.
+      expect(filas.filter((f) => f.permiso === "visita.consultar").map((f) => f.rol).sort()).toEqual(["administracion", "direccion", "encargado", "recepcion"]);
+      expect(filas.filter((f) => f.permiso === "visita.resumen_otras").map((f) => f.rol).sort()).toEqual(["encargado", "recepcion"]);
+      expect(filas.filter((f) => f.permiso === "historial.cobertura").map((f) => f.rol)).toEqual(["direccion"]);
       // Corregir: Encargado y Dirección. Fusionar: solo Dirección. Historial general: nadie todavía.
       expect(filas.filter((f) => f.permiso === "visitante.corregir").map((f) => f.rol).sort()).toEqual(["direccion", "encargado"]);
       expect(filas.filter((f) => f.permiso === "visitante.fusionar").map((f) => f.rol)).toEqual(["direccion"]);
@@ -153,8 +157,8 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
         (tx) => tx`insert into rol_permiso (rol, permiso) values ('direccion', 'autorizacion.gasto')`,
       );
       expect(e.message).toMatch(/se otorga expresamente/);
-      await sql`insert into rol_permiso (rol, permiso) values ('recepcion', 'visita.consultar')`;
-      await sql`delete from rol_permiso where rol = 'recepcion' and permiso = 'visita.consultar'`;
+      await sql`insert into rol_permiso (rol, permiso) values ('recepcion', 'caja.contar')`;
+      await sql`delete from rol_permiso where rol = 'recepcion' and permiso = 'caja.contar'`;
     });
 
     it("una asignación de perfil es siempre para una sucursal; «todas» se otorga aparte", async () => {
