@@ -8,6 +8,7 @@ import { abrirTurno } from "@/lib/turnos";
 import { confirmarVisita, pantallaCobro, type CobroDelTurno } from "@/lib/visitas";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
+import { duplicarCobro } from "./duplicado";
 
 type FormaPago = CobroDelTurno["formaPago"];
 let sql: postgres.Sql;
@@ -66,11 +67,12 @@ describe.skipIf(!URL_ADMIN)("reporte «Visitas y cobros»", () => {
     const t = await abrirTurno(sql, recep, "TEN", { bolsa: "0.00", cajon: "1200.00" }, PRUEBAS);
     if (!t.ok) throw new Error(t.error);
     const [diego] = await fichas(1);
-    await cobrar(recep, [diego]);
-    const correcto = await cobrar(recep, [diego]);
+    // En Tenango, Diego tiene dos cobros del 5 nov (9:02 y 9:04), anteriores a la regla del pase del día: se preparan en los datos.
+    const primero = await cobrar(recep, [diego]);
+    const correcto = await duplicarCobro(sql, primero);
     await cobrar(recep, await fichas(3));
     await cobrar(recep, await fichas(4));
-    const duplicado = await cobrar(recep, [diego]);
+    const duplicado = await duplicarCobro(sql, correcto);
     const s = await solicitarCancelacion(sql, recep, "TEN", duplicado,
       { conservaOperacionId: correcto, explicacion: "Se registró dos veces el mismo pago", sinDinero: true }, PRUEBAS);
     if (!s.ok) throw new Error(s.error);

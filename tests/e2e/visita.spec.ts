@@ -411,6 +411,35 @@ test("si alguien ya tiene pase de hoy en esta sucursal, no se cobra otra visita:
   expect(await conteos(e.codigo)).toMatchObject({ operaciones: 1, pases: 1 });
 });
 
+test("dos pestañas confirman a la misma persona: el servidor rechaza la segunda, conserva el grupo y ofrece su pase", async ({ page }) => {
+  const e = await escenario();
+  const acompanante = `${nombrePropio()} ${nombrePropio()} ${nombrePropio()}`;
+  await sql`insert into visitante (nombre, telefono, estado_procedencia, sucursal_alta_id)
+            select ${acompanante}, ${"000" + String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}, 'Querétaro', id from sucursal where codigo = 'ATL'`;
+  await entrar(page, e.recep.correo);
+  const otra = await page.context().newPage();
+  for (const p of [page, otra]) await elegir(p, e.codigo, e.nombre);
+  await buscar(otra, acompanante);
+  await tarjeta(otra, acompanante).getByRole("button", { name: "Agregar" }).click();
+  await confirmar(page).click();
+  await expect(page.getByTestId("cobro-registrado")).toBeVisible();
+
+  // La segunda pestaña no sabía del cobro: el servidor lo rechaza sin guardar nada y dice quién tiene pase.
+  await otra.getByRole("button", { name: "Confirmar cobro · $100.00" }).click();
+  await expect(otra.getByRole("alert").first()).toContainText(`No se cobró nada: ${e.nombre} ya tiene pase de hoy en esta sucursal.`);
+  await expect(otra.getByTestId("en-grupo")).toHaveCount(2);
+  await expect(otra.getByTestId("pase-aqui")).toContainText("no se cobra otra visita");
+  await expect(otra.getByTestId("ir-pase")).toHaveText("Registrar entrada");
+  expect(await conteos(e.codigo)).toMatchObject({ operaciones: 1, pases: 1 });
+
+  // Quita a esa persona y continúa con el acompañante.
+  await otra.getByRole("button", { name: `Quitar a ${e.nombre}` }).click();
+  await otra.getByRole("button", { name: "Confirmar cobro · $50.00" }).click();
+  await expect(otra.getByTestId("cobro-registrado")).toContainText(acompanante);
+  expect(await conteos(e.codigo)).toMatchObject({ operaciones: 2, pases: 2 });
+  await otra.close();
+});
+
 test("grupo: se pierde la conexión después de guardar; el grupo y lo recibido quedan fijos y el reintento no cobra dos veces", async ({ page }) => {
   const e = await escenario();
   const g = await tresQueCompartenTelefono();

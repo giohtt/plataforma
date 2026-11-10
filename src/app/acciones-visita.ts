@@ -14,7 +14,7 @@ import {
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
-import { confirmarVisita, visitasDeHoy, type CobroPrevio, type CobroRegistrado, type ErrorVisita, type VisitaHoy } from "@/lib/visitas";
+import { confirmarVisita, visitasDeHoy, type CobroPrevio, type CobroRegistrado, type ErrorVisita, type PaseVigente, type VisitaHoy } from "@/lib/visitas";
 
 const MENSAJES: Record<ErrorVisita, string> = {
   no_encontrada: "No encontrada.",
@@ -25,6 +25,7 @@ const MENSAJES: Record<ErrorVisita, string> = {
   no_responsable: "Solo la responsable de la bolsa de visitas puede cobrar en este turno. No se guardó nada.",
   visitante_no_encontrado: "No se encontró la ficha elegida. Búscala de nuevo.",
   visitante_unido: "Esta ficha se unió a otra. Búscala de nuevo y elige la ficha activa.",
+  pase_vigente: "No se cobró nada: alguien del grupo ya tiene pase de hoy en esta sucursal.",
   clave_ajena: "No se pudo registrar este cobro. Vuelve a abrir «Registrar visita» desde el turno.",
   datos_distintos: "Este cobro ya se había enviado con otras personas o con otro importe recibido. No se guardó nada.",
   grupo_vacio: "Agrega al menos una persona antes de confirmar.",
@@ -41,7 +42,7 @@ const MENSAJES: Record<ErrorVisita, string> = {
 
 export type RespuestaCobro =
   | { ok: true; cobro: CobroRegistrado; repetida: boolean }
-  | { ok: false; error: string; errorRecibido?: string; errorAutorizacion?: string; errorReferencia?: string; previos?: CobroPrevio[] };
+  | { ok: false; error: string; errorRecibido?: string; errorAutorizacion?: string; errorReferencia?: string; previos?: CobroPrevio[]; conPase?: PaseVigente[] };
 
 /** Con tarjeta, un rechazo del servidor no significa que el pago no se cobró en la terminal. */
 const NO_REPASAR = " El pago ya se cobró en la terminal: no vuelvas a pasar la tarjeta; registra este cobro con la misma autorización.";
@@ -98,6 +99,10 @@ export async function accionConfirmarVisita(datos: FormData): Promise<RespuestaC
   }, { entorno: leerEntorno() });
   if (!res.ok) {
     if (res.error === "autorizacion_repetida" || res.error === "referencia_repetida") return { ok: false, error: MENSAJES[res.error], previos: res.previos };
+    if (res.error === "pase_vigente" && res.conPase) {
+      const nombres = res.conPase.map((p) => p.nombre).join(", ");
+      return { ok: false, error: `No se cobró nada: ${nombres} ya ${res.conPase.length === 1 ? "tiene" : "tienen"} pase de hoy en esta sucursal. Quítal${res.conPase.length === 1 ? "a" : "as"} del grupo y registra su entrada o reingreso con el mismo pase.`, conPase: res.conPase };
+    }
     const base = res.error === "visitante_unido" && res.detalle
       ? `La ficha de ${res.detalle} se unió a otra. Quítala del grupo, búscala de nuevo y elige la ficha activa. No se guardó nada.`
       : MENSAJES[res.error];

@@ -9,6 +9,7 @@ import { cobrosDelTurno, confirmarVisita, detalleCobro, pantallaCobro, type Cobr
 type FormaPago = CobroDelTurno["formaPago"];
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
+import { duplicarCobro } from "./duplicado";
 
 let sql: postgres.Sql;
 let cerrar: () => Promise<void>;
@@ -63,11 +64,12 @@ describe.skipIf(!URL_ADMIN)("ventas del turno: total confirmado con transferenci
 
     // Efectivo: $50, $50 (Diego), $150 (3) y $200 (4) = $450 en 4 cobros; más un duplicado de Diego que se cancela.
     const [diego] = await fichas(1);
-    await cobrar(recep, [diego]);
-    const correcto = await cobrar(recep, [diego]);
+    // En Tenango, Diego tiene dos cobros del 5 nov (9:02 y 9:04), anteriores a la regla del pase del día: se preparan en los datos.
+    const primero = await cobrar(recep, [diego]);
+    const correcto = await duplicarCobro(sql, primero);
     await cobrar(recep, await fichas(3));
     await cobrar(recep, await fichas(4));
-    const duplicado = await cobrar(recep, [diego]);
+    const duplicado = await duplicarCobro(sql, correcto);
     const s = await solicitarCancelacion(sql, recep, "TEN", duplicado,
       { conservaOperacionId: correcto, explicacion: "Se registró dos veces el mismo pago", sinDinero: true }, PRUEBAS);
     if (!s.ok) throw new Error(s.error);

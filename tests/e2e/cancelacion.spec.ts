@@ -67,24 +67,28 @@ async function cobrar(page: Page, codigo: string, nombre: string) {
   await expect(page.getByTestId("cobro-registrado")).toContainText("Cobro registrado");
 }
 /**
- * Duplicado como ocurre en la práctica: el mismo cobro capturado en dos pestañas antes de confirmar la primera.
- * (Con el pase de hoy ya registrado, la pantalla ya no deja cobrar otra visita a la misma persona.)
+ * Cobra una vez desde la pantalla y prepara el duplicado directamente en los datos de prueba (misma operación con
+ * otra clave, mismas personas, mismo importe y su entrada a la bolsa): el servidor ya no deja cobrar dos veces a
+ * quien tiene pase de hoy en la sucursal.
  */
 async function cobrarDuplicado(page: Page, codigo: string, nombre: string) {
-  const otra = await page.context().newPage();
-  for (const p of [page, otra]) {
-    await p.goto(`/sucursales/${codigo}/turno/visita`);
-    await p.waitForLoadState("networkidle");
-    await p.getByLabel(/nombre completo o teléfono/).fill(nombre);
-    await p.getByRole("button", { name: "Buscar" }).click();
-    await p.getByTestId("visitante").filter({ hasText: nombre }).getByRole("button", { name: "Agregar" }).click();
-    await expect(p.getByTestId("en-grupo")).toHaveCount(1);
-  }
-  for (const p of [page, otra]) {
-    await p.getByRole("button", { name: "Confirmar cobro · $50.00" }).click();
-    await expect(p.getByTestId("cobro-registrado")).toContainText("Cobro registrado");
-  }
-  await otra.close();
+  await cobrar(page, codigo, nombre);
+  await sql.begin(async (tx) => {
+    const [orig] = await tx<{ id: string; cobro: string }[]>`
+      select o.id, c.id as cobro from operacion_visita o join sucursal s on s.id = o.sucursal_id join cobro_visita c on c.operacion_id = o.id
+      where s.codigo = ${codigo} order by o.registrada_en desc limit 1`;
+    const [o] = await tx<{ id: string }[]>`
+      insert into operacion_visita (clave, sucursal_id, turno_id, registrada_por, total)
+      select gen_random_uuid(), sucursal_id, turno_id, registrada_por, total from operacion_visita where id = ${orig.id} returning id`;
+    const [c] = await tx<{ id: string }[]>`
+      insert into cobro_visita (operacion_id, forma_pago, estado, importe, recibido, cambio)
+      select ${o.id}, forma_pago, estado, importe, recibido, cambio from cobro_visita where id = ${orig.cobro} returning id`;
+    await tx`insert into pase_visita (operacion_id, visitante_id, sucursal_id, tarifa, descuento, total, orden)
+             select ${o.id}, visitante_id, sucursal_id, tarifa, descuento, total, orden from pase_visita where operacion_id = ${orig.id}`;
+    await tx`insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, cobro_id, responsable_id, registrado_por)
+             select lugar_id, turno_id, tipo, importe, ${c.id}, responsable_id, registrado_por from movimiento_efectivo
+             where cobro_id = ${orig.cobro} and tipo = 'entrada_cobro_visita'`;
+  });
 }
 const bolsa = (page: Page) => page.getByTestId("lugar-bolsa_visitas");
 

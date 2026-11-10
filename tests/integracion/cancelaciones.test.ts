@@ -9,6 +9,7 @@ import {
 import { cobrosDelTurno, confirmarVisita, detalleCobro, pantallaCobro, visitasDeHoy } from "@/lib/visitas";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
+import { duplicarCobro } from "./duplicado";
 
 let sql: postgres.Sql;
 let cerrar: () => Promise<void>;
@@ -74,7 +75,7 @@ async function escenario() {
   const ana = await ficha("Ana Prueba");
   const cobroLuis = await cobrar(recep, codigo, [luis]);
   const correcto = await cobrar(recep, codigo, [ana]);
-  const duplicado = await cobrar(recep, codigo, [ana]);
+  const duplicado = await duplicarCobro(sql, correcto);
   return { codigo, recep, dir, turnoId: t.turnoId, luis, ana, cobroLuis, correcto, duplicado };
 }
 const solicitar = (u: string, codigo: string, dup: string, conserva: string, extra: Partial<{ explicacion: string; sinDinero: boolean }> = {}) =>
@@ -162,7 +163,7 @@ describe.skipIf(!URL_ADMIN)("cancelación de un cobro duplicado en efectivo", ()
       const p = await pantallaCobro(sql, e.recep, e.codigo, "pruebas");
       if (!p.ok) throw new Error(p.error);
       const tarjeta = await confirmarVisita(sql, e.recep, e.codigo, {
-        clave: randomUUID(), turnoId: p.turnoId, visitanteIds: [e.ana], formaPago: "tarjeta", recibido: null, cambio: null,
+        clave: randomUUID(), turnoId: p.turnoId, visitanteIds: [await ficha("Rocío Prueba")], formaPago: "tarjeta", recibido: null, cambio: null,
         autorizacion: "AB12CD", referencia: null, tipoReferencia: null, otraVenta: false,
       }, PRUEBAS);
       if (!tarjeta.ok) throw new Error(tarjeta.error);
@@ -191,7 +192,7 @@ describe.skipIf(!URL_ADMIN)("cancelación de un cobro duplicado en efectivo", ()
       const ana = await ficha("Ana Prueba");
       await cobrar(responsable, "TEN", [luis]);
       const correcto = await cobrar(responsable, "TEN", [ana]);
-      const duplicado = await cobrar(responsable, "TEN", [ana]);
+      const duplicado = await duplicarCobro(sql, correcto);
       expect((await bolsa(responsable, "TEN")).esperado).toBe("300.00");
 
       // La otra cuenta tiene el permiso en Tenango, pero no tiene a su cargo la bolsa: ni la pantalla ni el envío directo.
@@ -278,7 +279,7 @@ describe.skipIf(!URL_ADMIN)("cancelación de un cobro duplicado en efectivo", ()
       if (!t.ok) throw new Error(t.error);
       const ana = await ficha("Ana Prueba");
       const correcto = await cobrar(registra, codigo, [ana]);
-      const duplicado = await cobrar(registra, codigo, [ana]);
+      const duplicado = await duplicarCobro(sql, correcto);
       const x = await solicitada(registra, codigo, duplicado, correcto);
 
       expect(await aprobar(registra, codigo, x)).toEqual({ ok: false, error: "propia" });
@@ -327,7 +328,7 @@ describe.skipIf(!URL_ADMIN)("cancelación de un cobro duplicado en efectivo", ()
       if (!t.ok) throw new Error(t.error);
       const grupo = [await ficha("A"), await ficha("B"), await ficha("C"), await ficha("D")];
       const correcto = await cobrar(recep, codigo, grupo);
-      const duplicado = await cobrar(recep, codigo, grupo);
+      const duplicado = await duplicarCobro(sql, correcto);
       const x = await solicitada(recep, codigo, duplicado, correcto);
       expect(await aprobar(dir, codigo, x)).toEqual({ ok: false, error: "excede_limite" });
       expect((await cancelacionesPorAutorizar(sql, dir, codigo))?.pendientes.map((p) => p.impedimento)).toEqual(["excede_limite"]);
@@ -387,7 +388,7 @@ describe.skipIf(!URL_ADMIN)("cancelación de un cobro duplicado en efectivo", ()
       const p = await pantallaCobro(sql, e.recep, e.codigo, "pruebas");
       if (!p.ok) throw new Error(p.error);
       const tarjeta = await confirmarVisita(sql, e.recep, e.codigo, {
-        clave: randomUUID(), turnoId: p.turnoId, visitanteIds: [e.luis], formaPago: "tarjeta", recibido: null, cambio: null,
+        clave: randomUUID(), turnoId: p.turnoId, visitanteIds: [await ficha("Rocío Prueba")], formaPago: "tarjeta", recibido: null, cambio: null,
         autorizacion: "ZX98YW", referencia: null, tipoReferencia: null, otraVenta: false,
       }, PRUEBAS);
       if (!tarjeta.ok) throw new Error(tarjeta.error);

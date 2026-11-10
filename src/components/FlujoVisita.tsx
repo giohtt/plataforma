@@ -210,7 +210,21 @@ export function FlujoVisita(props: Props) {
       else {
         // Con una autorización repetida basta el recuadro con el cobro previo y la confirmación.
         if (r.previos) { setPrevios(r.previos); setError(null); }
-        else setError({ general: r.error, recibido: r.errorRecibido, autorizacion: r.errorAutorizacion, referencia: r.errorReferencia });
+        else {
+          // Pase vigente hoy aquí: el grupo se conserva y cada persona con pase muestra «Registrar entrada/reingreso».
+          const conPase = r.conPase;
+          if (conPase) {
+            setHoy((h) => {
+              const nuevo = { ...h };
+              for (const p of conPase) {
+                nuevo[p.visitanteId] = { id: p.visitanteId, visitasHoy: Math.max(h[p.visitanteId]?.visitasHoy ?? 0, 1), enEstaSucursal: true,
+                  paseAqui: { operacionId: p.operacionId, entro: p.entro } };
+              }
+              return nuevo;
+            });
+          }
+          setError({ general: r.error, recibido: r.errorRecibido, autorizacion: r.errorAutorizacion, referencia: r.errorReferencia });
+        }
       }
     } catch {
       // No se sabe si llegó al servidor. Grupo, medio de pago, recibido o autorización y clave se conservan:
