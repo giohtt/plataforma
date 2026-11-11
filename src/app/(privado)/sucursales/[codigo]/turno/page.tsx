@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { conPunto } from "@/lib/formato";
 import { notFound } from "next/navigation";
 import { FormularioCancelarEntrega } from "@/components/Entrega";
 import { FormularioApertura } from "@/components/FormularioApertura";
@@ -87,7 +88,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                 {enCurso.estado === "recuento"
                   ? <>El conteo de <strong>{enCurso.recibe}</strong> no coincidió: recuento pendiente.</>
                   : <>Entrega pendiente de confirmar por <strong>{enCurso.recibe}</strong>.</>}{" "}
-                {enCurso.entregaPor} entregó · {hora.format(enCurso.creadaEn)}. Mientras tanto no se registran cobros.
+                {enCurso.entregaPor} entregó · {conPunto(hora.format(enCurso.creadaEn))} Mientras tanto no se registran cobros.
               </p>
               {enCurso.recibeId === sesion.usuarioId ? (
                 <p className="fila-acciones">
@@ -114,8 +115,9 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                 De <strong>{recibida.entregaPor}</strong> a <strong>{recibida.recibe}</strong> · entregó {hora.format(recibida.creadaEn)} ·
                 confirmó {hora.format(recibida.confirmadaEn)}
               </p>
-              <div className="tabla-desplazable">
-                <table className="tabla">
+              <p className="sub">Desliza la tabla a los lados para ver todas las columnas; el lugar queda fijo.</p>
+              <div className="tabla-desplazable" tabIndex={0} aria-label="Entrega recibida: desliza para ver todas las columnas">
+                <table className="tabla tabla-ancha">
                   <thead>
                     <tr><th>Lugar</th><th>Esperado</th><th>Entregó</th><th>Primer conteo de quien recibe</th><th>Confirmó</th>
                       <th>Dif. contra el esperado</th><th>Dif. entre ambas personas</th></tr>

@@ -158,8 +158,14 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
 - El cajón conserva su saldo esperado como pendiente de Open Desk. Las diferencias y confirmaciones pendientes siguen visibles después del cierre.
 
 **Orden de trabajo:**
-1. **Cambio de turno con confirmación de quien recibe** (reglas 1 y 2). En revisión.
-2. Revisión de entregas y diferencias (regla 3).
+1. **Cambio de turno con confirmación de quien recibe** (reglas 1 y 2). Hecho y **probado en el sitio el 11 nov 2026** en Tenango, con datos y cuentas ficticias:
+   - **Antes de entregar**, el turno de Recepción Tenango (prueba) tenía en la bolsa un efectivo esperado de $500.00 ($0.00 al abrir, $550.00 de cobros en efectivo y −$50.00 de una cancelación aprobada) y en el cajón $1,200.00 al abrir, sin esperado calculado.
+   - **Entrega registrada a la 1:28 p.m.** por Recepción Tenango (prueba): contó $450 en la bolsa y $1,200 en el cajón y entregó a Recepción Tenango vespertina (prueba). Mientras estuvo pendiente no se pudieron registrar cobros.
+   - **La recepcionista entrante confirmó a la 1:49 p.m. desde su propia cuenta**, sin ver antes el conteo de la saliente: contó $450 y $1,200, coincidió y no hizo falta recontar.
+   - **El nuevo turno abrió con $450 en la bolsa y $1,200 en el cajón**, con la entrante como responsable de ambos lugares, efectivo esperado de la bolsa $450.00 y el cajón pendiente de Open Desk.
+   - **Quedaron −$50 contra el esperado, por revisar, y $0 de diferencia entre ambas personas** (en el cajón, la diferencia contra el esperado no se puede calcular). El faltante queda por revisar en el paso 2.
+   - Ajustes de pantalla tras la prueba: la hora ya no se muestra con punto duplicado («p.m..») y la tabla «Entrega recibida» se muestra desde la primera columna, con el lugar fijo, y se desplaza para consultar el resto.
+2. **Siguiente paso:** revisión de entregas y diferencias (regla 3).
 3. Retiros de Encargada de retiros, su cuenta y el seguimiento (reglas 4 a 6).
 4. Cierre del día y custodia nocturna (regla 7), con la comparación en la siguiente apertura.
 5. **Reporte básico:** cierres con efectivo esperado, contado, diferencia y entregas; diferencias pendientes de revisión.

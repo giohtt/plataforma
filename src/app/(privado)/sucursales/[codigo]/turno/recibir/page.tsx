@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { conPunto } from "@/lib/formato";
 import { notFound } from "next/navigation";
 import { FormularioRecepcion } from "@/components/Entrega";
 import { obtenerBaseDatos } from "@/lib/db";
@@ -33,7 +34,7 @@ export default async function RecibirTurno({ params, searchParams }: PageProps<"
       ) : (
         <>
           <p className="sub">
-            Te entrega <strong>{p.entrega.entregaPor}</strong> · {hora.format(p.entrega.creadaEn)}. Solo datos ficticios.
+            Te entrega <strong>{p.entrega.entregaPor}</strong> · {conPunto(hora.format(p.entrega.creadaEn))} Solo datos ficticios.
           </p>
           {aviso === "recuento" && p.recuento ? (
             <p className="aviso aviso-error" role="status" data-testid="aviso-recuento">
