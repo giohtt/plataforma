@@ -159,7 +159,10 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
 
 **Orden de trabajo:**
 1. **Cambio de turno con confirmación de quien recibe** (reglas 1 y 2). En revisión.
-2. Revisión de entregas y diferencias (regla 3).
+2. **Revisión de entregas y diferencias** (regla 3). En curso:
+   - **Primera parte (en revisión):** lista «Diferencias de efectivo» por sucursal, con los casos por revisar primero, y el caso de cada cambio de turno con el saldo esperado, lo entregado, lo recibido y cada diferencia por separado, más el desglose del saldo esperado (contado al abrir, cobros en efectivo, cancelaciones aprobadas y retiros) y lo que no entra a la bolsa. Consultan Encargado, Administración y Dirección de la sucursal (`diferencia.consultar`); Recepción no. Consultar no cambia ningún importe.
+   - **Segunda parte (pendiente de aprobar los ejemplos de sobrante y de tres cantidades distintas):** resultados «Aclarada» y «Faltante confirmado», motivo obligatorio, historial con cuenta, fecha y hora, quién revisa según su participación y faltantes confirmados pendientes para Dirección.
+   - **Para después:** enlaces a cada cobro desde el desglose y reapertura de casos.
 3. Retiros de Encargada de retiros, su cuenta y el seguimiento (reglas 4 a 6).
 4. Cierre del día y custodia nocturna (regla 7), con la comparación en la siguiente apertura.
 5. **Reporte básico:** cierres con efectivo esperado, contado, diferencia y entregas; diferencias pendientes de revisión.
