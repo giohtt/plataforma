@@ -144,13 +144,25 @@ Confirmados el 4 nov 2026.
   - **Antes de usar datos reales:** Dirección podrá habilitar el piloto de accesos por sucursal, empezando por Tenango; respaldos y restauración probada; decisión 3 (privacidad).
 - **Cierre para el entorno de pruebas (10 nov 2026):** los puntos 1 a 6 y el reporte básico están hechos y probados en el sitio, solo con datos ficticios. Los pendientes de arriba siguen abiertos y no impidieron el cierre. Quedan abiertos los turnos ficticios de Tenango, Santiago y Santa Ana hasta el cierre de turno del bloque 5.
 
-### Bloque 5. Conteos, entregas, retiros, cierre y revisión
-1. Conteo con diferencia conservada; entrega entre recepcionistas con confirmación de quien recibe.
-2. Retiros que recoge Gloria como salida del lugar de efectivo, con seguimiento bajo su responsabilidad.
-3. Cierre de turno y revisión por una persona distinta de quien cerró.
-4. Cierre del cajón como conteo registrado sin conciliar mientras falten datos de Open Desk.
-- **Reporte básico:** cierres con efectivo esperado, contado, diferencia y entregas; diferencias pendientes de revisión.
-- **Decisiones que necesita:** quién revisa diferencias; evidencia de entrega a Gloria; responsable al final del día.
+### Bloque 5. Conteos, entregas, retiros, cierre y revisión (en curso, solo datos ficticios)
+En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«Encargada de retiros»** (en el plan, la maqueta y las pantallas). Ejemplos de texto: «Entregar a Encargada de retiros», «Pendiente de confirmar por Encargada de retiros».
+
+**Reglas aprobadas el 11 nov 2026 para el piloto de Tenango** (sobre la maqueta del 10 nov):
+1. **Responsable durante el turno (variante A).** La misma recepcionista responde por la bolsa de visitas y el cajón de mensualidades, con registros y conteos separados. La entrega se completa cuando la entrante cuenta y confirma lo recibido desde su propia cuenta.
+2. **Diferencias.** La entrante captura su conteo antes de ver el de la saliente. Si difieren, recuentan juntas y se conservan los conteos originales y la aclaración. Si persiste el desacuerdo, queda por revisar y la entrante empieza con el importe que confirmó. Se registran por separado la diferencia **contra el esperado** y la diferencia **entre ambas personas**.
+3. **Revisión.** Encargado revisa entregas, diferencias y cierres. Si participó en el conteo, la entrega o la recepción, revisa Administración con permiso en la sucursal. Dirección resuelve los casos donde también haya participado Administración y decide qué hacer con un faltante confirmado. Cada resolución lleva motivo e historial.
+4. **Retiros de Encargada de retiros.** Un registro por lugar, con importe contado, importe entregado y folio del sobre. Encargada de retiros confirma desde su propia cuenta. La salida se registra al entregar físicamente el efectivo; hasta que confirme, aparece «Pendiente de confirmar por Encargada de retiros». Si declara otro importe, se conserva la discrepancia para revisión.
+5. **Cuenta de Encargada de retiros y cambio.** Cuenta individual con permisos específicos para consultar y confirmar sus retiros en las sucursales autorizadas. En pantalla se muestra el cargo; en el historial de auditoría queda qué cuenta confirmó y cuándo. Ella decide cuánto deja para cambio en cada retiro y ese importe queda registrado por lugar.
+6. **Seguimiento del dinero retirado.** Después de confirmar la recepción, Encargada de retiros registra el destino del efectivo, el importe, la fecha y la referencia o evidencia. Se permiten destinos parciales; el saldo pendiente permanece visible hasta completar el seguimiento.
+7. **Cierre y custodia nocturna.** La recepcionista cuenta y cierra ambos lugares. El efectivo queda en sobres separados e identificados, dentro de una caja con llave en la sucursal; **Encargado queda como custodio nocturno**. Se registra quién guardó los sobres, dónde y quién tiene acceso. Cualquier retiro posterior lleva su propio registro. En la siguiente apertura, quien recibe cuenta y compara contra el cierre anterior.
+- El cajón conserva su saldo esperado como pendiente de Open Desk. Las diferencias y confirmaciones pendientes siguen visibles después del cierre.
+
+**Orden de trabajo:**
+1. **Cambio de turno con confirmación de quien recibe** (reglas 1 y 2). En revisión.
+2. Revisión de entregas y diferencias (regla 3).
+3. Retiros de Encargada de retiros, su cuenta y el seguimiento (reglas 4 a 6).
+4. Cierre del día y custodia nocturna (regla 7), con la comparación en la siguiente apertura.
+5. **Reporte básico:** cierres con efectivo esperado, contado, diferencia y entregas; diferencias pendientes de revisión.
 
 ### Bloque 6. Gastos y autorizaciones
 1. Solicitud, autorización, pago desde un lugar de efectivo y comprobación.
