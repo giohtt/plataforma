@@ -165,7 +165,10 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
    - **El nuevo turno abrió con $450 en la bolsa y $1,200 en el cajón**, con la entrante como responsable de ambos lugares, efectivo esperado de la bolsa $450.00 y el cajón pendiente de Open Desk.
    - **Quedaron −$50 contra el esperado, por revisar, y $0 de diferencia entre ambas personas** (en el cajón, la diferencia contra el esperado no se puede calcular). El faltante queda por revisar en el paso 2.
    - Ajustes de pantalla tras la prueba: la hora ya no se muestra con punto duplicado («p.m..») y la tabla «Entrega recibida» se muestra desde la primera columna, con el lugar fijo, y se desplaza para consultar el resto.
-2. **Siguiente paso:** revisión de entregas y diferencias (regla 3).
+2. **Revisión de entregas y diferencias** (regla 3). En curso:
+   - **Primera parte (en revisión):** lista «Diferencias de efectivo» por sucursal, con los casos por revisar primero, y el caso de cada cambio de turno con el saldo esperado, lo entregado, lo recibido y cada diferencia por separado, más el desglose del saldo esperado (contado al abrir, cobros en efectivo, cancelaciones aprobadas y retiros) y lo que no entra a la bolsa. Consultan Encargado, Administración y Dirección de la sucursal (`diferencia.consultar`); Recepción no. Consultar no cambia ningún importe.
+   - **Segunda parte (pendiente de aprobar los ejemplos de sobrante y de tres cantidades distintas):** resultados «Aclarada» y «Faltante confirmado», motivo obligatorio, historial con cuenta, fecha y hora, quién revisa según su participación y faltantes confirmados pendientes para Dirección.
+   - **Para después:** enlaces a cada cobro desde el desglose y reapertura de casos.
 3. Retiros de Encargada de retiros, su cuenta y el seguimiento (reglas 4 a 6).
 4. Cierre del día y custodia nocturna (regla 7), con la comparación en la siguiente apertura.
 5. **Reporte básico:** cierres con efectivo esperado, contado, diferencia y entregas; diferencias pendientes de revisión.

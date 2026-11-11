@@ -149,6 +149,8 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       // Cambio de turno (bloque 5): entrega y recibe solo Recepción.
       expect(filas.filter((f) => f.permiso === "turno.entregar").map((f) => f.rol)).toEqual(["recepcion"]);
       expect(filas.filter((f) => f.permiso === "turno.recibir").map((f) => f.rol)).toEqual(["recepcion"]);
+      // Diferencias de efectivo: consultan Encargado, Administración y Dirección. Recepción no.
+      expect(filas.filter((f) => f.permiso === "diferencia.consultar").map((f) => f.rol).sort()).toEqual(["administracion", "direccion", "encargado"]);
       // Corregir: Encargado y Dirección. Fusionar: solo Dirección. Historial general: nadie todavía.
       expect(filas.filter((f) => f.permiso === "visitante.corregir").map((f) => f.rol).sort()).toEqual(["direccion", "encargado"]);
       expect(filas.filter((f) => f.permiso === "visitante.fusionar").map((f) => f.rol)).toEqual(["direccion"]);

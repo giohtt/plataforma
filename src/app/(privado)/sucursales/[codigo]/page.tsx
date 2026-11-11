@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { CSSProperties } from "react";
+import { pendientesDeRevision } from "@/lib/diferencias";
 import { temaSucursal } from "@/lib/color";
 import { obtenerBaseDatos } from "@/lib/db";
 import { historialSucursal } from "@/lib/catalogo-sucursales";
@@ -57,7 +58,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, historial] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, historial] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -72,6 +73,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     tienePermiso(sql, sesion.usuarioId, "acceso.autorizar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "acceso.consultar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "historial.cobertura", sucursal.id),
+    pendientesDeRevision(sql, sesion.usuarioId, sucursal.id),
     historialSucursal(sql, sesion.usuarioId, sucursal.id),
   ]);
 
@@ -114,6 +116,11 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
           {puedeVerificarAbonos ? (
             <Link className="boton" href={`/sucursales/${sucursal.codigo}/transferencias`} data-testid="transferencias">
               Transferencias por verificar
+            </Link>
+          ) : null}
+          {diferenciasPendientes !== null ? (
+            <Link className="boton" href={`/sucursales/${sucursal.codigo}/diferencias`} data-testid="diferencias">
+              Diferencias de efectivo{diferenciasPendientes ? ` (${diferenciasPendientes})` : ""}
             </Link>
           ) : null}
           {puedeCobertura ? (

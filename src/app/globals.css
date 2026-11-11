@@ -853,3 +853,30 @@ fieldset.sin-marco {
   font-size: 0.95rem;
   margin: 12px 0 4px;
 }
+
+/* --- Diferencias de efectivo (bloque 5) --- */
+.cifras-caso {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  gap: 10px;
+}
+.cifra-caso {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cifra-caso strong {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.cifra-mal {
+  border-color: #f1b6b0;
+  background: #fdecea;
+}
+.cifra-bien {
+  border-color: #b9dfc8;
+  background: var(--ok-soft);
+}

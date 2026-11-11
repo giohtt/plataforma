@@ -1,0 +1,57 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { obtenerBaseDatos } from "@/lib/db";
+import { etiquetaDiferencia, NOMBRE_LUGAR } from "@/lib/datos-diferencia";
+import { listaDiferencias } from "@/lib/diferencias";
+import { requerirSesion } from "@/lib/sesion-servidor";
+
+export const metadata = { title: "Diferencias de efectivo · Fitnessland" };
+
+const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
+const hora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
+const firmado = (v: string) => (Number(v) < 0 ? "−" : "+") + pesos.format(Math.abs(Number(v)));
+
+/** Diferencias de efectivo de los cambios de turno de la sucursal; primero las que siguen por revisar. */
+export default async function Diferencias({ params }: PageProps<"/sucursales/[codigo]/diferencias">) {
+  const sesion = await requerirSesion();
+  const { codigo } = await params;
+  const r = await listaDiferencias(obtenerBaseDatos()!, sesion.usuarioId, codigo);
+  if (!r) notFound();
+  return (
+    <main className="contenedor contenedor-medio">
+      <p className="sub"><Link href={`/sucursales/${codigo}`}>← {r.sucursal}</Link></p>
+      <h1 className="cabecera-titulo">Diferencias de efectivo · {r.sucursal}</h1>
+      <p className="sub">Cambios de turno confirmados, con las diferencias por revisar primero. Solo datos ficticios.</p>
+      <section className="tarjeta">
+        {r.casos.length ? (
+          <div className="tabla-desplazable">
+            <table className="tabla" data-testid="lista-diferencias">
+              <thead><tr><th>Cambio de turno</th><th>Quién entregó y quién recibió</th><th>Diferencias</th><th>Estado</th><th></th></tr></thead>
+              <tbody>
+                {r.casos.map((c) => (
+                  <tr key={c.entregaId} data-testid="caso-diferencia">
+                    <td data-etiqueta="Confirmado">{hora.format(c.confirmadaEn)}</td>
+                    <td data-etiqueta="Personas">{c.entregaPor} → {c.recibe}</td>
+                    <td data-etiqueta="Diferencias">
+                      {c.diferencias.length ? (
+                        <ul className="lista-simple">
+                          {c.diferencias.map((d) => (
+                            <li key={d.id}>{NOMBRE_LUGAR[d.lugar]}: <strong style={{ whiteSpace: "nowrap" }}>{firmado(d.importe)}</strong> · {etiquetaDiferencia(d.tipo, d.importe)}</li>
+                          ))}
+                        </ul>
+                      ) : "Sin diferencias"}
+                    </td>
+                    <td data-etiqueta="Estado" data-testid="estado-caso">
+                      {c.pendientes ? <span className="chip-estado chip-vencida">{c.pendientes} por revisar</span> : "Sin pendientes"}
+                    </td>
+                    <td data-etiqueta=""><Link href={`/sucursales/${codigo}/diferencias/${c.entregaId}`} data-testid="ver-caso">Ver caso</Link></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <p className="sub">Todavía no hay cambios de turno confirmados en esta sucursal.</p>}
+      </section>
+    </main>
+  );
+}
