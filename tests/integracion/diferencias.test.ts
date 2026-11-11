@@ -3,7 +3,7 @@ import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolverCancelacion, solicitarCancelacion } from "@/lib/cancelaciones";
 import { detalleDiferencias, listaDiferencias, pendientesDeRevision, revisarDiferencia } from "@/lib/diferencias";
-import { entregaEnCurso, recibirTurno, registrarEntrega } from "@/lib/entregas";
+import { confirmarApoyo, entregaEnCurso, recibirTurno, registrarEntrega, type DeclaracionApoyo } from "@/lib/entregas";
 import { abrirTurno, estadoTurno } from "@/lib/turnos";
 import { confirmarVisita, pantallaCobro } from "@/lib/visitas";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
@@ -16,6 +16,7 @@ const ids: Record<string, string> = {};
 let n = 0;
 let k = 0;
 const PRUEBAS = { entorno: "pruebas" as const };
+const NADIE = { hubo: false as const };
 
 async function cuenta(asignaciones: [string, string][], facultad?: string) {
   n++;
@@ -71,13 +72,13 @@ async function escenario() {
 type Esc = Awaited<ReturnType<typeof escenario>>;
 
 async function cambio(e: Esc, entregado: string, inicial: string, final = inicial) {
-  const r = await registrarEntrega(sql, e.sale, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: entregado, cajon: "1200" }, recibe: e.entra, nota: "" }, PRUEBAS);
+  const r = await registrarEntrega(sql, e.sale, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: entregado, cajon: "1200" }, recibe: e.entra, nota: "", apoyo: NADIE }, PRUEBAS);
   if (!r.ok) throw new Error(r.error);
   let x = (await entregaEnCurso(sql, e.turnoId))!;
-  let ok = await recibirTurno(sql, e.entra, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: inicial, cajon: "1200" }, aclaracion: "" }, PRUEBAS);
+  let ok = await recibirTurno(sql, e.entra, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: inicial, cajon: "1200" }, aclaracion: "", apoyo: NADIE }, PRUEBAS);
   if (ok.ok && ok.resultado === "recuento") {
     x = (await entregaEnCurso(sql, e.turnoId))!;
-    ok = await recibirTurno(sql, e.entra, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: final, cajon: "1200" }, aclaracion: "Recontamos juntas" }, PRUEBAS);
+    ok = await recibirTurno(sql, e.entra, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: final, cajon: "1200" }, aclaracion: "Recontamos juntas", apoyo: NADIE }, PRUEBAS);
   }
   if (!ok.ok || ok.resultado !== "confirmada") throw new Error(JSON.stringify(ok));
   return { entregaId: r.entregaId, turnoNuevo: ok.turnoId };
@@ -119,12 +120,12 @@ describe.skipIf(!URL_ADMIN)("diferencias de efectivo: lista y desglose del saldo
     // Segundo cambio, ya del turno de la entrante: entrega $320 de $350 y la siguiente confirma $300 tras recontar.
     const otra = await cuenta([["recepcion", e.codigo]]);
     const t2 = (await estadoTurno(sql, e.entra, e.codigo))!.turno!.id;
-    const r = await registrarEntrega(sql, e.entra, e.codigo, { turnoId: t2, conteo: { bolsa: "320", cajon: "1200" }, recibe: otra, nota: "" }, PRUEBAS);
+    const r = await registrarEntrega(sql, e.entra, e.codigo, { turnoId: t2, conteo: { bolsa: "320", cajon: "1200" }, recibe: otra, nota: "", apoyo: NADIE }, PRUEBAS);
     if (!r.ok) throw new Error(r.error);
     let x = (await entregaEnCurso(sql, t2))!;
-    await recibirTurno(sql, otra, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: "300", cajon: "1200" }, aclaracion: "" }, PRUEBAS);
+    await recibirTurno(sql, otra, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: "300", cajon: "1200" }, aclaracion: "", apoyo: NADIE }, PRUEBAS);
     x = (await entregaEnCurso(sql, t2))!;
-    await recibirTurno(sql, otra, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: "300", cajon: "1200" }, aclaracion: "Recontamos juntas" }, PRUEBAS);
+    await recibirTurno(sql, otra, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: "300", cajon: "1200" }, aclaracion: "Recontamos juntas", apoyo: NADIE }, PRUEBAS);
 
     const d = await detalleDiferencias(sql, e.admin, e.codigo, r.entregaId);
     expect(d).toMatchObject({
@@ -262,6 +263,114 @@ describe.skipIf(!URL_ADMIN)("diferencias de efectivo: lista y desglose del saldo
                        values (${df.id}, 'aclarada', 'Intento de prueba', 'encargado', ${f.sale})`).rejects.toThrow(/participó/);
       expect(await revisarDiferencia(sql, f.encargado, f.codigo, { diferenciaId: df.id, resultado: "aclarada", motivo: "Prueba ficticia" }, { entorno: "produccion" }))
         .toEqual({ ok: false, error: "bloqueado_produccion" });
+    });
+  });
+
+  describe("apoyo en el conteo y el recuento (opción B)", () => {
+    /** Cambio con recuento: la saliente entrega $320 de $350, la entrante cuenta $300, recuentan y confirma $300. */
+    async function cambioConRecuento(e: Esc, apoyos: { entrega?: DeclaracionApoyo; recepcion?: DeclaracionApoyo; recuento?: DeclaracionApoyo } = {}) {
+      const r = await registrarEntrega(sql, e.sale, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "320", cajon: "1200" }, recibe: e.entra, nota: "", apoyo: apoyos.entrega ?? NADIE }, PRUEBAS);
+      if (!r.ok) throw new Error(r.error);
+      let x = (await entregaEnCurso(sql, e.turnoId))!;
+      const a = await recibirTurno(sql, e.entra, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: "300", cajon: "1200" }, aclaracion: "", apoyo: apoyos.recepcion ?? NADIE }, PRUEBAS);
+      expect(a).toEqual({ ok: true, resultado: "recuento" });
+      x = (await entregaEnCurso(sql, e.turnoId))!;
+      const b = await recibirTurno(sql, e.entra, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: "300", cajon: "1200" }, aclaracion: "Recontamos con ayuda", apoyo: apoyos.recuento ?? NADIE }, PRUEBAS);
+      if (!b.ok || b.resultado !== "confirmada") throw new Error(JSON.stringify(b));
+      return { entregaId: r.entregaId, turnoNuevo: b.turnoId };
+    }
+    const nombre = async (id: string) => (await sql<{ nombre: string }[]>`select nombre from usuario where id = ${id}`)[0].nombre;
+
+    it("una Encargada declarada como apoyo en el recuento queda bloqueada antes y después de confirmar, y el caso pasa a Administración", async () => {
+      const e = await escenario();
+      const otraEncargada = await cuenta([["encargado", e.codigo]]);
+      const { entregaId, turnoNuevo } = await cambioConRecuento(e, { recuento: { hubo: true, personas: [e.encargado] } });
+      // La entrega se completó y el turno siguiente abrió con lo que confirmó la entrante, aunque el apoyo siga pendiente.
+      expect((await estadoTurno(sql, e.entra, e.codigo))!.turno).toMatchObject({ id: turnoNuevo, lugares: [{ contadoAlAbrir: "300.00" }, { contadoAlAbrir: "1200.00" }] });
+
+      const difs = await difsDe(e.admin, e.codigo, entregaId);
+      expect(difs.map((d) => [d.tipo, d.importe])).toEqual([["contra_esperado", "-30.00"], ["entre_personas", "-20.00"]]);
+      const antes = (await detalleDiferencias(sql, e.encargado, e.codigo, entregaId))!;
+      expect(antes).toMatchObject({ participaste: true, nivel: "administracion", puedeRevisar: false });
+      expect(antes.apoyos).toEqual([
+        expect.objectContaining({ etapa: "conteo_entrega", estado: "nadie" }),
+        expect.objectContaining({ etapa: "conteo_recepcion", estado: "nadie" }),
+        expect.objectContaining({ etapa: "recuento", estado: "con_apoyo", declaradoPor: await nombre(e.entra), personas: [{ nombre: await nombre(e.encargado), confirmadoEn: null }] }),
+      ]);
+      // Antes de confirmar: la Encargada declarada no revisa; la otra Encargada tampoco (le toca a Administración).
+      expect(await revisar(e.encargado, e.codigo, difs[0].id, "aclarada")).toEqual({ ok: false, error: "participaste" });
+      expect(await revisar(otraEncargada, e.codigo, difs[0].id, "aclarada")).toEqual({ ok: false, error: "otro_nivel" });
+
+      // Confirma desde su propia cuenta; nadie más puede confirmar por ella.
+      const [apoyo] = await sql<{ id: string }[]>`select id from apoyo_conteo where entrega_id = ${entregaId}`;
+      expect(await confirmarApoyo(sql, otraEncargada, e.codigo, apoyo.id, PRUEBAS)).toEqual({ ok: false, error: "no_encontrada" });
+      expect(await confirmarApoyo(sql, e.encargado, e.codigo, apoyo.id, PRUEBAS)).toEqual({ ok: true });
+      expect(await confirmarApoyo(sql, e.encargado, e.codigo, apoyo.id, PRUEBAS)).toEqual({ ok: false, error: "ya_confirmado" });
+
+      // Después de confirmar: sigue bloqueada; revisa Administración.
+      expect(await revisar(e.encargado, e.codigo, difs[0].id, "aclarada")).toEqual({ ok: false, error: "participaste" });
+      expect(await revisar(otraEncargada, e.codigo, difs[0].id, "aclarada")).toEqual({ ok: false, error: "otro_nivel" });
+      expect(await revisar(e.admin, e.codigo, difs[0].id, "aclarada", "La Encargada ayudó a recontar; se encontró el faltante")).toMatchObject({ ok: true });
+      const despues = (await detalleDiferencias(sql, e.admin, e.codigo, entregaId))!;
+      expect(despues.apoyos[2].personas[0].confirmadoEn).toBeInstanceOf(Date);
+      // Historial: quién declaró, a quién, en qué etapa, cuándo se declaró y cuándo confirmó.
+      const textos = despues.historial.map((h) => `${h.que} · ${h.cuenta}`);
+      expect(textos).toEqual(expect.arrayContaining([
+        `Apoyo declarado en el recuento: ${await nombre(e.encargado)} · ${await nombre(e.entra)}`,
+        `Apoyo confirmado en el recuento · ${await nombre(e.encargado)}`,
+      ]));
+      // Revisar y confirmar no cambiaron importes ni el saldo de apertura.
+      expect(despues.lugares.bolsa_visitas).toEqual({ esperado: "350.00", entregado: "320.00", inicial: "300.00", confirmado: "300.00" });
+      expect((await estadoTurno(sql, e.entra, e.codigo))!.turno!.lugares[0].contadoAlAbrir).toBe("300.00");
+    });
+
+    it("una Encargada ajena al conteo revisa un caso que le corresponde a su nivel («nadie más participó»)", async () => {
+      const e = await escenario();
+      const { entregaId } = await cambioConRecuento(e);
+      const c = (await detalleDiferencias(sql, e.encargado, e.codigo, entregaId))!;
+      expect(c).toMatchObject({ participaste: false, nivel: "encargado", puedeRevisar: true });
+      expect(c.apoyos.map((a) => a.estado)).toEqual(["nadie", "nadie", "nadie"]);
+      expect(await revisar(e.encargado, e.codigo, c.diferencias[0].id, "aclarada")).toMatchObject({ ok: true });
+    });
+
+    it("el apoyo debe ser de la sucursal y no puede ser quien entrega o recibe; si es inválido no se guarda nada", async () => {
+      const e = await escenario();
+      const otra = await escenario();
+      const entregar = (apoyo: DeclaracionApoyo) =>
+        registrarEntrega(sql, e.sale, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "350", cajon: "1200" }, recibe: e.entra, nota: "", apoyo }, PRUEBAS);
+      expect(await entregar({ hubo: true, personas: [] })).toEqual({ ok: false, error: "apoyo" });
+      expect(await entregar({ hubo: true, personas: [otra.encargado] })).toEqual({ ok: false, error: "apoyo" });
+      expect(await entregar({ hubo: true, personas: [e.entra] })).toEqual({ ok: false, error: "apoyo" });
+      expect(await entregar({ hubo: true, personas: [e.sale] })).toEqual({ ok: false, error: "apoyo" });
+      expect(await entregaEnCurso(sql, e.turnoId)).toBeNull();
+      expect(await entregar({ hubo: true, personas: [e.encargado, e.admin] })).toMatchObject({ ok: true });
+      // Administración declarada como apoyo: el caso pasa a Dirección.
+      const x = (await entregaEnCurso(sql, e.turnoId))!;
+      await recibirTurno(sql, e.entra, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: "350", cajon: "1200" }, aclaracion: "", apoyo: NADIE }, PRUEBAS);
+      expect(await detalleDiferencias(sql, e.dir, e.codigo, x.id)).toMatchObject({ nivel: "direccion", participaste: false });
+      expect(await detalleDiferencias(sql, e.admin, e.codigo, x.id)).toMatchObject({ participaste: true });
+      // La base no deja deshacer una confirmación ni borrar un apoyo.
+      const [a] = await sql<{ id: string }[]>`select id from apoyo_conteo where entrega_id = ${x.id} and usuario_id = ${e.encargado}`;
+      await confirmarApoyo(sql, e.encargado, e.codigo, a.id, PRUEBAS);
+      await expect(sql`update apoyo_conteo set confirmado_en = null where id = ${a.id}`).rejects.toThrow();
+      await expect(sql`delete from apoyo_conteo where id = ${a.id}`).rejects.toThrow();
+    });
+
+    it("entregas anteriores a este registro: «sin registro de apoyo», distinto de «nadie más participó»", async () => {
+      const e = await escenario();
+      const { entregaId } = await cambio(e, "300", "300");
+      // Simula una entrega de antes de la migración 0023: sin declaraciones (solo posible quitando la protección en la prueba).
+      await sql.begin(async (tx) => {
+        await tx`alter table declaracion_apoyo disable trigger declaracion_apoyo_inmutable`;
+        await tx`delete from declaracion_apoyo where entrega_id = ${entregaId}`;
+        await tx`alter table declaracion_apoyo enable trigger declaracion_apoyo_inmutable`;
+      });
+      const c = (await detalleDiferencias(sql, e.encargado, e.codigo, entregaId))!;
+      expect(c.apoyos.map((a) => a.estado)).toEqual(["sin_registro", "sin_registro"]);
+      expect(c).toMatchObject({ nivel: "encargado", puedeRevisar: true });
+      const otro = await escenario();
+      const d = await cambio(otro, "300", "300");
+      expect((await detalleDiferencias(sql, otro.encargado, otro.codigo, d.entregaId))!.apoyos.map((a) => a.estado)).toEqual(["nadie", "nadie"]);
     });
   });
 });

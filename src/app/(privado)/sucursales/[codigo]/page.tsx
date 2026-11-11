@@ -58,7 +58,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, historial] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -74,6 +74,8 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     tienePermiso(sql, sesion.usuarioId, "acceso.consultar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "historial.cobertura", sucursal.id),
     pendientesDeRevision(sql, sesion.usuarioId, sucursal.id),
+    sql<{ n: number }[]>`select count(*)::int as n from apoyo_conteo a join entrega_turno e on e.id = a.entrega_id
+      join turno t on t.id = e.turno_id where a.usuario_id = ${sesion.usuarioId} and a.confirmado_en is null and t.sucursal_id = ${sucursal.id}`,
     historialSucursal(sql, sesion.usuarioId, sucursal.id),
   ]);
 
@@ -116,6 +118,11 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
           {puedeVerificarAbonos ? (
             <Link className="boton" href={`/sucursales/${sucursal.codigo}/transferencias`} data-testid="transferencias">
               Transferencias por verificar
+            </Link>
+          ) : null}
+          {apoyosPendientes.n ? (
+            <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/apoyos`} data-testid="apoyos-pendientes">
+              Confirmar tu apoyo en un conteo ({apoyosPendientes.n})
             </Link>
           ) : null}
           {diferenciasPendientes !== null ? (

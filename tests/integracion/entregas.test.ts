@@ -17,6 +17,7 @@ const ids: Record<string, string> = {};
 let n = 0;
 let k = 0;
 const PRUEBAS = { entorno: "pruebas" as const };
+const NADIE = { hubo: false as const };
 const ACLARACION = "Recontamos juntas y seguimos con $50 menos";
 
 async function cuenta(asignaciones: [string, string][]) {
@@ -61,7 +62,7 @@ type Esc = Awaited<ReturnType<typeof escenario>>;
 
 const entregar = (e: Esc, bolsa: string, cajon: string, extra: Partial<{ recibe: string; nota: string; quien: string }> = {}) =>
   registrarEntrega(sql, extra.quien ?? e.laura, e.codigo,
-    { turnoId: e.turnoId, conteo: { bolsa, cajon }, recibe: extra.recibe ?? e.sofia, nota: extra.nota ?? "" }, PRUEBAS);
+    { turnoId: e.turnoId, conteo: { bolsa, cajon }, recibe: extra.recibe ?? e.sofia, nota: extra.nota ?? "", apoyo: NADIE }, PRUEBAS);
 async function enCurso(e: Esc) {
   const x = await entregaEnCurso(sql, e.turnoId);
   if (!x) throw new Error("sin entrega en curso");
@@ -69,7 +70,7 @@ async function enCurso(e: Esc) {
 }
 const recibir = async (e: Esc, bolsa: string, cajon: string, aclaracion = "", quien?: string) => {
   const x = await enCurso(e);
-  return recibirTurno(sql, quien ?? e.sofia, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa, cajon }, aclaracion }, PRUEBAS);
+  return recibirTurno(sql, quien ?? e.sofia, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa, cajon }, aclaracion, apoyo: NADIE }, PRUEBAS);
 };
 const diferencias = (turnoId: string) => sql<{ tipo: string; lugar: string; importe: string }[]>`
   select d.tipo, l.tipo as lugar, d.importe::text as importe from diferencia_efectivo d
@@ -155,7 +156,7 @@ describe.skipIf(!URL_ADMIN)("cambio de turno con confirmación de quien recibe",
     expect(await entregar(e, "350", "1200", { recibe: otra.sofia })).toEqual({ ok: false, error: "receptor" });
     expect(await entregar(e, "350", "1200", { recibe: e.encargado })).toEqual({ ok: false, error: "receptor" });
     expect(await entregar(e, "350", "1200", { nota: "no" })).toEqual({ ok: false, error: "nota" });
-    expect(await registrarEntrega(sql, e.laura, e.codigo, { turnoId: otra.turnoId, conteo: { bolsa: "1", cajon: "1" }, recibe: e.sofia, nota: "" }, PRUEBAS))
+    expect(await registrarEntrega(sql, e.laura, e.codigo, { turnoId: otra.turnoId, conteo: { bolsa: "1", cajon: "1" }, recibe: e.sofia, nota: "", apoyo: NADIE }, PRUEBAS))
       .toEqual({ ok: false, error: "cambio" });
 
     expect(await entregar(e, "350", "1200")).toMatchObject({ ok: true });
@@ -166,9 +167,9 @@ describe.skipIf(!URL_ADMIN)("cambio de turno con confirmación de quien recibe",
     expect(await recibir(e, "350", "1200", "", otra.sofia)).toEqual({ ok: false, error: "no_encontrada" });
     expect(await recibir(e, "350", "1200", "", e.laura)).toEqual({ ok: false, error: "sin_entrega" });
     const x = await enCurso(e);
-    expect(await recibirTurno(sql, e.sofia, e.codigo, { entregaId: x.id, version: x.version + 1, conteo: { bolsa: "350", cajon: "1200" }, aclaracion: "" }, PRUEBAS))
+    expect(await recibirTurno(sql, e.sofia, e.codigo, { entregaId: x.id, version: x.version + 1, conteo: { bolsa: "350", cajon: "1200" }, aclaracion: "", apoyo: NADIE }, PRUEBAS))
       .toEqual({ ok: false, error: "cambio" });
-    expect(await recibirTurno(sql, e.sofia, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: "350", cajon: "1200" }, aclaracion: "" }, { entorno: "produccion" }))
+    expect(await recibirTurno(sql, e.sofia, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: "350", cajon: "1200" }, aclaracion: "", apoyo: NADIE }, { entorno: "produccion" }))
       .toEqual({ ok: false, error: "bloqueado_produccion" });
   });
 
@@ -270,7 +271,7 @@ describe.skipIf(!URL_ADMIN)("cambio de turno con confirmación de quien recibe",
 
   it("no se entrega ni se recibe en una sucursal inactiva ni en producción", async () => {
     const e = await escenario();
-    expect(await registrarEntrega(sql, e.laura, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "350", cajon: "1200" }, recibe: e.sofia, nota: "" }, { entorno: "produccion" }))
+    expect(await registrarEntrega(sql, e.laura, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "350", cajon: "1200" }, recibe: e.sofia, nota: "", apoyo: NADIE }, { entorno: "produccion" }))
       .toEqual({ ok: false, error: "bloqueado_produccion" });
     await entregar(e, "350", "1200");
     await sql`update sucursal set estado_operativo = 'inactiva', desactivada_en = now() where id = ${ids[e.codigo]}`;

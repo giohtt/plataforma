@@ -111,6 +111,15 @@ export type Desglose = {
 };
 
 export type EventoCaso = { en: Date; que: string; cuenta: string };
+export type EtapaApoyo = "conteo_entrega" | "conteo_recepcion" | "recuento";
+/** Apoyo declarado en una etapa: sin registro (entregas anteriores), nadie más participó, o las personas declaradas. */
+export type ApoyoEtapa = {
+  etapa: EtapaApoyo;
+  estado: "sin_registro" | "nadie" | "con_apoyo";
+  declaradoPor: string | null;
+  declaradoEn: Date | null;
+  personas: { nombre: string; confirmadoEn: Date | null }[];
+};
 
 export type DetalleDiferencias = {
   sucursal: string;
@@ -126,6 +135,8 @@ export type DetalleDiferencias = {
   /** Perfil al que le toca revisar estas diferencias, y si la cuenta que consulta puede hacerlo. */
   nivel: NivelRevision;
   puedeRevisar: boolean;
+  /** Apoyo en cada etapa del conteo. El recuento solo aparece si lo hubo. */
+  apoyos: ApoyoEtapa[];
   historial: EventoCaso[];
   lugares: Record<TipoLugar, Cifras>;
   diferencias: Diferencia[];
@@ -179,9 +190,26 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     select nivel_revision_entrega(${e.id}) as nivel,
            tiene_permiso(${usuarioId}, 'diferencia.revisar', ${s.id})
            and exists (select 1 from perfiles_en_sucursal(${usuarioId}, ${s.id}) r where r = nivel_revision_entrega(${e.id})) as puede`;
-  const participaste = usuarioId === e.entrega_por_id || usuarioId === e.recibe_id;
+  const [{ participaste }] = await sql<{ participaste: boolean }[]>`
+    select ${usuarioId}::uuid in (select participantes_entrega(${e.id})) as participaste`;
   const recuento = await sql<{ en: Date }[]>`
     select en from historial_cambio where entidad = 'entrega_turno' and entidad_id = ${e.id} and accion = 'conteo_no_coincide'`;
+  const declaraciones = await sql<{ etapa: EtapaApoyo; hubo: boolean; por: string; en: Date }[]>`
+    select d.etapa, d.hubo_apoyo as hubo, u.nombre as por, d.en from declaracion_apoyo d join usuario u on u.id = d.declarado_por
+    where d.entrega_id = ${e.id}`;
+  const personasApoyo = await sql<{ etapa: EtapaApoyo; nombre: string; declarado_en: Date; confirmado_en: Date | null; por: string }[]>`
+    select a.etapa, u.nombre, a.declarado_en, a.confirmado_en, d.nombre as por
+    from apoyo_conteo a join usuario u on u.id = a.usuario_id join usuario d on d.id = a.declarado_por
+    where a.entrega_id = ${e.id} order by a.declarado_en, u.nombre`;
+  const etapas: EtapaApoyo[] = ["conteo_entrega", "conteo_recepcion", ...(recuento.length ? (["recuento"] as const) : [])];
+  const apoyos: ApoyoEtapa[] = etapas.map((etapa) => {
+    const d = declaraciones.find((x) => x.etapa === etapa);
+    return {
+      etapa, estado: !d ? "sin_registro" : d.hubo ? "con_apoyo" : "nadie", declaradoPor: d?.por ?? null, declaradoEn: d?.en ?? null,
+      personas: personasApoyo.filter((p) => p.etapa === etapa).map((p) => ({ nombre: p.nombre, confirmadoEn: p.confirmado_en })),
+    };
+  });
+  const ETAPA = { conteo_entrega: "conteo de quien entregó", conteo_recepcion: "conteo de quien recibió", recuento: "recuento" } as const;
   const LUGAR = { bolsa_visitas: "bolsa", cajon_mensualidades: "cajón" } as const;
   const RESULTADO = { aclarada: "Aclarada", faltante_confirmado: "Faltante confirmado", sobrante_confirmado: "Sobrante confirmado" } as const;
   const dinero = (v: string) => (Number(v) < 0 ? "−" : "+") + "$" + Math.abs(Number(v)).toLocaleString("es-MX", { minimumFractionDigits: 2 });
@@ -189,6 +217,9 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     { en: e.creada_en, que: "Entrega registrada (conteo de quien entrega)", cuenta: e.entrega_por },
     ...recuento.map((r) => ({ en: r.en, que: "El primer conteo de quien recibe no coincidió: recuento", cuenta: e.recibe })),
     { en: e.resuelta_en, que: "Recepción confirmada desde su propia cuenta", cuenta: e.recibe },
+    ...declaraciones.filter((d) => !d.hubo).map((d) => ({ en: d.en, que: `Apoyo en el ${ETAPA[d.etapa]}: nadie más participó`, cuenta: d.por })),
+    ...personasApoyo.map((p) => ({ en: p.declarado_en, que: `Apoyo declarado en el ${ETAPA[p.etapa]}: ${p.nombre}`, cuenta: p.por })),
+    ...personasApoyo.filter((p) => p.confirmado_en).map((p) => ({ en: p.confirmado_en!, que: `Apoyo confirmado en el ${ETAPA[p.etapa]}`, cuenta: p.nombre })),
     ...difs.map((d) => ({ en: d.registradaEn, que: `Diferencia registrada (${LUGAR[d.lugar]}): ${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : "en la entrega"}`, cuenta: "La plataforma, al confirmar" })),
     ...difs.filter((d) => d.revision).map((d) => ({
       en: d.revision!.en,
@@ -198,7 +229,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   ].sort((a, b) => a.en.getTime() - b.en.getTime());
   return {
     sucursal: s.nombre, entregaId: e.id, entregaPor: e.entrega_por, recibe: e.recibe, entregadaEn: e.creada_en, confirmadaEn: e.resuelta_en,
-    nota: e.nota, aclaracion: e.aclaracion, participaste, nivel: n.nivel, puedeRevisar: n.puede && !participaste, historial,
+    nota: e.nota, aclaracion: e.aclaracion, participaste, nivel: n.nivel, puedeRevisar: n.puede && !participaste, historial, apoyos,
     lugares: { bolsa_visitas: cifras("bolsa_visitas"), cajon_mensualidades: cifras("cajon_mensualidades") },
     diferencias: difs,
     desglose: {
@@ -242,20 +273,22 @@ export async function revisarDiferencia(
   try {
     return await sql.begin(async (tx) => {
       const [d] = await tx<{ entrega_id: string; importe: string; sucursal_id: string; entrega_por: string; recibe: string;
-                             consulta: boolean; revisa: boolean; nivel: NivelRevision; tiene_nivel: boolean; revisada: boolean }[]>`
+                             consulta: boolean; revisa: boolean; nivel: NivelRevision; tiene_nivel: boolean; revisada: boolean; participo: boolean }[]>`
         select df.entrega_id, df.importe::text as importe, t.sucursal_id, e.entrega_por, e.recibe,
                tiene_permiso(${usuarioId}, 'diferencia.consultar', t.sucursal_id) as consulta,
                tiene_permiso(${usuarioId}, 'diferencia.revisar', t.sucursal_id) as revisa,
                nivel_revision_entrega(e.id) as nivel,
                exists (select 1 from perfiles_en_sucursal(${usuarioId}, t.sucursal_id) r where r = nivel_revision_entrega(e.id)) as tiene_nivel,
-               exists (select 1 from revision_diferencia r where r.diferencia_id = df.id) as revisada
+               exists (select 1 from revision_diferencia r where r.diferencia_id = df.id) as revisada,
+               ${usuarioId}::uuid in (select participantes_entrega(e.id)) as participo
         from diferencia_efectivo df join entrega_turno e on e.id = df.entrega_id join turno t on t.id = e.turno_id
         join sucursal s on s.id = t.sucursal_id
         where df.id = ${datos.diferenciaId} and s.codigo = ${codigo}
         for update of df`;
       if (!d || !d.consulta) return { ok: false as const, error: "no_encontrada" as const };
       if (!d.revisa) return { ok: false as const, error: "sin_permiso" as const };
-      if (usuarioId === d.entrega_por || usuarioId === d.recibe) return { ok: false as const, error: "participaste" as const };
+      // Participó quien entregó, quien recibió o quien fue declarado como apoyo (aunque todavía no confirme).
+      if (d.participo) return { ok: false as const, error: "participaste" as const };
       if (!d.tiene_nivel) return { ok: false as const, error: "otro_nivel" as const };
       if (d.revisada) return { ok: false as const, error: "ya_revisada" as const };
       const negativo = Number(d.importe) < 0;

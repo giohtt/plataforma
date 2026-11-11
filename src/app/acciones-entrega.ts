@@ -7,14 +7,15 @@
 import { redirect } from "next/navigation";
 import { leerImporte, MENSAJES_IMPORTE } from "@/lib/datos-turno";
 import { obtenerBaseDatos } from "@/lib/db";
-import { cancelarEntrega, recibirTurno, registrarEntrega, type ErrorEntrega } from "@/lib/entregas";
+import { cancelarEntrega, confirmarApoyo, recibirTurno, registrarEntrega, type DeclaracionApoyo, type ErrorEntrega } from "@/lib/entregas";
 import { leerEntorno } from "@/lib/entorno";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
 
 export type EstadoFormularioEntrega = {
   error?: string;
-  errores?: { bolsa?: string; cajon?: string; recibe?: string; nota?: string; aclaracion?: string; motivo?: string };
+  errores?: { bolsa?: string; cajon?: string; recibe?: string; nota?: string; aclaracion?: string; motivo?: string; apoyo?: string };
   valores?: Record<string, string>;
+  personas?: string[];
   intento: number;
 } | null;
 
@@ -30,6 +31,7 @@ const MENSAJES: Record<ErrorEntrega | "sin_entrega", string> = {
   nota: "La nota debe tener entre 5 y 300 caracteres, o déjala vacía.",
   motivo: "Escribe el motivo (de 5 a 300 caracteres).",
   aclaracion: "Escribe la aclaración del recuento (de 5 a 300 caracteres).",
+  apoyo: "Indica si alguien te ayudó a contar y, si sí, elige a las personas de la sucursal que participaron.",
   cambio: "La entrega cambió mientras la tenías abierta. Revisa los datos actuales.",
   sin_entrega: "No tienes una entrega pendiente de recibir en esta sucursal.",
   bloqueado_produccion: "El cambio de turno está desactivado fuera del entorno de pruebas.",
@@ -46,6 +48,15 @@ const lector = (datos: FormData) => (campo: string, max = 30) => {
   const v = datos.get(campo);
   return typeof v === "string" ? v.slice(0, max) : "";
 };
+/** «¿Alguien te ayudó a contar?»: «no», o «si» con al menos una persona elegida. */
+function leerApoyo(datos: FormData): { ok: true; apoyo: DeclaracionApoyo; personas: string[] } | { ok: false; personas: string[] } {
+  const hubo = datos.get("apoyo");
+  const personas = datos.getAll("personas").filter((p): p is string => typeof p === "string").slice(0, 10).map((p) => p.slice(0, 40));
+  if (hubo === "no") return { ok: true, apoyo: { hubo: false }, personas: [] };
+  if (hubo === "si" && personas.length) return { ok: true, apoyo: { hubo: true, personas }, personas };
+  return { ok: false, personas };
+}
+
 function importes(valores: { bolsa: string; cajon: string }) {
   const bolsa = leerImporte(valores.bolsa);
   const cajon = leerImporte(valores.cajon);
@@ -60,22 +71,24 @@ export async function accionEntregarTurno(previo: EstadoFormularioEntrega, datos
   const { sesion, sql } = await inicio();
   const leer = lector(datos);
   const codigo = leer("codigo");
-  const valores = { bolsa: leer("bolsa"), cajon: leer("cajon"), recibe: leer("recibe", 40), nota: leer("nota", 400) };
+  const valores = { bolsa: leer("bolsa"), cajon: leer("cajon"), recibe: leer("recibe", 40), nota: leer("nota", 400), apoyo: leer("apoyo") };
   const intento = (previo?.intento ?? 0) + 1;
   const i = importes(valores);
+  const a = leerApoyo(datos);
   const sinReceptor = !valores.recibe;
-  if (!i.ok || sinReceptor) {
+  if (!i.ok || sinReceptor || !a.ok) {
     return {
       error: "Revisa los campos marcados.",
-      errores: { ...(i.ok ? {} : i.errores), recibe: sinReceptor ? "Elige quién recibe." : undefined },
-      valores, intento,
+      errores: { ...(i.ok ? {} : i.errores), recibe: sinReceptor ? "Elige quién recibe." : undefined, apoyo: a.ok ? undefined : MENSAJES.apoyo },
+      valores, personas: a.personas, intento,
     };
   }
   const r = await registrarEntrega(sql, sesion.usuarioId, codigo,
-    { turnoId: leer("turno", 40), conteo: i.conteo, recibe: valores.recibe, nota: valores.nota }, { entorno: leerEntorno() });
+    { turnoId: leer("turno", 40), conteo: i.conteo, recibe: valores.recibe, nota: valores.nota, apoyo: a.apoyo }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/turno?aviso=entregado`);
-  if (r.error === "nota") return { error: "Revisa los campos marcados.", errores: { nota: MENSAJES.nota }, valores, intento };
-  return { error: MENSAJES[r.error], valores, intento };
+  if (r.error === "nota") return { error: "Revisa los campos marcados.", errores: { nota: MENSAJES.nota }, valores, personas: a.personas, intento };
+  if (r.error === "apoyo") return { error: "Revisa los campos marcados.", errores: { apoyo: MENSAJES.apoyo }, valores, personas: a.personas, intento };
+  return { error: MENSAJES[r.error], valores, personas: a.personas, intento };
 }
 
 export async function accionCancelarEntrega(previo: EstadoFormularioEntrega, datos: FormData): Promise<EstadoFormularioEntrega> {
@@ -95,15 +108,28 @@ export async function accionRecibirTurno(previo: EstadoFormularioEntrega, datos:
   const { sesion, sql } = await inicio();
   const leer = lector(datos);
   const codigo = leer("codigo");
-  const valores = { bolsa: leer("bolsa"), cajon: leer("cajon"), aclaracion: leer("aclaracion", 400) };
+  const valores = { bolsa: leer("bolsa"), cajon: leer("cajon"), aclaracion: leer("aclaracion", 400), apoyo: leer("apoyo") };
   const intento = (previo?.intento ?? 0) + 1;
   const i = importes(valores);
-  if (!i.ok) return { error: "Revisa los campos marcados.", errores: i.errores, valores, intento };
+  const a = leerApoyo(datos);
+  if (!i.ok || !a.ok) {
+    return { error: "Revisa los campos marcados.", errores: { ...(i.ok ? {} : i.errores), apoyo: a.ok ? undefined : MENSAJES.apoyo }, valores, personas: a.personas, intento };
+  }
   const r = await recibirTurno(sql, sesion.usuarioId, codigo,
-    { entregaId: leer("entrega", 40), version: Number(leer("version")), conteo: i.conteo, aclaracion: valores.aclaracion },
+    { entregaId: leer("entrega", 40), version: Number(leer("version")), conteo: i.conteo, aclaracion: valores.aclaracion, apoyo: a.apoyo },
     { entorno: leerEntorno() });
   if (r.ok && r.resultado === "confirmada") redirect(`/sucursales/${codigo}/turno?aviso=recibido`);
   if (r.ok) redirect(`/sucursales/${codigo}/turno/recibir?aviso=recuento`);
-  if (r.error === "aclaracion") return { error: "Revisa los campos marcados.", errores: { aclaracion: MENSAJES.aclaracion }, valores, intento };
-  return { error: MENSAJES[r.error], valores, intento };
+  if (r.error === "aclaracion") return { error: "Revisa los campos marcados.", errores: { aclaracion: MENSAJES.aclaracion }, valores, personas: a.personas, intento };
+  if (r.error === "apoyo") return { error: "Revisa los campos marcados.", errores: { apoyo: MENSAJES.apoyo }, valores, personas: a.personas, intento };
+  return { error: MENSAJES[r.error], valores, personas: a.personas, intento };
+}
+
+/** La persona declarada como apoyo confirma su participación desde su propia cuenta. */
+export async function accionConfirmarApoyo(datos: FormData): Promise<void> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo");
+  const r = await confirmarApoyo(sql, sesion.usuarioId, codigo, leer("apoyo", 40), { entorno: leerEntorno() });
+  redirect(`/sucursales/${codigo}/apoyos?aviso=${r.ok ? "confirmado" : r.error}`);
 }

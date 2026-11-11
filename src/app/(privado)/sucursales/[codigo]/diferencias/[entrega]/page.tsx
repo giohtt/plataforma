@@ -37,7 +37,7 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
       ) : null}
       <p className="sub" data-testid="nivel-revision">
         Revisa: <strong>{NOMBRE_NIVEL[c.nivel]}</strong>, según quién participó en la entrega
-        {c.nivel === "encargado" ? "" : c.nivel === "administracion" ? " (participó un Encargado)" : " (participó Administración)"}.
+        {c.nivel === "encargado" ? "" : c.nivel === "administracion" ? " (participó alguien con perfil de Encargado)" : " (participó alguien con perfil de Administración)"}.
       </p>
       {LUGARES.map((l) => {
         const x = c.lugares[l];
@@ -67,6 +67,27 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
       })}
       {c.nota ? <p className="sub">Nota de quien entregó: {c.nota}</p> : null}
       {c.aclaracion ? <p className="sub">Aclaración del recuento: {c.aclaracion}</p> : null}
+
+      <section className="tarjeta" aria-labelledby="t-participacion" data-testid="participacion">
+        <h2 id="t-participacion" className="titulo-seccion">Quién participó en el conteo</h2>
+        <ul className="lista-simple">
+          <li>Contó y entregó: <strong>{c.entregaPor}</strong></li>
+          <li>Contó y recibió: <strong>{c.recibe}</strong></li>
+          {c.apoyos.map((a) => (
+            <li key={a.etapa} data-testid={`apoyo-${a.etapa}`}>
+              Apoyo en {a.etapa === "conteo_entrega" ? "el conteo de quien entregó" : a.etapa === "conteo_recepcion" ? "el conteo de quien recibió" : "el recuento"}:{" "}
+              {a.estado === "sin_registro" ? <em>sin registro de apoyo (entrega anterior a este registro)</em>
+                : a.estado === "nadie" ? <>nadie más participó (lo declaró {a.declaradoPor})</>
+                : <>
+                    {a.personas.map((p, i) => (
+                      <span key={i}>{i ? ", " : ""}<strong>{p.nombre}</strong> ({p.confirmadoEn ? `confirmó ${hora.format(p.confirmadoEn)}` : "pendiente de confirmar"})</span>
+                    ))} · lo declaró {a.declaradoPor}
+                  </>}
+            </li>
+          ))}
+        </ul>
+        <p className="sub">Quien participó, aunque su apoyo esté pendiente de confirmar, no revisa estas diferencias; su perfil cuenta para decidir quién revisa.</p>
+      </section>
 
       <section className="tarjeta" aria-labelledby="t-revision" data-testid="revisiones">
         <h2 id="t-revision" className="titulo-seccion">Revisión de cada diferencia</h2>

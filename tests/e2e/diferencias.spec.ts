@@ -28,6 +28,7 @@ async function escenario() {
   const laura = await crearCuenta("recepcion", codigo, "Laura " + letras(5));
   const sofia = await crearCuenta("recepcion", codigo, "Sofía " + letras(5));
   const encargado = await crearCuenta("encargado", codigo, "Encargado " + letras(5));
+  const admin = await crearCuenta("administracion", codigo, "Administración " + letras(5));
   const [t] = await sql<{ id: string }[]>`
     insert into turno (sucursal_id, abierto_por) select id, ${laura.id} from sucursal where codigo = ${codigo} returning id`;
   await sql`insert into responsable_lugar (lugar_id, turno_id, usuario_id)
@@ -35,7 +36,7 @@ async function escenario() {
   await sql`insert into conteo_efectivo (turno_id, lugar_id, momento, importe, contado_por)
             select ${t.id}, l.id, 'apertura', case l.tipo when 'bolsa_visitas' then 650 else 1200 end, ${laura.id}
             from lugar_efectivo l join sucursal s on s.id = l.sucursal_id where s.codigo = ${codigo}`;
-  return { codigo, laura, sofia, encargado, turnoId: t.id };
+  return { codigo, laura, sofia, encargado, admin, turnoId: t.id };
 }
 async function entrar(page: Page, correo: string) {
   await page.context().clearCookies();
@@ -53,6 +54,7 @@ async function entregar(page: Page, codigo: string, bolsa: string, cajon: string
   await page.locator("#bolsa").fill(bolsa);
   await page.locator("#cajon").fill(cajon);
   await page.getByLabel("Quién recibe").selectOption({ label: a });
+  await page.getByTestId("apoyo").getByRole("radio", { name: "No, nadie más participó" }).check();
   await page.getByRole("button", { name: "Entregar el turno" }).click();
   await expect(page.getByTestId("estado-entrega")).toContainText(`Entrega pendiente de confirmar por ${a}`);
 }
@@ -65,6 +67,7 @@ async function recibir(page: Page, codigo: string, bolsa: string, cajon: string,
   await page.locator("#bolsa").fill(bolsa);
   await page.locator("#cajon").fill(cajon);
   if (aclaracion) await page.locator("#aclaracion").fill(aclaracion);
+  await page.getByTestId("apoyo").getByRole("radio", { name: "No, nadie más participó" }).check();
   await page.getByRole("button", { name: aclaracion ? "Confirmar tras recontar" : "Confirmar lo que recibo" }).click();
 }
 
@@ -140,4 +143,60 @@ test("Encargado registra «Aclarada» con motivo: queda en el historial y los im
   await page.goto(`/sucursales/${e.codigo}/turno`);
   await expect(page.getByTestId("recibida-bolsa_visitas").getByTestId("dif-esperado")).toHaveText("−$50.00 · Aclarada");
   await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("contado-al-abrir")).toHaveText("$600.00");
+});
+
+test("apoyo en el recuento: la Encargada declarada confirma desde su cuenta, no revisa y el caso pasa a Administración", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.laura.correo);
+  await entregar(page, e.codigo, "650", "1200", e.sofia.nombre);
+  // La entrante cuenta $600: no coincide y recuentan con ayuda de la Encargada.
+  await entrar(page, e.sofia.correo);
+  await recibir(page, e.codigo, "600", "1200");
+  await expect(page.getByTestId("aviso-recuento")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  await page.locator("#bolsa").fill("600");
+  await page.locator("#cajon").fill("1200");
+  await page.locator("#aclaracion").fill("Recontamos con la Encargada; siguen faltando $50");
+  await page.getByTestId("apoyo").getByRole("radio", { name: "Sí, me ayudaron" }).check();
+  await page.getByTestId("personas-apoyo").getByRole("checkbox", { name: e.encargado.nombre }).check();
+  await page.getByRole("button", { name: "Confirmar tras recontar" }).click();
+  // La entrega se completa aunque el apoyo siga pendiente; el turno abre con lo confirmado.
+  await expect(page.locator("p.aviso[role=status]")).toContainText("Turno recibido");
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("contado-al-abrir")).toHaveText("$600.00");
+
+  // Antes de confirmar: la Encargada ve el caso como participante y no puede revisarlo.
+  await entrar(page, e.encargado.correo);
+  await page.goto(`/sucursales/${e.codigo}/diferencias`);
+  await page.getByTestId("ver-caso").first().click();
+  await expect(page.getByTestId("participaste")).toBeVisible();
+  await expect(page.getByTestId("nivel-revision")).toContainText("Administración");
+  await expect(page.getByTestId("apoyo-recuento")).toContainText(`${e.encargado.nombre} (pendiente de confirmar) · lo declaró ${e.sofia.nombre}`);
+  await expect(page.getByTestId("formulario-revision")).toHaveCount(0);
+  // Confirma su participación desde su cuenta.
+  await page.goto(`/sucursales/${e.codigo}`);
+  await page.getByTestId("apoyos-pendientes").click();
+  await expect(page.getByTestId("apoyo-pendiente")).toContainText(`${e.sofia.nombre} declaró que participaste en el recuento`);
+  await page.getByRole("button", { name: "Confirmo que participé" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toHaveText("Participación confirmada.");
+  await expect(page.getByTestId("sin-apoyos")).toBeVisible();
+  // Después de confirmar: sigue sin poder revisar.
+  await page.goto(`/sucursales/${e.codigo}/diferencias`);
+  await page.getByTestId("ver-caso").first().click();
+  await expect(page.getByTestId("apoyo-recuento")).toContainText("confirmó");
+  await expect(page.getByTestId("formulario-revision")).toHaveCount(0);
+
+  // Administración sí revisa.
+  await entrar(page, e.admin.correo);
+  await page.goto(`/sucursales/${e.codigo}/diferencias`);
+  await page.getByTestId("ver-caso").first().click();
+  await page.waitForLoadState("networkidle");
+  const dif = page.getByTestId("diferencia");
+  await expect(dif).toHaveCount(1);
+  await dif.getByRole("radio", { name: /Aclarada/ }).check();
+  await dif.getByLabel("Motivo (obligatorio)").fill("Se recontó con la Encargada; diferencia simulada en la prueba");
+  await dif.getByRole("button", { name: "Registrar revisión" }).click();
+  await expect(page.getByTestId("revision")).toContainText(`Revisó ${e.admin.nombre} (Administración)`);
+  await expect(page.getByTestId("historial-caso")).toContainText(`Apoyo declarado en el recuento: ${e.encargado.nombre}`);
+  await expect(page.getByTestId("historial-caso")).toContainText("Apoyo confirmado en el recuento");
+  if (process.env.CAPTURAR) await page.screenshot({ path: `${process.env.CAPTURAR}/apoyo-${test.info().project.name}.png`, fullPage: true });
 });
