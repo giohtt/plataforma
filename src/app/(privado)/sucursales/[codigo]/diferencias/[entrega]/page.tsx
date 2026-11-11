@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
-import { etiquetaDiferencia, NOMBRE_LUGAR } from "@/lib/datos-diferencia";
+import { FormularioRevision } from "@/components/RevisionDiferencia";
+import { ESTADO_DIFERENCIA, etiquetaDiferencia, NOMBRE_LUGAR, NOMBRE_NIVEL } from "@/lib/datos-diferencia";
 import { detalleDiferencias } from "@/lib/diferencias";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
@@ -13,9 +14,10 @@ const firmado = (v: string) => (Number(v) < 0 ? "−" : Number(v) > 0 ? "+" : ""
 const LUGARES = ["bolsa_visitas", "cajon_mensualidades"] as const;
 
 /** Un cambio de turno: esperado, entregado, recibido y cada diferencia por separado, con el desglose del esperado. */
-export default async function CasoDiferencia({ params }: PageProps<"/sucursales/[codigo]/diferencias/[entrega]">) {
+export default async function CasoDiferencia({ params, searchParams }: PageProps<"/sucursales/[codigo]/diferencias/[entrega]">) {
   const sesion = await requerirSesion();
   const { codigo, entrega } = await params;
+  const { aviso } = await searchParams;
   const c = await detalleDiferencias(obtenerBaseDatos()!, sesion.usuarioId, codigo, entrega);
   if (!c) notFound();
   const dif = (lugar: (typeof LUGARES)[number], tipo: "contra_esperado" | "entre_personas") =>
@@ -29,9 +31,14 @@ export default async function CasoDiferencia({ params }: PageProps<"/sucursales/
       <p className="sub">
         De <strong>{c.entregaPor}</strong> a <strong>{c.recibe}</strong> · entregó {hora.format(c.entregadaEn)} · confirmó {hora.format(c.confirmadaEn)} desde su propia cuenta
       </p>
+      {aviso === "revisada" ? <p className="aviso aviso-ok" role="status">Revisión registrada. Los importes no cambiaron.</p> : null}
       {c.participaste ? (
         <p className="aviso aviso-info" data-testid="participaste">Participaste en esta entrega: su revisión le corresponde a otra persona.</p>
       ) : null}
+      <p className="sub" data-testid="nivel-revision">
+        Revisa: <strong>{NOMBRE_NIVEL[c.nivel]}</strong>, según quién participó en la entrega
+        {c.nivel === "encargado" ? "" : c.nivel === "administracion" ? " (participó un Encargado)" : " (participó Administración)"}.
+      </p>
       {LUGARES.map((l) => {
         const x = c.lugares[l];
         const de = dif(l, "contra_esperado");
@@ -48,18 +55,47 @@ export default async function CasoDiferencia({ params }: PageProps<"/sucursales/
                 <span className="sub">Primer conteo {pesos.format(Number(x.inicial))}</span></div>
               <div className={`cifra-caso ${dp ? "cifra-mal" : "cifra-bien"}`}><span className="sub">Diferencia entre entrega y recepción</span>
                 <strong data-testid="cifra-entre-personas">{dp ? firmado(dp.importe) : pesos.format(0)}</strong>
-                {dp ? <span className="sub">{etiquetaDiferencia(dp.tipo, dp.importe)} · Por revisar</span> : null}</div>
+                {dp ? <span className="sub">{etiquetaDiferencia(dp.tipo, dp.importe)} · {ESTADO_DIFERENCIA[dp.estado]}</span> : null}</div>
             </div>
             <div className={`cifra-caso ${de ? "cifra-mal" : ""}`} data-testid="cifra-contra-esperado">
               <span className="sub">Diferencia contra el esperado (lo entregado − el esperado)</span>
               <strong>{x.esperado === null ? "No se puede calcular" : de ? firmado(de.importe) : pesos.format(0)}</strong>
-              {de ? <span className="sub">{etiquetaDiferencia(de.tipo, de.importe)} · <span className="chip-estado chip-vencida">Por revisar</span></span> : null}
+              {de ? <span className="sub">{etiquetaDiferencia(de.tipo, de.importe)} · {ESTADO_DIFERENCIA[de.estado]}</span> : null}
             </div>
           </section>
         );
       })}
       {c.nota ? <p className="sub">Nota de quien entregó: {c.nota}</p> : null}
       {c.aclaracion ? <p className="sub">Aclaración del recuento: {c.aclaracion}</p> : null}
+
+      <section className="tarjeta" aria-labelledby="t-revision" data-testid="revisiones">
+        <h2 id="t-revision" className="titulo-seccion">Revisión de cada diferencia</h2>
+        {c.diferencias.length ? c.diferencias.map((d) => {
+          const lo = c.lugares[d.lugar];
+          const comparado = d.tipo === "contra_esperado"
+            ? `${pesos.format(Number(lo.entregado))} entregados − ${pesos.format(Number(lo.esperado))} esperados`
+            : `${pesos.format(Number(lo.confirmado))} confirmados − ${pesos.format(Number(lo.entregado))} entregados`;
+          return (
+            <div key={d.id} className="tarjeta" data-testid="diferencia" data-tipo={d.tipo}>
+              <p>
+                <strong>{NOMBRE_LUGAR[d.lugar]} · {etiquetaDiferencia(d.tipo, d.importe)}: {firmado(d.importe)}</strong>{" "}
+                <span className={`chip-estado ${d.estado === "aclarada" ? "chip-aclarada" : "chip-vencida"}`} data-testid="estado-diferencia">{ESTADO_DIFERENCIA[d.estado]}</span>
+              </p>
+              <p className="sub">Se compara: {comparado}.</p>
+              {d.revision ? (
+                <p className="sub" data-testid="revision">
+                  Revisó <strong>{d.revision.revisadaPor}</strong> ({NOMBRE_NIVEL[d.revision.nivel]}) · {hora.format(d.revision.en)} · Motivo: «{d.revision.motivo}»
+                </p>
+              ) : c.puedeRevisar ? (
+                <FormularioRevision codigo={codigo} diferenciaId={d.id} importe={d.importe} />
+              ) : (
+                <p className="sub">Por revisar por {NOMBRE_NIVEL[c.nivel]}.</p>
+              )}
+            </div>
+          );
+        }) : <p className="sub">Esta entrega no tiene diferencias.</p>}
+        <p className="sub">Revisar deja constancia de lo ocurrido y conserva todos los importes registrados y el saldo de apertura del turno siguiente.</p>
+      </section>
 
       <section className="tarjeta" aria-labelledby="t-desglose" data-testid="desglose">
         <h2 id="t-desglose" className="titulo-seccion">Movimientos que componen el saldo esperado de la bolsa</h2>
@@ -91,7 +127,20 @@ export default async function CasoDiferencia({ params }: PageProps<"/sucursales/
           no localizadas {pesos.format(Number(f.transferenciaNoLocalizada.importe))}.
         </p>
       </section>
-      <p className="sub">Consultar no cambia ningún importe. Los resultados de la revisión («Aclarada», «Faltante confirmado») llegan en un paso siguiente.</p>
+      <section className="tarjeta" aria-labelledby="t-historial" data-testid="historial-caso">
+        <h2 id="t-historial" className="titulo-seccion">Historial del caso</h2>
+        <div className="tabla-desplazable">
+          <table className="tabla tabla-ancha">
+            <thead><tr><th>Fecha y hora</th><th>Qué pasó</th><th>Cuenta</th></tr></thead>
+            <tbody>
+              {c.historial.map((h, i) => (
+                <tr key={i} data-testid="evento-caso"><td>{hora.format(h.en)}</td><td>{h.que}</td><td>{h.cuenta}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="sub">El historial no se edita ni se borra.</p>
+      </section>
     </main>
   );
 }

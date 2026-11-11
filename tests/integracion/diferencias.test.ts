@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolverCancelacion, solicitarCancelacion } from "@/lib/cancelaciones";
-import { detalleDiferencias, listaDiferencias, pendientesDeRevision } from "@/lib/diferencias";
+import { detalleDiferencias, listaDiferencias, pendientesDeRevision, revisarDiferencia } from "@/lib/diferencias";
 import { entregaEnCurso, recibirTurno, registrarEntrega } from "@/lib/entregas";
 import { abrirTurno, estadoTurno } from "@/lib/turnos";
 import { confirmarVisita, pantallaCobro } from "@/lib/visitas";
@@ -101,7 +101,7 @@ describe.skipIf(!URL_ADMIN)("diferencias de efectivo: lista y desglose del saldo
         bolsa_visitas: { esperado: "350.00", entregado: "300.00", inicial: "300.00", confirmado: "300.00" },
         cajon_mensualidades: { esperado: null, entregado: "1200.00", confirmado: "1200.00" },
       },
-      diferencias: [{ lugar: "bolsa_visitas", tipo: "contra_esperado", importe: "-50.00", estado: "por_revisar" }],
+      diferencias: [{ lugar: "bolsa_visitas", tipo: "contra_esperado", importe: "-50.00", estado: "por_revisar", revision: null }],
       desglose: {
         contadoAlAbrir: "200.00", cobros: { cuantos: 4, visitas: 4, importe: "200.00" },
         cancelaciones: { cuantas: 1, importe: "-50.00" }, calculado: "350.00",
@@ -159,5 +159,109 @@ describe.skipIf(!URL_ADMIN)("diferencias de efectivo: lista y desglose del saldo
     await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${ambos.sale}, 'encargado', ${ids[ambos.codigo]}, 'Prueba de participación')`;
     const c = await cambio(ambos, "350", "350");
     expect(await detalleDiferencias(sql, ambos.sale, ambos.codigo, c.entregaId)).toMatchObject({ participaste: true });
+  });
+
+  const revisar = (u: string, codigo: string, diferenciaId: string, resultado: string, motivo = "Diferencia simulada a propósito en la prueba") =>
+    revisarDiferencia(sql, u, codigo, { diferenciaId, resultado, motivo }, PRUEBAS);
+  const difsDe = async (u: string, codigo: string, entregaId: string) => (await detalleDiferencias(sql, u, codigo, entregaId))!.diferencias;
+
+  describe("resultado de la revisión", () => {
+    it("Encargado aclara el −$50 con motivo: queda en el historial con cuenta, fecha y hora, y no cambia ningún importe", async () => {
+      const e = await escenario();
+      const { entregaId, turnoNuevo } = await cambio(e, "300", "300");
+      const [d] = await difsDe(e.encargado, e.codigo, entregaId);
+      expect(await revisar(e.encargado, e.codigo, d.id, "aclarada", "no")).toEqual({ ok: false, error: "motivo" });
+      expect(await revisar(e.encargado, e.codigo, d.id, "sobrante_confirmado")).toEqual({ ok: false, error: "resultado" });
+      expect(await revisar(e.encargado, e.codigo, d.id, "aclarada", "Diferencia simulada a propósito en la prueba del 11 de noviembre")).toEqual({ ok: true, entregaId });
+      const c = (await detalleDiferencias(sql, e.admin, e.codigo, entregaId))!;
+      const [{ nombre }] = await sql<{ nombre: string }[]>`select nombre from usuario where id = ${e.encargado}`;
+      expect(c.diferencias[0]).toMatchObject({
+        importe: "-50.00", estado: "aclarada",
+        revision: { resultado: "aclarada", nivel: "encargado", motivo: "Diferencia simulada a propósito en la prueba del 11 de noviembre", revisadaPor: nombre },
+      });
+      expect(c.diferencias[0].revision!.en).toBeInstanceOf(Date);
+      expect(c.historial.at(-1)).toMatchObject({ cuenta: nombre, que: expect.stringContaining("Aclarada") });
+      // Los importes y el saldo de apertura del turno siguiente se conservan.
+      expect(c.lugares.bolsa_visitas).toEqual({ esperado: "350.00", entregado: "300.00", inicial: "300.00", confirmado: "300.00" });
+      expect((await estadoTurno(sql, e.entra, e.codigo))!.turno).toMatchObject({ id: turnoNuevo, lugares: [{ contadoAlAbrir: "300.00" }, { contadoAlAbrir: "1200.00" }] });
+      // No se revisa dos veces.
+      expect(await revisar(e.encargado, e.codigo, d.id, "faltante_confirmado")).toEqual({ ok: false, error: "ya_revisada" });
+      expect(await pendientesDeRevision(sql, e.encargado, ids[e.codigo])).toBe(0);
+    });
+
+    it("−$30 contra el esperado y +$30 en la entrega: neto $0, pero dos diferencias pendientes que se revisan por separado", async () => {
+      const e = await escenario();
+      const { entregaId } = await cambio(e, "320", "330", "350");
+      const l = await listaDiferencias(sql, e.encargado, e.codigo);
+      expect(l!.casos[0]).toMatchObject({ entregaId, pendientes: 2, paraDireccion: 0, neto: "0.00" });
+      const difs = await difsDe(e.encargado, e.codigo, entregaId);
+      expect(difs.map((d) => [d.tipo, d.importe, d.estado])).toEqual([
+        ["contra_esperado", "-30.00", "por_revisar"], ["entre_personas", "30.00", "por_revisar"],
+      ]);
+      // Faltante: Aclarada o Faltante confirmado. Sobrante: Aclarada o Sobrante confirmado.
+      const [falta, sobra] = difs;
+      expect(await revisar(e.encargado, e.codigo, sobra.id, "faltante_confirmado")).toEqual({ ok: false, error: "resultado" });
+      expect(await revisar(e.encargado, e.codigo, falta.id, "faltante_confirmado", "Faltan $30 del turno; no se encontró el origen")).toMatchObject({ ok: true });
+      expect((await listaDiferencias(sql, e.encargado, e.codigo))!.casos[0]).toMatchObject({ pendientes: 1, paraDireccion: 1 });
+      expect(await revisar(e.encargado, e.codigo, sobra.id, "sobrante_confirmado", "Sobran $30 en la entrega; queda para Dirección")).toMatchObject({ ok: true });
+      const despues = await difsDe(e.encargado, e.codigo, entregaId);
+      expect(despues.map((d) => d.estado)).toEqual(["faltante_confirmado", "sobrante_confirmado"]);
+      expect((await listaDiferencias(sql, e.encargado, e.codigo))!.casos[0]).toMatchObject({ pendientes: 0, paraDireccion: 2 });
+      // El turno siguiente abre con lo que confirmó la entrante ($350), no con lo entregado.
+      expect((await estadoTurno(sql, e.entra, e.codigo))!.turno!.lugares[0].contadoAlAbrir).toBe("350.00");
+    });
+
+    it("quién revisa según su participación: Encargado; si participó un Encargado, Administración; si participó Administración, Dirección", async () => {
+      // Sin Encargado ni Administración entre quienes participaron: revisa Encargado; Administración y Dirección, no.
+      const a = await escenario();
+      const ca = await cambio(a, "300", "300");
+      const [da] = await difsDe(a.encargado, a.codigo, ca.entregaId);
+      expect(await detalleDiferencias(sql, a.encargado, a.codigo, ca.entregaId)).toMatchObject({ nivel: "encargado", puedeRevisar: true });
+      expect(await revisar(a.admin, a.codigo, da.id, "aclarada")).toEqual({ ok: false, error: "otro_nivel" });
+      expect(await revisar(a.dir, a.codigo, da.id, "aclarada")).toEqual({ ok: false, error: "otro_nivel" });
+      expect(await revisar(a.sale, a.codigo, da.id, "aclarada")).toEqual({ ok: false, error: "no_encontrada" });
+
+      // Quien entregó también es Encargado: revisa Administración; el otro Encargado, no; quien participó, nunca.
+      const b = await escenario();
+      await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${b.sale}, 'encargado', ${ids[b.codigo]}, 'Prueba de participación')`;
+      const cb = await cambio(b, "300", "300");
+      const [db] = await difsDe(b.admin, b.codigo, cb.entregaId);
+      expect(await detalleDiferencias(sql, b.encargado, b.codigo, cb.entregaId)).toMatchObject({ nivel: "administracion", puedeRevisar: false });
+      expect(await revisar(b.sale, b.codigo, db.id, "aclarada")).toEqual({ ok: false, error: "participaste" });
+      expect(await revisar(b.encargado, b.codigo, db.id, "aclarada")).toEqual({ ok: false, error: "otro_nivel" });
+      expect(await revisar(b.admin, b.codigo, db.id, "aclarada")).toMatchObject({ ok: true });
+
+      // Quien recibió también es Administración: revisa Dirección.
+      const c = await escenario();
+      await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${c.entra}, 'administracion', ${ids[c.codigo]}, 'Prueba de participación')`;
+      const cc = await cambio(c, "300", "300");
+      const [dc] = await difsDe(c.dir, c.codigo, cc.entregaId);
+      expect(await revisar(c.admin, c.codigo, dc.id, "aclarada")).toEqual({ ok: false, error: "otro_nivel" });
+      expect(await revisar(c.entra, c.codigo, dc.id, "aclarada")).toEqual({ ok: false, error: "participaste" });
+      expect(await revisar(c.dir, c.codigo, dc.id, "faltante_confirmado")).toMatchObject({ ok: true });
+      expect((await difsDe(c.dir, c.codigo, cc.entregaId))[0]).toMatchObject({ estado: "faltante_confirmado", revision: { nivel: "direccion" } });
+    });
+
+    it("dos revisiones simultáneas: solo una queda; la base respalda las reglas y no deja editar ni borrar una revisión", async () => {
+      const e = await escenario();
+      const { entregaId } = await cambio(e, "300", "300");
+      const otroEncargado = await cuenta([["encargado", e.codigo]]);
+      const [d] = await difsDe(e.encargado, e.codigo, entregaId);
+      const [x, y] = await Promise.all([revisar(e.encargado, e.codigo, d.id, "aclarada"), revisar(otroEncargado, e.codigo, d.id, "faltante_confirmado")]);
+      expect([x, y].filter((r) => r.ok)).toHaveLength(1);
+      expect([x, y].find((r) => !r.ok)).toEqual({ ok: false, error: "ya_revisada" });
+      await expect(sql`update revision_diferencia set motivo = 'Otro motivo de prueba' where diferencia_id = ${d.id}`).rejects.toThrow();
+      await expect(sql`delete from revision_diferencia where diferencia_id = ${d.id}`).rejects.toThrow();
+      // Directo en la base: nivel equivocado, o quien participó, se rechazan.
+      const f = await escenario();
+      const cf = await cambio(f, "300", "300");
+      const [df] = await difsDe(f.encargado, f.codigo, cf.entregaId);
+      await expect(sql`insert into revision_diferencia (diferencia_id, resultado, motivo, nivel, revisada_por)
+                       values (${df.id}, 'aclarada', 'Intento de prueba', 'administracion', ${f.admin})`).rejects.toThrow(/otro perfil/);
+      await expect(sql`insert into revision_diferencia (diferencia_id, resultado, motivo, nivel, revisada_por)
+                       values (${df.id}, 'aclarada', 'Intento de prueba', 'encargado', ${f.sale})`).rejects.toThrow(/participó/);
+      expect(await revisarDiferencia(sql, f.encargado, f.codigo, { diferenciaId: df.id, resultado: "aclarada", motivo: "Prueba ficticia" }, { entorno: "produccion" }))
+        .toEqual({ ok: false, error: "bloqueado_produccion" });
+    });
   });
 });

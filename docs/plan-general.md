@@ -167,7 +167,13 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
    - Ajustes de pantalla tras la prueba: la hora ya no se muestra con punto duplicado («p.m..») y la tabla «Entrega recibida» se muestra desde la primera columna, con el lugar fijo, y se desplaza para consultar el resto.
 2. **Revisión de entregas y diferencias** (regla 3). En curso:
    - **Primera parte (en revisión):** lista «Diferencias de efectivo» por sucursal, con los casos por revisar primero, y el caso de cada cambio de turno con el saldo esperado, lo entregado, lo recibido y cada diferencia por separado, más el desglose del saldo esperado (contado al abrir, cobros en efectivo, cancelaciones aprobadas y retiros) y lo que no entra a la bolsa. Consultan Encargado, Administración y Dirección de la sucursal (`diferencia.consultar`); Recepción no. Consultar no cambia ningún importe.
-   - **Segunda parte (pendiente de aprobar los ejemplos de sobrante y de tres cantidades distintas):** resultados «Aclarada» y «Faltante confirmado», motivo obligatorio, historial con cuenta, fecha y hora, quién revisa según su participación y faltantes confirmados pendientes para Dirección.
+   - **Segunda parte (en revisión), con los ejemplos aprobados el 11 nov 2026:**
+     - **Fórmulas:** contra el esperado = lo que entregó la saliente − el esperado; entre ambas personas = lo que confirmó la entrante − lo que entregó la saliente. Negativo es faltante; positivo, sobrante. El turno siguiente abre con lo que confirmó la entrante.
+     - **Cada diferencia se revisa por separado**, con su propio estado, motivo obligatorio (5 a 300 caracteres) e historial con cuenta, fecha y hora. Faltante: «Aclarada» o «Faltante confirmado». Sobrante: «Aclarada» cuando se documenta el origen, o «Sobrante confirmado» cuando el excedente sigue pendiente de resolución. Un faltante o sobrante confirmado queda visible como **pendiente para Dirección**.
+     - **Quién revisa:** Encargado; si quien entregó o quien recibió tiene perfil de Encargado en la sucursal, Administración; si tiene perfil de Administración, Dirección. Quien participó nunca revisa. Se comprueba en el servidor y la base lo respalda.
+     - **La lista** muestra cuántas diferencias siguen por revisar en cada entrega y cuántas están pendientes para Dirección; el total neto se muestra solo como referencia (con −$30 y +$30, el neto es $0 y siguen dos diferencias pendientes).
+     - Revisar conserva todos los importes originales y el saldo de apertura del turno siguiente. Una revisión no se edita ni se borra.
+     - **Pendiente:** cómo resuelve Dirección un faltante o sobrante confirmado.
    - **Para después:** enlaces a cada cobro desde el desglose y reapertura de casos.
 3. Retiros de Encargada de retiros, su cuenta y el seguimiento (reglas 4 a 6).
 4. Cierre del día y custodia nocturna (regla 7), con la comparación en la siguiente apertura.

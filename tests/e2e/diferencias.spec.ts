@@ -101,3 +101,43 @@ test("Encargado consulta el caso: esperado, entregado y recibido por separado, y
   await expect(page.getByTestId("participaste")).toHaveCount(0);
   if (process.env.CAPTURAR) await page.screenshot({ path: `${process.env.CAPTURAR}/detalle-${test.info().project.name}.png`, fullPage: true });
 });
+
+test("Encargado registra «Aclarada» con motivo: queda en el historial y los importes no cambian", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.laura.correo);
+  await entregar(page, e.codigo, "600", "1200", e.sofia.nombre);
+  await entrar(page, e.sofia.correo);
+  await recibir(page, e.codigo, "600", "1200");
+
+  await entrar(page, e.encargado.correo);
+  await page.goto(`/sucursales/${e.codigo}/diferencias`);
+  await page.getByTestId("ver-caso").first().click();
+  await page.waitForLoadState("networkidle");
+  const dif = page.getByTestId("diferencia");
+  await expect(dif).toHaveCount(1);
+  await expect(dif.getByTestId("estado-diferencia")).toHaveText("Por revisar");
+  // Sin motivo no se registra.
+  await dif.getByRole("radio", { name: /Aclarada/ }).check();
+  await dif.getByRole("button", { name: "Registrar revisión" }).click();
+  await expect(page.locator("p.aviso[role=alert]")).toHaveText("Revisa los campos marcados.");
+  await page.getByTestId("diferencia").getByRole("radio", { name: /Aclarada/ }).check();
+  await page.getByTestId("diferencia").getByLabel("Motivo (obligatorio)").fill("Diferencia simulada a propósito en la prueba del 11 de noviembre");
+  await page.getByTestId("diferencia").getByRole("button", { name: "Registrar revisión" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toHaveText("Revisión registrada. Los importes no cambiaron.");
+  await expect(page.getByTestId("diferencia").getByTestId("estado-diferencia")).toHaveText("Aclarada");
+  await expect(page.getByTestId("revision")).toContainText(`Revisó ${e.encargado.nombre} (Encargado)`);
+  await expect(page.getByTestId("revision")).toContainText("Diferencia simulada a propósito en la prueba del 11 de noviembre");
+  await expect(page.getByTestId("evento-caso").last()).toContainText("Aclarada");
+  await expect(page.getByTestId("evento-caso").last()).toContainText(e.encargado.nombre);
+  await expect(page.getByTestId("caso-bolsa_visitas").getByTestId("cifra-esperado")).toHaveText("$650.00");
+  await expect(page.getByTestId("caso-bolsa_visitas").getByTestId("cifra-recibido")).toHaveText("$600.00");
+  if (process.env.CAPTURAR) await page.screenshot({ path: `${process.env.CAPTURAR}/revisada-${test.info().project.name}.png`, fullPage: true });
+  await page.goto(`/sucursales/${e.codigo}`);
+  await expect(page.getByTestId("diferencias")).toHaveText("Diferencias de efectivo");
+
+  // En el turno de quien recibió se ve el resultado y el saldo de apertura sigue igual.
+  await entrar(page, e.sofia.correo);
+  await page.goto(`/sucursales/${e.codigo}/turno`);
+  await expect(page.getByTestId("recibida-bolsa_visitas").getByTestId("dif-esperado")).toHaveText("−$50.00 · Aclarada");
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("contado-al-abrir")).toHaveText("$600.00");
+});

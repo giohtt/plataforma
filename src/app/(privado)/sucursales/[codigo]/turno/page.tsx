@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { FormularioCancelarEntrega } from "@/components/Entrega";
 import { FormularioApertura } from "@/components/FormularioApertura";
 import { obtenerBaseDatos } from "@/lib/db";
+import { ESTADO_DIFERENCIA } from "@/lib/datos-diferencia";
 import { entregaEnCurso, entregaRecibida, type DiferenciaEntrega } from "@/lib/entregas";
 import { leerEntorno } from "@/lib/entorno";
 import { requerirSesion } from "@/lib/sesion-servidor";
@@ -134,8 +135,8 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                           <td>{pesos.format(Number(recibida.entregado[k]))}</td>
                           <td>{pesos.format(Number(recibida.inicial[k]))}</td>
                           <td>{pesos.format(Number(recibida.confirmado[k]))}</td>
-                          <td data-testid="dif-esperado">{l === "cajon_mensualidades" ? "No se puede calcular" : de ? <strong>{firmado(de.importe)} · Por revisar</strong> : pesos.format(0)}</td>
-                          <td data-testid="dif-personas">{dp ? <strong>{firmado(dp.importe)} · Por revisar</strong> : pesos.format(0)}</td>
+                          <td data-testid="dif-esperado">{l === "cajon_mensualidades" ? "No se puede calcular" : de ? <strong>{firmado(de.importe)} · {ESTADO_DIFERENCIA[de.estado]}</strong> : pesos.format(0)}</td>
+                          <td data-testid="dif-personas">{dp ? <strong>{firmado(dp.importe)} · {ESTADO_DIFERENCIA[dp.estado]}</strong> : pesos.format(0)}</td>
                         </tr>
                       );
                     })}
@@ -144,7 +145,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
               </div>
               {recibida.nota ? <p className="sub">Nota de quien entregó: {recibida.nota}</p> : null}
               {recibida.aclaracion ? <p className="sub" data-testid="aclaracion">Aclaración del recuento: {recibida.aclaracion}</p> : null}
-              <p className="sub">Las diferencias no se corrigen: quedan registradas para revisión. Este turno empieza con lo que se confirmó.</p>
+              <p className="sub">Las diferencias no se corrigen: quedan registradas y se revisan aparte, sin cambiar los importes. Este turno empieza con lo que se confirmó.</p>
             </section>
           ) : null}
           <div className="lugares-turno">
