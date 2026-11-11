@@ -34,6 +34,7 @@ export type ErrorVisita =
   | "sin_turno"
   | "turno_cambio"
   | "no_responsable"
+  | "entrega_en_curso"
   | "visitante_no_encontrado"
   | "visitante_unido"
   | "clave_ajena"
@@ -82,6 +83,10 @@ async function contexto(
     join usuario u on u.id = r.usuario_id
     where r.turno_id = ${t.id} and r.hasta is null`;
   if (!r || r.usuario_id !== usuarioId) return { ok: false, error: "no_responsable" };
+  // Bloque 5: mientras la bolsa se está entregando al siguiente turno, no entra efectivo nuevo (ya se contó).
+  if ((await tx`select 1 from entrega_turno where turno_id = ${t.id} and estado in ('pendiente', 'recuento')`).length) {
+    return { ok: false, error: "entrega_en_curso" };
+  }
   return { ok: true, c: { sucursalId: s.id, codigo, nombre: s.nombre, turnoId: t.id, bolsaId: r.lugar_id, responsable: r.nombre } };
 }
 

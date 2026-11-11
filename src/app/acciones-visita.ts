@@ -20,6 +20,7 @@ const MENSAJES: Record<ErrorVisita, string> = {
   no_encontrada: "No encontrada.",
   sin_permiso: "Tu cuenta no tiene permiso para registrar visitas en esta sucursal. No se guardó nada.",
   sucursal_inactiva: "Esta sucursal está desactivada: no se pueden registrar cobros. No se guardó nada.",
+  entrega_en_curso: "El turno se está entregando: no se pueden registrar cobros hasta que la entrante confirme o se cancele la entrega. No se guardó nada.",
   sin_turno: "Ya no hay turno abierto en esta sucursal. No se guardó nada.",
   turno_cambio: "El turno cambió mientras cobrabas. No se guardó nada: vuelve a abrir «Registrar visita» desde el turno.",
   no_responsable: "Solo la responsable de la bolsa de visitas puede cobrar en este turno. No se guardó nada.",

@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { FormularioCancelarEntrega } from "@/components/Entrega";
 import { FormularioApertura } from "@/components/FormularioApertura";
 import { obtenerBaseDatos } from "@/lib/db";
+import { entregaEnCurso, entregaRecibida, type DiferenciaEntrega } from "@/lib/entregas";
 import { leerEntorno } from "@/lib/entorno";
 import { requerirSesion } from "@/lib/sesion-servidor";
 import { resumenAccesosTurno } from "@/lib/accesos";
@@ -28,6 +30,13 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   const puedeCobrar = t ? (await impedimentoRegistroVisita(sql, sesion.usuarioId, codigo, leerEntorno())) === null : false;
   const cobros = t ? await cobrosDelTurno(sql, t.id) : [];
   const accesos = t ? await resumenAccesosTurno(sql, t.id) : null;
+  const enCurso = t ? await entregaEnCurso(sql, t.id) : null;
+  const recibida = t ? await entregaRecibida(sql, t.id) : null;
+  const puedeEntregar = t && !enCurso && leerEntorno() !== "produccion" && !e.sucursal.inactiva
+    && t.lugares.every((l) => l.responsableId === sesion.usuarioId)
+    && (await tienePermiso(sql, sesion.usuarioId, "turno.entregar", e.sucursal.id));
+  const firmado = (v: string) => (Number(v) < 0 ? "−" : "+") + pesos.format(Math.abs(Number(v)));
+  const dif = (lugar: TipoLugar, tipo: DiferenciaEntrega["tipo"]) => recibida?.diferencias.find((d) => d.lugar === lugar && d.tipo === tipo);
   const [puedeRegistrarAcceso, puedeRevisarAccesos] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "acceso.registrar_apertura", e.sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "acceso.consultar", e.sucursal.id),
@@ -53,25 +62,95 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
       <h1 className="cabecera-titulo">Turno de Recepción</h1>
       <p className="sub">Solo datos ficticios. Un turno abierto a la vez por sucursal.</p>
       {aviso === "abierto" && t ? <p className="aviso aviso-ok" role="status">Turno abierto.</p> : null}
+      {aviso === "entregado" && enCurso ? (
+        <p className="aviso aviso-ok" role="status">Entrega registrada. Queda pendiente hasta que {enCurso.recibe} cuente y confirme desde su cuenta.</p>
+      ) : null}
+      {aviso === "entrega-cancelada" ? <p className="aviso aviso-ok" role="status">Entrega cancelada. El turno sigue a tu cargo.</p> : null}
+      {aviso === "recibido" && recibida ? <p className="aviso aviso-ok" role="status">Turno recibido. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
 
       {t ? (
         <>
           <section className="tarjeta" data-testid="turno-abierto">
             <h2 className="titulo-seccion">Turno abierto</h2>
             <p>Abierto por <strong>{t.abiertoPor}</strong> · {hora.format(t.abiertoEn)}</p>
-            <p className="sub">La entrega al siguiente turno y el cierre llegan en el bloque 5.</p>
+            <p className="sub">El cierre del día llega en un paso siguiente del bloque 5.</p>
             {puedeCobrar ? (
               <p className="fila-acciones">
                 <Link className="boton boton-principal" href={`/sucursales/${codigo}/turno/visita`}>Registrar visita</Link>
               </p>
             ) : null}
           </section>
+          {enCurso ? (
+            <section className="tarjeta" aria-labelledby="t-entrega" data-testid="entrega-en-curso">
+              <h2 id="t-entrega" className="titulo-seccion">Cambio de turno</h2>
+              <p className="aviso aviso-info" data-testid="estado-entrega">
+                {enCurso.estado === "recuento"
+                  ? <>El conteo de <strong>{enCurso.recibe}</strong> no coincidió: recuento pendiente.</>
+                  : <>Entrega pendiente de confirmar por <strong>{enCurso.recibe}</strong>.</>}{" "}
+                {enCurso.entregaPor} entregó · {hora.format(enCurso.creadaEn)}. Mientras tanto no se registran cobros.
+              </p>
+              {enCurso.recibeId === sesion.usuarioId ? (
+                <p className="fila-acciones">
+                  <Link className="boton boton-principal" href={`/sucursales/${codigo}/turno/recibir`} data-testid="ir-recibir">Recibir el turno</Link>
+                </p>
+              ) : null}
+              {enCurso.entregaPorId === sesion.usuarioId ? (
+                <FormularioCancelarEntrega codigo={codigo} entregaId={enCurso.id} version={enCurso.version} />
+              ) : null}
+            </section>
+          ) : puedeEntregar ? (
+            <section className="tarjeta" aria-labelledby="t-entrega" data-testid="cambio-turno">
+              <h2 id="t-entrega" className="titulo-seccion">Cambio de turno</h2>
+              <p className="sub">Cuenta la bolsa y el cajón y entrégalos a la recepcionista que entra. Ella confirma desde su propia cuenta.</p>
+              <p className="fila-acciones">
+                <Link className="boton" href={`/sucursales/${codigo}/turno/entrega`} data-testid="ir-entregar">Entregar el turno</Link>
+              </p>
+            </section>
+          ) : null}
+          {recibida ? (
+            <section className="tarjeta" aria-labelledby="t-recibida" data-testid="entrega-recibida">
+              <h2 id="t-recibida" className="titulo-seccion">Entrega recibida</h2>
+              <p className="sub">
+                De <strong>{recibida.entregaPor}</strong> a <strong>{recibida.recibe}</strong> · entregó {hora.format(recibida.creadaEn)} ·
+                confirmó {hora.format(recibida.confirmadaEn)}
+              </p>
+              <div className="tabla-desplazable">
+                <table className="tabla">
+                  <thead>
+                    <tr><th>Lugar</th><th>Esperado</th><th>Entregó</th><th>Primer conteo de quien recibe</th><th>Confirmó</th>
+                      <th>Dif. contra el esperado</th><th>Dif. entre ambas personas</th></tr>
+                  </thead>
+                  <tbody>
+                    {(["bolsa_visitas", "cajon_mensualidades"] as const).map((l) => {
+                      const k = l === "bolsa_visitas" ? "bolsa" : "cajon";
+                      const de = dif(l, "contra_esperado");
+                      const dp = dif(l, "entre_personas");
+                      return (
+                        <tr key={l} data-testid={`recibida-${l}`}>
+                          <td>{NOMBRE[l]}</td>
+                          <td>{l === "bolsa_visitas" ? pesos.format(Number(recibida.esperadoBolsa)) : "No calculado"}</td>
+                          <td>{pesos.format(Number(recibida.entregado[k]))}</td>
+                          <td>{pesos.format(Number(recibida.inicial[k]))}</td>
+                          <td>{pesos.format(Number(recibida.confirmado[k]))}</td>
+                          <td data-testid="dif-esperado">{l === "cajon_mensualidades" ? "No se puede calcular" : de ? <strong>{firmado(de.importe)} · Por revisar</strong> : pesos.format(0)}</td>
+                          <td data-testid="dif-personas">{dp ? <strong>{firmado(dp.importe)} · Por revisar</strong> : pesos.format(0)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {recibida.nota ? <p className="sub">Nota de quien entregó: {recibida.nota}</p> : null}
+              {recibida.aclaracion ? <p className="sub" data-testid="aclaracion">Aclaración del recuento: {recibida.aclaracion}</p> : null}
+              <p className="sub">Las diferencias no se corrigen: quedan registradas para revisión. Este turno empieza con lo que se confirmó.</p>
+            </section>
+          ) : null}
           <div className="lugares-turno">
             {t.lugares.map((l) => (
               <section key={l.tipo} className="tarjeta" data-testid={`lugar-${l.tipo}`} aria-label={NOMBRE[l.tipo]}>
                 <h2 className="titulo-seccion">{NOMBRE[l.tipo]}</h2>
                 <dl className="cuentas-lugar">
-                  <dt>Contado al abrir</dt>
+                  <dt>{recibida ? "Recibido en el cambio de turno" : "Contado al abrir"}</dt>
                   <dd data-testid="contado-al-abrir">{pesos.format(Number(l.contadoAlAbrir))}</dd>
                   {l.tipo === "bolsa_visitas" ? (
                     <>
@@ -94,7 +173,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                 {l.tipo === "cajon_mensualidades" ? (
                   <p className="aviso aviso-info" data-testid="no-conciliado">No conciliado: faltan datos de Open Desk</p>
                 ) : (
-                  <p className="sub">El esperado no es un conteo: el conteo y las diferencias llegan con el cierre (bloque 5).</p>
+                  <p className="sub">El esperado no es un conteo: se cuenta al entregar el turno.</p>
                 )}
               </section>
             ))}

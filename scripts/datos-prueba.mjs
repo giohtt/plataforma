@@ -35,6 +35,7 @@ export const SUCURSALES_PRUEBA = [
 export const USUARIOS_PRUEBA = [
   { correo: "recepcion.tenango@prueba.fitnessland.invalid", nombre: "Recepción Tenango (prueba)" },
   { correo: "recepcion.santiago@prueba.fitnessland.invalid", nombre: "Recepción Santiago (prueba)" },
+  { correo: "recepcion.tenango.vespertina@prueba.fitnessland.invalid", nombre: "Recepción Tenango vespertina (prueba)" },
   { correo: "recepcion.santaana@prueba.fitnessland.invalid", nombre: "Recepción Santa Ana (prueba)" },
   { correo: "encargado.tenango@prueba.fitnessland.invalid", nombre: "Encargado Tenango (prueba)" },
   { correo: "administracion@prueba.fitnessland.invalid", nombre: "Administración (prueba)" },
@@ -51,6 +52,8 @@ const D = "@prueba.fitnessland.invalid";
 export const ASIGNACIONES_PRUEBA = [
   { correo: `recepcion.tenango${D}`, rol: "recepcion", codigo: "TEN" },
   { correo: `recepcion.santiago${D}`, rol: "recepcion", codigo: "STG" },
+  // Indicado el 11 nov 2026: segunda recepcionista de Tenango, para probar el cambio de turno (bloque 5).
+  { correo: `recepcion.tenango.vespertina${D}`, rol: "recepcion", codigo: "TEN" },
   // Indicado el 10 nov 2026: Recepción solo en Santa Ana (sucursal ficticia), para probar el bloqueo de cobros en una sucursal inactiva.
   // Santa Ana se creó desde la pantalla en el sitio de pruebas: en una base nueva no existe y la asignación no se crea.
   { correo: `recepcion.santaana${D}`, rol: "recepcion", codigo: "SAA", siExiste: true },

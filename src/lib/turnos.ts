@@ -60,7 +60,7 @@ async function sucursalVisible(tx: Tx | Sql, usuarioId: string, codigo: string) 
   return s ?? null;
 }
 
-async function turnoAbiertoDe(tx: Tx | Sql, sucursalId: string): Promise<TurnoAbierto | null> {
+export async function turnoAbiertoDe(tx: Tx | Sql, sucursalId: string): Promise<TurnoAbierto | null> {
   const [t] = await tx<{ id: string; abierto_por: string; abierto_en: Date }[]>`
     select t.id, u.nombre as abierto_por, t.abierto_en
     from turno t join usuario u on u.id = t.abierto_por

@@ -12,6 +12,7 @@ export const metadata = { title: "Registrar visita · Fitnessland" };
 
 const AVISO: Record<string, string> = {
   sucursal_inactiva: "Esta sucursal está desactivada: no se pueden registrar cobros.",
+  entrega_en_curso: "El turno se está entregando: no se pueden registrar cobros hasta que la entrante confirme o se cancele la entrega.",
   sin_turno: "No hay turno abierto en esta sucursal. Abre el turno antes de cobrar.",
   no_responsable: "Solo la responsable de la bolsa de visitas puede cobrar en este turno.",
   bloqueado_produccion: "El registro de visitas está desactivado fuera del entorno de pruebas.",

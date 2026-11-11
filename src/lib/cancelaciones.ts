@@ -56,6 +56,7 @@ export type ErrorSolicitud =
   | "no_cancelable"
   | "turno_no_abierto"
   | "no_responsable"
+  | "entrega_en_curso"
   | "ya_solicitada"
   | "conserva_invalido"
   | "explicacion"
@@ -98,6 +99,10 @@ async function cobroCancelable(tx: Tx, usuarioId: string, codigo: string, operac
         select r.usuario_id from responsable_lugar r join lugar_efectivo l on l.id = r.lugar_id and l.tipo = 'bolsa_visitas'
         where r.turno_id = ${c.turno_id} and r.hasta is null`;
   if (responsable.length !== 1 || responsable[0].usuario_id !== usuarioId) return { ok: false, error: "no_responsable" };
+  // Bloque 5: mientras el turno se entrega no se abren solicitudes nuevas (la entrega exige que no haya pendientes).
+  if ((await tx`select 1 from entrega_turno where turno_id = ${c.turno_id} and estado in ('pendiente', 'recuento')`).length) {
+    return { ok: false, error: "entrega_en_curso" };
+  }
   return { ok: true, c: { sucursalId: s.id, turnoId: c.turno_id, cobroId: c.cobro_id, total: c.total, registradaPor: c.registrada_por } };
 }
 
