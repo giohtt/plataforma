@@ -54,6 +54,7 @@ async function entregar(page: Page, codigo: string, bolsa: string, cajon: string
   await page.getByLabel("Quién recibe").selectOption({ label: a });
   await page.getByRole("button", { name: "Entregar el turno" }).click();
   await expect(page.getByTestId("estado-entrega")).toContainText(`Entrega pendiente de confirmar por ${a}`);
+  await expect(page.getByTestId("estado-entrega")).not.toContainText("m..");
 }
 async function recibir(page: Page, codigo: string, bolsa: string, cajon: string, aclaracion?: string) {
   if (!aclaracion) {
@@ -92,6 +93,15 @@ test("faltan $50 contra el esperado: la entrante confirma desde su cuenta y empi
   await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("contado-al-abrir")).toHaveText("$600.00");
   await expect(page.getByTestId("lugar-bolsa_visitas")).toContainText(e.sofia.nombre);
   await expect(page.getByRole("link", { name: "Registrar visita" })).toBeVisible();
+  // La tabla se ve desde la primera columna (el lugar, fija) y el resto se consulta desplazándola; no hay «p.m..».
+  const tabla = page.getByTestId("entrega-recibida").locator(".tabla-desplazable");
+  await tabla.scrollIntoViewIfNeeded();
+  expect(await tabla.evaluate((x) => x.scrollLeft)).toBe(0);
+  await expect(page.getByTestId("entrega-recibida").getByRole("columnheader", { name: "Lugar" })).toBeInViewport();
+  await tabla.evaluate((x) => x.scrollTo({ left: x.scrollWidth }));
+  await expect(bolsa.getByRole("cell", { name: "Bolsa de visitas" })).toBeInViewport();
+  await expect(bolsa.getByTestId("dif-personas")).toBeInViewport();
+  expect(await page.locator("main").innerText()).not.toMatch(/[ap]\.m\.\./);
 });
 
 test("si no coinciden, recuentan juntas y el desacuerdo que persiste queda por revisar aparte", async ({ page }) => {

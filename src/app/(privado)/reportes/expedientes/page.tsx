@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { conPunto } from "@/lib/formato";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
 import { reporteExpedientes, UMBRAL_NOMBRE_MUY_PARECIDO } from "@/lib/reporte-expedientes";
@@ -30,7 +31,7 @@ export default async function ReporteExpedientes({ searchParams }: PageProps<"/r
     <main className="contenedor">
       <p className="sub"><Link href={volver ? `/sucursales/${volver}` : "/"}>← {volver ? r.sucursales.find((s) => s.codigo === volver)?.nombre : "Inicio"}</Link></p>
       <h1 className="cabecera-titulo">Expedientes de visitantes</h1>
-      <p className="sub">Solo consulta. Solo datos ficticios. Generado el {fecha.format(r.generadoEn)}.</p>
+      <p className="sub">Solo consulta. Solo datos ficticios. Generado el {conPunto(fecha.format(r.generadoEn))}</p>
 
       <form className="tarjeta filtros-reporte" method="get" action="/reportes/expedientes">
         <div className="campo">

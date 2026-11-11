@@ -488,6 +488,24 @@ h3 {
   flex-direction: row;
   justify-content: flex-start;
 }
+/*
+ * Tabla ancha (por ejemplo, «Entrega recibida»): en cualquier ancho se conserva como tabla, empieza en la primera
+ * columna y se desplaza a los lados dentro de su contenedor; la primera columna (el lugar) queda fija a la izquierda.
+ */
+.tabla.tabla-ancha {
+  min-width: 720px;
+}
+.tabla.tabla-ancha th:first-child,
+.tabla.tabla-ancha td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--line);
+}
+.tabla-desplazable:has(> .tabla-ancha) {
+  overscroll-behavior-x: contain;
+}
 /* En pantallas angostas, cada fila se muestra como ficha con la etiqueta de cada dato. */
 @media (max-width: 640px) {
   .tabla thead {
@@ -513,6 +531,22 @@ h3 {
   }
   .tabla td[data-etiqueta="Nombre"] {
     font-weight: 700;
+  }
+  /* La tabla ancha no se convierte en fichas: sigue como tabla y se desplaza. */
+  .tabla.tabla-ancha thead {
+    display: table-header-group;
+  }
+  .tabla.tabla-ancha tr {
+    display: table-row;
+    padding: 0;
+  }
+  .tabla.tabla-ancha td {
+    display: table-cell;
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tabla.tabla-ancha td::before {
+    content: none;
   }
 }
 

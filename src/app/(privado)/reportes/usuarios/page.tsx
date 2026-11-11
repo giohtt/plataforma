@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { conPunto } from "@/lib/formato";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
 import { NOMBRE_PERFIL } from "@/lib/permisos";
@@ -54,7 +55,7 @@ export default async function ReporteUsuarios({ searchParams }: PageProps<"/repo
     <main className="contenedor">
       <p className="sub"><Link href={`/sucursales/${r.sucursal.codigo}`}>← {r.sucursal.nombre}</Link></p>
       <h1 className="cabecera-titulo">Usuarios y accesos por sucursal</h1>
-      <p className="sub">Solo consulta. Generado el {fechaHora.format(r.generadoEn)}.</p>
+      <p className="sub">Solo consulta. Generado el {conPunto(fechaHora.format(r.generadoEn))}</p>
 
       <form className="tarjeta filtros-reporte" method="get" action="/reportes/usuarios">
         <div className="campo">
