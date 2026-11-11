@@ -197,6 +197,77 @@ describe.skipIf(!URL_ADMIN)("cambio de turno con confirmación de quien recibe",
     expect(await entregar(e, "400", "1200")).toEqual({ ok: false, error: "cancelaciones_pendientes" });
   });
 
+  describe("entrega y solicitud de cancelación en paralelo: mismo bloqueo del turno", () => {
+    /** Cuántas operaciones de esta base están esperando un bloqueo. */
+    const esperando = async () =>
+      (await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_locks l join pg_stat_activity a on a.pid = l.pid
+        where not l.granted and a.datname = current_database()`)[0].n;
+    async function hasta(n: number) {
+      for (let i = 0; i < 200; i++) {
+        if ((await esperando()) >= n) return;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      throw new Error(`no llegaron a ${n} operaciones en espera`);
+    }
+    /**
+     * Retiene el bloqueo del turno, lanza `primera` y espera a que quede formada; luego `segunda`. Al soltarlo, la
+     * base atiende primero a `primera`. Así se fuerza cada orden sin depender de tiempos.
+     */
+    async function enOrden<A, B>(turnoId: string, primera: () => Promise<A>, segunda: () => Promise<B>): Promise<[A, B]> {
+      let soltar!: () => void;
+      const suelto = new Promise<void>((r) => (soltar = r));
+      let tomado!: () => void;
+      const retenido = new Promise<void>((r) => (tomado = r));
+      const retencion = sql.begin(async (tx) => {
+        await tx`select id from turno where id = ${turnoId} for update`;
+        tomado();
+        await suelto;
+      });
+      await retenido;
+      const a = primera();
+      await hasta(1);
+      const b = segunda();
+      await hasta(2);
+      soltar();
+      await retencion;
+      return Promise.all([a, b]);
+    }
+    async function conDuplicado() {
+      const e = await escenario();
+      const [op] = await sql<{ id: string }[]>`select id from operacion_visita where turno_id = ${e.turnoId} order by registrada_en limit 1`;
+      const dup = await duplicarCobro(sql, op.id);
+      const solicitar = () => solicitarCancelacion(sql, e.laura, e.codigo, dup, { conservaOperacionId: op.id, explicacion: "Se capturó dos veces", sinDinero: true }, PRUEBAS);
+      return { e, solicitar };
+    }
+
+    it("si se registra primero la solicitud, la entrega queda bloqueada", async () => {
+      const { e, solicitar } = await conDuplicado();
+      const [s, r] = await enOrden(e.turnoId, solicitar, () => entregar(e, "400", "1200"));
+      expect(s).toMatchObject({ ok: true, repetida: false });
+      expect(r).toEqual({ ok: false, error: "cancelaciones_pendientes" });
+      expect(await entregaEnCurso(sql, e.turnoId)).toBeNull();
+      expect((await sql`select count(*)::int as n from entrega_turno where turno_id = ${e.turnoId}`)[0].n).toBe(0);
+    });
+
+    it("si se registra primero la entrega, la solicitud queda bloqueada", async () => {
+      const { e, solicitar } = await conDuplicado();
+      const [r, s] = await enOrden(e.turnoId, () => entregar(e, "400", "1200"), solicitar);
+      expect(r).toMatchObject({ ok: true });
+      expect(s).toEqual({ ok: false, error: "entrega_en_curso" });
+      expect((await sql`select count(*)::int as n from cancelacion_cobro c join cobro_visita v on v.id = c.cobro_id
+                        join operacion_visita o on o.id = v.operacion_id where o.turno_id = ${e.turnoId}`)[0].n).toBe(0);
+    });
+
+    it("lanzadas a la vez sin forzar el orden, solo una de las dos queda registrada", async () => {
+      const { e, solicitar } = await conDuplicado();
+      const [s, r] = await Promise.all([solicitar(), entregar(e, "400", "1200")]);
+      expect([s.ok, r.ok].filter(Boolean)).toHaveLength(1);
+      if (s.ok) expect(r).toEqual({ ok: false, error: "cancelaciones_pendientes" });
+      else expect(s).toEqual({ ok: false, error: "entrega_en_curso" });
+    });
+  });
+
   it("no se entrega ni se recibe en una sucursal inactiva ni en producción", async () => {
     const e = await escenario();
     expect(await registrarEntrega(sql, e.laura, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "350", cajon: "1200" }, recibe: e.sofia, nota: "" }, { entorno: "produccion" }))

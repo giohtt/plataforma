@@ -75,6 +75,14 @@ async function cobroCancelable(tx: Tx, usuarioId: string, codigo: string, operac
     from sucursal where codigo = ${codigo}`;
   if (!s || !(s.puede || s.ve)) return { ok: false, error: "no_encontrada" };
   if (!s.puede) return { ok: false, error: "sin_permiso" };
+  if (bloquear) {
+    // Mismo bloqueo y mismo orden que el cobro y la entrega del turno: primero la fila del turno, después el cobro.
+    // Todas las comprobaciones siguientes se hacen ya con el turno bloqueado.
+    const [o] = await tx<{ turno_id: string }[]>`
+      select turno_id from operacion_visita where id = ${operacionId} and sucursal_id = ${s.id}`;
+    if (!o) return { ok: false, error: "no_encontrada" };
+    await tx`select id from turno where id = ${o.turno_id} for update`;
+  }
   const filas = bloquear
     ? await tx<{ cobro_id: string; forma_pago: string; estado: string; total: string; turno_id: string; abierto: boolean; registrada_por: string }[]>`
         select c.id as cobro_id, c.forma_pago, c.estado, c.importe::text as total, o.turno_id, t.cerrado_en is null as abierto, o.registrada_por
@@ -267,6 +275,10 @@ export async function resolverCancelacion(
   return sql.begin(async (tx) => {
     const s = await sucursalAutorizable(tx, usuarioId, codigo);
     if (!s) return { ok: false as const, error: "no_encontrada" as const };
+    // Primero el turno del cobro (mismo orden que el cobro, la solicitud y la entrega); después la solicitud y los cobros.
+    await tx`select t.id from turno t join operacion_visita o on o.turno_id = t.id join cobro_visita c on c.operacion_id = o.id
+             join cancelacion_cobro x on x.cobro_id = c.id
+             where x.id = ${cancelacionId} and x.sucursal_id = ${s.id} for update of t`;
     const [x] = await tx<{ id: string; version: number; estado: string; cobro_id: string; conserva_cobro_id: string; solicitada_por: string; explicacion: string }[]>`
       select id, version, estado, cobro_id, conserva_cobro_id, solicitada_por, explicacion from cancelacion_cobro
       where id = ${cancelacionId} and sucursal_id = ${s.id}
