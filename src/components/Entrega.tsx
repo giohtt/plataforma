@@ -29,9 +29,44 @@ function Importe({ estado, campo, etiqueta, ayuda, alCambiar }: {
   );
 }
 
+/**
+ * «¿Alguien te ayudó a contar?» Obligatorio: «No, nadie más participó» o «Sí» con las personas de la sucursal que
+ * participaron. Cada una confirma después desde su propia cuenta.
+ */
+function Apoyo({ estado, candidatos, etapa }: { estado: EstadoFormularioEntrega; candidatos: { id: string; nombre: string }[]; etapa: string }) {
+  const [hubo, setHubo] = useState(estado?.valores?.apoyo ?? "");
+  const error = estado?.errores?.apoyo;
+  return (
+    <fieldset className="campo campo-grupo" data-testid="apoyo" aria-invalid={error ? true : undefined}>
+      <legend>¿Alguien te ayudó {etapa}?</legend>
+      <label className="opcion-revision">
+        <input type="radio" name="apoyo" value="no" checked={hubo === "no"} onChange={() => setHubo("no")} />
+        <span>No, nadie más participó</span>
+      </label>
+      <label className="opcion-revision">
+        <input type="radio" name="apoyo" value="si" checked={hubo === "si"} onChange={() => setHubo("si")} disabled={!candidatos.length} />
+        <span>Sí, me ayudaron{candidatos.length ? "" : " (no hay otras personas de la sucursal para elegir)"}</span>
+      </label>
+      {hubo === "si" ? (
+        <div className="campo" data-testid="personas-apoyo">
+          <span className="sub">Elige a las personas de la sucursal que participaron. Cada una confirmará desde su propia cuenta; desde ahora no podrá revisar las diferencias de esta entrega.</span>
+          {candidatos.map((c) => (
+            <label key={c.id} className="opcion-revision">
+              <input type="checkbox" name="personas" value={c.id} defaultChecked={estado?.personas?.includes(c.id)} />
+              <span>{c.nombre}</span>
+            </label>
+          ))}
+        </div>
+      ) : null}
+      {error ? <span className="campo-error">{error}</span> : null}
+    </fieldset>
+  );
+}
+
 /** La saliente cuenta cada lugar y elige a quién entrega. Ve el esperado de la bolsa y su diferencia al escribir. */
-export function FormularioEntrega({ codigo, turnoId, esperadoBolsa, contadoCajon, receptores }: {
+export function FormularioEntrega({ codigo, turnoId, esperadoBolsa, contadoCajon, receptores, apoyos }: {
   codigo: string; turnoId: string; esperadoBolsa: string; contadoCajon: string; receptores: { id: string; nombre: string }[];
+  apoyos: { id: string; nombre: string }[];
 }) {
   const [estado, accion, enviando] = useActionState(accionEntregarTurno, null);
   const [bolsa, setBolsa] = useState(estado?.valores?.bolsa ?? "");
@@ -77,6 +112,7 @@ export function FormularioEntrega({ codigo, turnoId, esperadoBolsa, contadoCajon
         <span className="sub">Ella cuenta y confirma desde su propia cuenta, sin ver tu conteo antes de capturar el suyo.</span>
         {estado?.errores?.recibe ? <span className="campo-error">{estado.errores.recibe}</span> : null}
       </div>
+      <Apoyo estado={estado} candidatos={apoyos} etapa="a contar lo que entregas" />
       <div className="campo">
         <label htmlFor="nota">Nota (opcional)</label>
         <textarea id="nota" name="nota" rows={2} maxLength={300} defaultValue={estado?.valores?.nota ?? ""} />
@@ -93,9 +129,10 @@ export function FormularioEntrega({ codigo, turnoId, esperadoBolsa, contadoCajon
  * La entrante cuenta y confirma. En «pendiente» no recibe el conteo de la saliente; en «recuento» ve ambos,
  * recuentan juntas y confirma un importe con aclaración.
  */
-export function FormularioRecepcion({ codigo, entregaId, version, recuento }: {
+export function FormularioRecepcion({ codigo, entregaId, version, recuento, apoyos }: {
   codigo: string; entregaId: string; version: number;
   recuento: { entregado: { bolsa: string; cajon: string }; inicial: { bolsa: string; cajon: string } } | null;
+  apoyos: { id: string; nombre: string }[];
 }) {
   const [estado, accion, enviando] = useActionState(accionRecibirTurno, null);
   return (
@@ -133,6 +170,7 @@ export function FormularioRecepcion({ codigo, entregaId, version, recuento }: {
           <Importe estado={estado} campo="cajon" etiqueta={recuento ? "Total que confirmas tras recontar" : "Total que recibes"} />
         </fieldset>
       </div>
+      <Apoyo estado={estado} candidatos={apoyos} etapa={recuento ? "en el recuento" : "a contar lo que recibes"} />
       {recuento ? (
         <div className="campo">
           <label htmlFor="aclaracion">Aclaración del recuento</label>

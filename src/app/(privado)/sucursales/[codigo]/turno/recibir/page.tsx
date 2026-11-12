@@ -42,7 +42,7 @@ export default async function RecibirTurno({ params, searchParams }: PageProps<"
             </p>
           ) : null}
           <section className="tarjeta">
-            <FormularioRecepcion codigo={codigo} entregaId={p.entrega.id} version={p.entrega.version} recuento={p.recuento} />
+            <FormularioRecepcion codigo={codigo} entregaId={p.entrega.id} version={p.entrega.version} recuento={p.recuento} apoyos={p.apoyos} />
           </section>
         </>
       )}

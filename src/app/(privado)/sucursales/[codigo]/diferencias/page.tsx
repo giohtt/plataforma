@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
-import { etiquetaDiferencia, NOMBRE_LUGAR } from "@/lib/datos-diferencia";
+import { ESTADO_DIFERENCIA, etiquetaDiferencia, NOMBRE_LUGAR } from "@/lib/datos-diferencia";
 import { listaDiferencias } from "@/lib/diferencias";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
@@ -36,13 +36,16 @@ export default async function Diferencias({ params }: PageProps<"/sucursales/[co
                       {c.diferencias.length ? (
                         <ul className="lista-simple">
                           {c.diferencias.map((d) => (
-                            <li key={d.id}>{NOMBRE_LUGAR[d.lugar]}: <strong style={{ whiteSpace: "nowrap" }}>{firmado(d.importe)}</strong> · {etiquetaDiferencia(d.tipo, d.importe)}</li>
+                            <li key={d.id}>{NOMBRE_LUGAR[d.lugar]}: <strong style={{ whiteSpace: "nowrap" }}>{firmado(d.importe)}</strong> · {etiquetaDiferencia(d.tipo, d.importe)} · {ESTADO_DIFERENCIA[d.estado]}</li>
                           ))}
                         </ul>
                       ) : "Sin diferencias"}
+                      {c.diferencias.length > 1 ? <p className="sub" data-testid="neto">Total neto en la bolsa: {Number(c.neto) ? firmado(c.neto) : pesos.format(0)} (solo referencia; cada diferencia se revisa aparte)</p> : null}
                     </td>
                     <td data-etiqueta="Estado" data-testid="estado-caso">
-                      {c.pendientes ? <span className="chip-estado chip-vencida">{c.pendientes} por revisar</span> : "Sin pendientes"}
+                      {c.pendientes ? <span className="chip-estado chip-vencida">{c.pendientes} por revisar</span> : null}
+                      {c.paraDireccion ? <> <span className="chip-estado chip-vencida" data-testid="para-direccion">{c.paraDireccion} pendiente{c.paraDireccion === 1 ? "" : "s"} para Dirección</span></> : null}
+                      {!c.pendientes && !c.paraDireccion ? "Sin pendientes" : null}
                     </td>
                     <td data-etiqueta=""><Link href={`/sucursales/${codigo}/diferencias/${c.entregaId}`} data-testid="ver-caso">Ver caso</Link></td>
                   </tr>

@@ -40,7 +40,7 @@ export default async function EntregarTurno({ params }: PageProps<"/sucursales/[
       ) : (
         <section className="tarjeta">
           <FormularioEntrega codigo={codigo} turnoId={p.turnoId} esperadoBolsa={p.esperadoBolsa}
-            contadoCajon={p.contadoAlAbrir.cajon} receptores={p.receptores} />
+            contadoCajon={p.contadoAlAbrir.cajon} receptores={p.receptores} apoyos={p.apoyos} />
         </section>
       )}
     </main>

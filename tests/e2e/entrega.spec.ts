@@ -52,6 +52,7 @@ async function entregar(page: Page, codigo: string, bolsa: string, cajon: string
   await page.locator("#bolsa").fill(bolsa);
   await page.locator("#cajon").fill(cajon);
   await page.getByLabel("Quién recibe").selectOption({ label: a });
+  await page.getByTestId("apoyo").getByRole("radio", { name: "No, nadie más participó" }).check();
   await page.getByRole("button", { name: "Entregar el turno" }).click();
   await expect(page.getByTestId("estado-entrega")).toContainText(`Entrega pendiente de confirmar por ${a}`);
   await expect(page.getByTestId("estado-entrega")).not.toContainText("m..");
@@ -65,6 +66,7 @@ async function recibir(page: Page, codigo: string, bolsa: string, cajon: string,
   await page.locator("#bolsa").fill(bolsa);
   await page.locator("#cajon").fill(cajon);
   if (aclaracion) await page.locator("#aclaracion").fill(aclaracion);
+  await page.getByTestId("apoyo").getByRole("radio", { name: "No, nadie más participó" }).check();
   await page.getByRole("button", { name: aclaracion ? "Confirmar tras recontar" : "Confirmar lo que recibo" }).click();
 }
 

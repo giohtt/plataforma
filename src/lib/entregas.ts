@@ -25,6 +25,9 @@ type Sql = postgres.Sql;
 type Tx = postgres.TransactionSql;
 
 export type ConteoLugares = { bolsa: string; cajon: string };
+/** Apoyo en un conteo: «nadie más participó» o las personas de la sucursal que ayudaron (cada una confirma después). */
+export type DeclaracionApoyo = { hubo: false } | { hubo: true; personas: string[] };
+export type EtapaApoyo = "conteo_entrega" | "conteo_recepcion" | "recuento";
 export type Receptor = { id: string; nombre: string };
 
 export type EntregaEnCurso = {
@@ -50,6 +53,7 @@ export type ErrorEntrega =
   | "nota"
   | "motivo"
   | "aclaracion"
+  | "apoyo"
   | "cambio"
   | "bloqueado_produccion";
 
@@ -88,6 +92,42 @@ async function receptores(tx: Tx | Sql, sucursalId: string, usuarioId: string): 
     order by nombre`)];
 }
 
+/**
+ * Personas de la sucursal que pueden declararse como apoyo en un conteo: cuentas activas con algún perfil en la
+ * sucursal, sin quien entrega ni quien recibe (ellas ya participan).
+ */
+async function candidatosApoyo(tx: Tx | Sql, sucursalId: string, excluir: string[]): Promise<Receptor[]> {
+  return [...(await tx<Receptor[]>`
+    select id, nombre from usuario u
+    where activo and not (id = any(${excluir}::uuid[]))
+      and exists (select 1 from perfiles_en_sucursal(u.id, ${sucursalId}))
+    order by nombre`)];
+}
+
+/** Valida y guarda la declaración de apoyo de una etapa. La base respalda que cada apoyo sea de la sucursal. */
+async function declararApoyo(
+  tx: Tx, sucursalId: string, entregaId: string, etapa: EtapaApoyo, declaradoPor: string, excluir: string[], apoyo: DeclaracionApoyo,
+): Promise<boolean> {
+  const personas = apoyo.hubo ? [...new Set(apoyo.personas)] : [];
+  if (apoyo.hubo) {
+    if (!personas.length || personas.length > 10 || !personas.every(esIdentificadorValido)) return false;
+    const validos = new Set((await candidatosApoyo(tx, sucursalId, excluir)).map((c) => c.id));
+    if (!personas.every((p) => validos.has(p))) return false;
+  }
+  const [d] = await tx<{ id: string }[]>`
+    insert into declaracion_apoyo (entrega_id, etapa, hubo_apoyo, declarado_por)
+    values (${entregaId}, ${etapa}, ${apoyo.hubo}, ${declaradoPor}) returning id`;
+  for (const p of personas) {
+    await tx`insert into apoyo_conteo (declaracion_id, entrega_id, etapa, usuario_id, declarado_por)
+             values (${d.id}, ${entregaId}, ${etapa}, ${p}, ${declaradoPor})`;
+  }
+  await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
+           values ('entrega_turno', ${entregaId}, 'declarar_apoyo', ${tx.json({ etapa, hubo_apoyo: apoyo.hubo, personas })}, ${declaradoPor})`;
+  return true;
+}
+const apoyoValido = (a: DeclaracionApoyo | undefined): a is DeclaracionApoyo =>
+  !!a && (a.hubo === false || (a.hubo === true && Array.isArray(a.personas)));
+
 /** Turno abierto y comprobación de que quien entrega es la responsable vigente de ambos lugares (variante A). */
 async function contextoEntrega(tx: Tx, usuarioId: string, codigo: string, bloquear: boolean) {
   const s = await sucursalDe(tx, usuarioId, codigo);
@@ -114,6 +154,8 @@ export type PantallaEntrega =
       esperadoBolsa: string;
       contadoAlAbrir: ConteoLugares;
       receptores: Receptor[];
+      /** Personas de la sucursal que pueden declararse como apoyo (sin quien entrega; quien recibe se excluye al guardar). */
+      apoyos: Receptor[];
       enCurso: EntregaEnCurso | null;
       cancelacionesPendientes: number;
     }
@@ -134,7 +176,8 @@ export async function pantallaEntrega(sql: Sql, usuarioId: string, codigo: strin
     return {
       ok: true, sucursal: c.s.nombre, turnoId: c.turnoId, esperadoBolsa: bolsa.esperado!,
       contadoAlAbrir: { bolsa: bolsa.contadoAlAbrir, cajon: cajon.contadoAlAbrir },
-      receptores: await receptores(tx, c.s.id, usuarioId), enCurso: enCurso ?? null, cancelacionesPendientes: n,
+      receptores: await receptores(tx, c.s.id, usuarioId), apoyos: await candidatosApoyo(tx, c.s.id, [usuarioId]),
+      enCurso: enCurso ?? null, cancelacionesPendientes: n,
     };
   });
 }
@@ -144,14 +187,15 @@ export async function registrarEntrega(
   sql: Sql,
   usuarioId: string,
   codigo: string,
-  datos: { turnoId: string; conteo: ConteoLugares; recibe: string; nota: string },
+  datos: { turnoId: string; conteo: ConteoLugares; recibe: string; nota: string; apoyo: DeclaracionApoyo },
   { entorno }: { entorno: Entorno },
 ): Promise<{ ok: true; entregaId: string } | { ok: false; error: ErrorEntrega }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
   const nota = datos.nota.trim();
   if (nota && (nota.length < 5 || nota.length > 300)) return { ok: false, error: "nota" };
   if (!esIdentificadorValido(datos.recibe) || !esIdentificadorValido(datos.turnoId)) return { ok: false, error: "receptor" };
-  return sql.begin(async (tx) => {
+  if (!apoyoValido(datos.apoyo)) return { ok: false, error: "apoyo" };
+  return conApoyo(() => sql.begin(async (tx) => {
     // El turno se bloquea igual que al cobrar: un cobro y una entrega no se cruzan.
     const c = await contextoEntrega(tx, usuarioId, codigo, true);
     if (!c.ok) return c;
@@ -176,13 +220,27 @@ export async function registrarEntrega(
         insert into entrega_conteo (entrega_id, lugar_id, tipo, importe, esperado, contado_por)
         values (${e.id}, ${l.id}, 'entregado', ${l.tipo === "bolsa_visitas" ? datos.conteo.bolsa : datos.conteo.cajon}, ${esperado}, ${usuarioId})`;
     }
+    if (!(await declararApoyo(tx, c.s.id, e.id, "conteo_entrega", usuarioId, [usuarioId, datos.recibe], datos.apoyo))) {
+      throw new ApoyoInvalido();
+    }
     await tx`
       insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
       values ('entrega_turno', ${e.id}, 'entregar',
               ${tx.json({ sucursal: codigo, turno: c.turnoId, recibe: datos.recibe, bolsa_visitas: datos.conteo.bolsa, cajon_mensualidades: datos.conteo.cajon })},
               ${usuarioId})`;
     return { ok: true as const, entregaId: e.id };
-  });
+  }));
+}
+
+/** Una declaración de apoyo inválida deshace toda la operación (no queda la entrega ni el conteo a medias). */
+class ApoyoInvalido extends Error {}
+async function conApoyo<T>(f: () => Promise<T>): Promise<T | { ok: false; error: "apoyo" }> {
+  try {
+    return await f();
+  } catch (error) {
+    if (error instanceof ApoyoInvalido) return { ok: false, error: "apoyo" };
+    throw error;
+  }
 }
 
 /** La saliente cancela una entrega en curso (por ejemplo, eligió a otra persona). Queda en el historial. */
@@ -225,6 +283,8 @@ export type PantallaRecepcion =
       entrega: EntregaEnCurso;
       /** Solo en «recuento»: lo que entregó la saliente y tu primer conteo. En «pendiente» no se envían. */
       recuento: { entregado: ConteoLugares; inicial: ConteoLugares } | null;
+      /** Personas de la sucursal que pueden declararse como apoyo (sin quien entrega ni quien recibe). */
+      apoyos: Receptor[];
     }
   | { ok: false; error: ErrorEntrega | "sin_entrega" };
 
@@ -257,7 +317,7 @@ export async function pantallaRecepcion(sql: Sql, usuarioId: string, codigo: str
       const filas = await CONTEOS(tx, c.e.id);
       recuento = { entregado: porLugar(filas, "entregado"), inicial: porLugar(filas, "recibido_inicial") };
     }
-    return { ok: true, sucursal: c.s.nombre, entrega: c.e, recuento };
+    return { ok: true, sucursal: c.s.nombre, entrega: c.e, recuento, apoyos: await candidatosApoyo(tx, c.s.id, [c.e.entregaPorId, c.e.recibeId]) };
   });
 }
 
@@ -275,13 +335,14 @@ export async function recibirTurno(
   sql: Sql,
   usuarioId: string,
   codigo: string,
-  datos: { entregaId: string; version: number; conteo: ConteoLugares; aclaracion: string },
+  datos: { entregaId: string; version: number; conteo: ConteoLugares; aclaracion: string; apoyo: DeclaracionApoyo },
   { entorno }: { entorno: Entorno },
 ): Promise<ResultadoRecepcion> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
   if (!esIdentificadorValido(datos.entregaId)) return { ok: false, error: "sin_entrega" };
   const aclaracion = datos.aclaracion.trim();
-  return sql.begin(async (tx): Promise<ResultadoRecepcion> => {
+  if (!apoyoValido(datos.apoyo)) return { ok: false, error: "apoyo" };
+  return conApoyo(() => sql.begin(async (tx): Promise<ResultadoRecepcion> => {
     const c = await contextoRecepcion(tx, usuarioId, codigo, true);
     if (!c.ok) return c;
     if (c.e.id !== datos.entregaId || c.e.version !== datos.version) return { ok: false, error: "cambio" };
@@ -289,6 +350,13 @@ export async function recibirTurno(
     const importe = (tipo: TipoLugar) => (tipo === "bolsa_visitas" ? datos.conteo.bolsa : datos.conteo.cajon);
     const filas = await CONTEOS(tx, c.e.id);
     const entregado = porLugar(filas, "entregado");
+
+    // La declaración de apoyo de esta etapa: el primer conteo de la entrante o el recuento.
+    const etapa: EtapaApoyo = c.e.estado === "pendiente" ? "conteo_recepcion" : "recuento";
+    if (etapa === "recuento" && (aclaracion.length < 5 || aclaracion.length > 300)) return { ok: false, error: "aclaracion" };
+    if (!(await declararApoyo(tx, c.s.id, c.e.id, etapa, usuarioId, [c.e.entregaPorId, c.e.recibeId], datos.apoyo))) {
+      throw new ApoyoInvalido();
+    }
 
     if (c.e.estado === "pendiente") {
       for (const l of lugares) {
@@ -303,8 +371,6 @@ export async function recibirTurno(
                          ${tx.json({ bolsa_visitas: datos.conteo.bolsa, cajon_mensualidades: datos.conteo.cajon })}, ${usuarioId})`;
         return { ok: true, resultado: "recuento" };
       }
-    } else if (aclaracion.length < 5 || aclaracion.length > 300) {
-      return { ok: false, error: "aclaracion" };
     }
 
     // Confirmación: conteo final, diferencias, cierre del turno de origen y apertura del de la entrante.
@@ -341,10 +407,14 @@ export async function recibirTurno(
              values ('entrega_turno', ${c.e.id}, 'confirmar',
                      ${tx.json({ turno_nuevo: nuevo.id, bolsa_visitas: datos.conteo.bolsa, cajon_mensualidades: datos.conteo.cajon })}, ${usuarioId})`;
     return { ok: true, resultado: "confirmada", turnoId: nuevo.id };
-  });
+  }));
 }
 
-export type DiferenciaEntrega = { lugar: TipoLugar; tipo: "contra_esperado" | "entre_personas"; importe: string };
+export type DiferenciaEntrega = {
+  lugar: TipoLugar; tipo: "contra_esperado" | "entre_personas"; importe: string;
+  /** «por_revisar» o el resultado de su revisión (bloque 5, paso 2). */
+  estado: "por_revisar" | "aclarada" | "faltante_confirmado" | "sobrante_confirmado";
+};
 
 export type EntregaRecibida = {
   entregaPor: string;
@@ -370,8 +440,9 @@ export async function entregaRecibida(sql: Sql, turnoId: string): Promise<Entreg
   if (!e) return null;
   const filas = await CONTEOS(sql, e.id);
   const diferencias = await sql<DiferenciaEntrega[]>`
-    select l.tipo as lugar, d.tipo, d.importe::text as importe
-    from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id where d.entrega_id = ${e.id}
+    select l.tipo as lugar, d.tipo, d.importe::text as importe, coalesce(r.resultado, 'por_revisar') as estado
+    from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id
+    left join revision_diferencia r on r.diferencia_id = d.id where d.entrega_id = ${e.id}
     order by case l.tipo when 'bolsa_visitas' then 0 else 1 end, d.tipo`;
   return {
     entregaPor: e.entrega_por, recibe: e.recibe, creadaEn: e.creada_en, confirmadaEn: e.resuelta_en, nota: e.nota,
@@ -380,4 +451,46 @@ export async function entregaRecibida(sql: Sql, turnoId: string): Promise<Entreg
     entregado: porLugar(filas, "entregado"), inicial: porLugar(filas, "recibido_inicial"), confirmado: porLugar(filas, "recibido_final"),
     diferencias: [...diferencias],
   };
+}
+
+export type ApoyoPendiente = {
+  id: string; etapa: EtapaApoyo; declaradoPor: string; declaradoEn: Date; entregaPor: string; recibe: string; entregadaEn: Date;
+};
+
+/** Apoyos en los que la cuenta fue declarada en esta sucursal y que todavía no confirma. */
+export async function apoyosPorConfirmar(sql: Sql, usuarioId: string, codigo: string): Promise<{ sucursal: string; pendientes: ApoyoPendiente[] } | null> {
+  if (!valido(codigo)) return null;
+  const [s] = await sql<{ id: string; nombre: string }[]>`
+    select id, nombre from sucursal s where codigo = ${codigo} and exists (select 1 from perfiles_en_sucursal(${usuarioId}, s.id))`;
+  if (!s) return null;
+  const pendientes = await sql<ApoyoPendiente[]>`
+    select a.id, a.etapa, d.nombre as "declaradoPor", a.declarado_en as "declaradoEn", x.nombre as "entregaPor", y.nombre as recibe,
+           e.creada_en as "entregadaEn"
+    from apoyo_conteo a join entrega_turno e on e.id = a.entrega_id join turno t on t.id = e.turno_id
+    join usuario d on d.id = a.declarado_por join usuario x on x.id = e.entrega_por join usuario y on y.id = e.recibe
+    where a.usuario_id = ${usuarioId} and a.confirmado_en is null and t.sucursal_id = ${s.id}
+    order by a.declarado_en`;
+  return { sucursal: s.nombre, pendientes: [...pendientes] };
+}
+
+/** La persona declarada como apoyo confirma su participación desde su propia cuenta. */
+export async function confirmarApoyo(
+  sql: Sql, usuarioId: string, codigo: string, apoyoId: string, { entorno }: { entorno: Entorno },
+): Promise<{ ok: true } | { ok: false; error: "no_encontrada" | "ya_confirmado" | "bloqueado_produccion" }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!valido(codigo) || !esIdentificadorValido(apoyoId)) return { ok: false, error: "no_encontrada" };
+  return sql.begin(async (tx) => {
+    const [a] = await tx<{ id: string; confirmado: boolean; entrega_id: string; etapa: string }[]>`
+      select a.id, a.confirmado_en is not null as confirmado, a.entrega_id, a.etapa
+      from apoyo_conteo a join entrega_turno e on e.id = a.entrega_id join turno t on t.id = e.turno_id
+      join sucursal s on s.id = t.sucursal_id
+      where a.id = ${apoyoId} and a.usuario_id = ${usuarioId} and s.codigo = ${codigo}
+      for update of a`;
+    if (!a) return { ok: false as const, error: "no_encontrada" as const };
+    if (a.confirmado) return { ok: false as const, error: "ya_confirmado" as const };
+    await tx`update apoyo_conteo set confirmado_en = now() where id = ${a.id}`;
+    await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
+             values ('entrega_turno', ${a.entrega_id}, 'confirmar_apoyo', ${tx.json({ apoyo: a.id, etapa: a.etapa })}, ${usuarioId})`;
+    return { ok: true as const };
+  });
 }
