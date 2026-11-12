@@ -18,7 +18,7 @@ export default async function Diferencias({ params }: PageProps<"/sucursales/[co
   const r = await listaDiferencias(obtenerBaseDatos()!, sesion.usuarioId, codigo);
   if (!r) notFound();
   return (
-    <main className="contenedor contenedor-medio">
+    <main className="contenedor contenedor-amplio">
       <p className="sub"><Link href={`/sucursales/${codigo}`}>← {r.sucursal}</Link></p>
       <h1 className="cabecera-titulo">Diferencias de efectivo · {r.sucursal}</h1>
       <p className="sub">Cambios de turno confirmados, con las diferencias por revisar primero. Solo datos ficticios.</p>

@@ -320,6 +320,10 @@ h3 {
 .contenedor-medio {
   max-width: 640px;
 }
+/* Turno y diferencias de efectivo: en computadora aprovechan más ancho para que las tablas se lean completas. */
+.contenedor-amplio {
+  max-width: 1000px;
+}
 .campo select,
 .campo textarea {
   font: inherit;
@@ -876,6 +880,11 @@ fieldset.sin-marco {
   border-color: #f1b6b0;
   background: #fdecea;
 }
+/* Diferencia ya aclarada: color neutro (sigue registrada, pero ya no está pendiente). */
+.cifra-aclarada {
+  border-color: var(--line);
+  background: var(--surface-2);
+}
 .cifra-bien {
   border-color: #b9dfc8;
   background: var(--ok-soft);
@@ -889,8 +898,19 @@ fieldset.sin-marco {
   padding: 10px 12px;
   font-weight: 400;
 }
+/* El círculo o la casilla de cada opción, junto a su texto (no estirado a todo el ancho como los campos de texto). */
+.campo .opcion-revision input,
 .opcion-revision input {
-  margin-top: 4px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin: 3px 0 0;
+  flex: none;
+}
+.opcion-revision {
+  justify-content: flex-start;
+  text-align: left;
+  cursor: pointer;
 }
 .chip-aclarada {
   background: var(--ok-soft);

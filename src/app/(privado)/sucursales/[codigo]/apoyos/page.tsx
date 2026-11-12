@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { accionConfirmarApoyo } from "@/app/acciones-entrega";
 import { obtenerBaseDatos } from "@/lib/db";
+import { conPunto } from "@/lib/formato";
 import { apoyosPorConfirmar } from "@/lib/entregas";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
@@ -39,7 +40,7 @@ export default async function Apoyos({ params, searchParams }: PageProps<"/sucur
                 <p>
                   <strong>{a.declaradoPor}</strong> declaró que participaste en {ETAPA[a.etapa]} · {hora.format(a.declaradoEn)}
                 </p>
-                <p className="sub">Cambio de turno de {a.entregaPor} a {a.recibe}, entregado {hora.format(a.entregadaEn)}. Desde la declaración ya no puedes revisar las diferencias de esa entrega.</p>
+                <p className="sub">Cambio de turno de {a.entregaPor} a {a.recibe}, entregado {conPunto(hora.format(a.entregadaEn))} Desde la declaración ya no puedes revisar las diferencias de esa entrega.</p>
                 <form action={accionConfirmarApoyo}>
                   <input type="hidden" name="codigo" value={codigo} />
                   <input type="hidden" name="apoyo" value={a.id} />

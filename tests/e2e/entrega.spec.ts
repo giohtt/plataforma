@@ -104,6 +104,10 @@ test("faltan $50 contra el esperado: la entrante confirma desde su cuenta y empi
   await expect(bolsa.getByRole("cell", { name: "Bolsa de visitas" })).toBeInViewport();
   await expect(bolsa.getByTestId("dif-personas")).toBeInViewport();
   expect(await page.locator("main").innerText()).not.toMatch(/[ap]\.m\.\./);
+  // En computadora la tabla «Entrega recibida» se lee completa, sin deslizar.
+  if (test.info().project.name === "escritorio") {
+    expect(await tabla.evaluate((x) => x.scrollWidth <= x.clientWidth + 1)).toBe(true);
+  }
 });
 
 test("si no coinciden, recuentan juntas y el desacuerdo que persiste queda por revisar aparte", async ({ page }) => {
