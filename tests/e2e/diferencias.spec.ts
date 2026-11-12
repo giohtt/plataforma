@@ -71,6 +71,15 @@ async function recibir(page: Page, codigo: string, bolsa: string, cajon: string,
   await page.getByRole("button", { name: aclaracion ? "Confirmar tras recontar" : "Confirmar lo que recibo" }).click();
 }
 
+
+/** En computadora, las tablas se leen completas sin deslizar; en celular se puede deslizar si hace falta. */
+async function tablasSinDeslizar(page: Page) {
+  if (test.info().project.name !== "escritorio") return;
+  for (const t of await page.locator(".tabla-desplazable").all()) {
+    expect(await t.evaluate((x) => x.scrollWidth <= x.clientWidth + 1)).toBe(true);
+  }
+}
+
 test("Encargado consulta el caso: esperado, entregado y recibido por separado, y el desglose del esperado", async ({ page }) => {
   const e = await escenario();
   await entrar(page, e.laura.correo);
@@ -176,6 +185,7 @@ test("apoyo en el recuento: la Encargada declarada confirma desde su cuenta, no 
   await page.goto(`/sucursales/${e.codigo}`);
   await page.getByTestId("apoyos-pendientes").click();
   await expect(page.getByTestId("apoyo-pendiente")).toContainText(`${e.sofia.nombre} declaró que participaste en el recuento`);
+  expect(await page.getByTestId("apoyo-pendiente").innerText()).not.toMatch(/m\.\./);
   await page.getByRole("button", { name: "Confirmo que participé" }).click();
   await expect(page.locator("p.aviso[role=status]")).toHaveText("Participación confirmada.");
   await expect(page.getByTestId("sin-apoyos")).toBeVisible();
@@ -192,11 +202,19 @@ test("apoyo en el recuento: la Encargada declarada confirma desde su cuenta, no 
   await page.waitForLoadState("networkidle");
   const dif = page.getByTestId("diferencia");
   await expect(dif).toHaveCount(1);
+  const circulo = await dif.getByRole("radio", { name: /Aclarada/ }).boundingBox();
+  const texto = await dif.locator(".opcion-revision strong").first().boundingBox();
+  expect(circulo!.width).toBeLessThan(30);
+  expect(texto!.x - (circulo!.x + circulo!.width)).toBeLessThan(40);
   await dif.getByRole("radio", { name: /Aclarada/ }).check();
   await dif.getByLabel("Motivo (obligatorio)").fill("Se recontó con la Encargada; diferencia simulada en la prueba");
   await dif.getByRole("button", { name: "Registrar revisión" }).click();
   await expect(page.getByTestId("revision")).toContainText(`Revisó ${e.admin.nombre} (Administración)`);
   await expect(page.getByTestId("historial-caso")).toContainText(`Apoyo declarado en el recuento: ${e.encargado.nombre}`);
   await expect(page.getByTestId("historial-caso")).toContainText("Apoyo confirmado en el recuento");
+  // Aclarada: color neutro; tablas completas en computadora; el círculo de cada opción junto a su texto.
+  await expect(page.getByTestId("caso-bolsa_visitas").getByTestId("tarjeta-entre-personas")).toHaveClass(/cifra-aclarada/);
+  await expect(page.getByTestId("desglose-total")).toBeVisible();
+  await tablasSinDeslizar(page);
   if (process.env.CAPTURAR) await page.screenshot({ path: `${process.env.CAPTURAR}/apoyo-${test.info().project.name}.png`, fullPage: true });
 });

@@ -59,7 +59,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   };
 
   return (
-    <main className="contenedor contenedor-medio">
+    <main className="contenedor contenedor-amplio">
       <p className="sub"><Link href={`/sucursales/${codigo}`}>← {e.sucursal.nombre}</Link></p>
       <h1 className="cabecera-titulo">Turno de Recepción</h1>
       <p className="sub">Solo datos ficticios. Un turno abierto a la vez por sucursal.</p>
@@ -116,7 +116,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                 De <strong>{recibida.entregaPor}</strong> a <strong>{recibida.recibe}</strong> · entregó {hora.format(recibida.creadaEn)} ·
                 confirmó {hora.format(recibida.confirmadaEn)}
               </p>
-              <p className="sub">Desliza la tabla a los lados para ver todas las columnas; el lugar queda fijo.</p>
+              <p className="sub">En pantallas angostas, desliza la tabla a los lados para ver todas las columnas; el lugar queda fijo.</p>
               <div className="tabla-desplazable" tabIndex={0} aria-label="Entrega recibida: desliza para ver todas las columnas">
                 <table className="tabla tabla-ancha">
                   <thead>

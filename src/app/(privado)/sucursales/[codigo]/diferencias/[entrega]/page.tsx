@@ -25,7 +25,7 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
   const f = c.fueraDeLaBolsa;
   const coincide = c.desglose.calculado === Number(c.lugares.bolsa_visitas.esperado).toFixed(2);
   return (
-    <main className="contenedor contenedor-medio">
+    <main className="contenedor contenedor-amplio">
       <p className="sub"><Link href={`/sucursales/${codigo}/diferencias`}>← Diferencias de {c.sucursal}</Link></p>
       <h1 className="cabecera-titulo">Cambio de turno · {c.sucursal}</h1>
       <p className="sub">
@@ -53,11 +53,11 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
               <div className="cifra-caso"><span className="sub">Entregó {c.entregaPor}</span><strong data-testid="cifra-entregado">{pesos.format(Number(x.entregado))}</strong></div>
               <div className="cifra-caso"><span className="sub">Recibió {c.recibe}</span><strong data-testid="cifra-recibido">{pesos.format(Number(x.confirmado))}</strong>
                 <span className="sub">Primer conteo {pesos.format(Number(x.inicial))}</span></div>
-              <div className={`cifra-caso ${dp ? "cifra-mal" : "cifra-bien"}`}><span className="sub">Diferencia entre entrega y recepción</span>
+              <div className={`cifra-caso ${!dp ? "cifra-bien" : dp.estado === "aclarada" ? "cifra-aclarada" : "cifra-mal"}`} data-testid="tarjeta-entre-personas"><span className="sub">Diferencia entre entrega y recepción</span>
                 <strong data-testid="cifra-entre-personas">{dp ? firmado(dp.importe) : pesos.format(0)}</strong>
                 {dp ? <span className="sub">{etiquetaDiferencia(dp.tipo, dp.importe)} · {ESTADO_DIFERENCIA[dp.estado]}</span> : null}</div>
             </div>
-            <div className={`cifra-caso ${de ? "cifra-mal" : ""}`} data-testid="cifra-contra-esperado">
+            <div className={`cifra-caso ${!de ? "" : de.estado === "aclarada" ? "cifra-aclarada" : "cifra-mal"}`} data-testid="cifra-contra-esperado">
               <span className="sub">Diferencia contra el esperado (lo entregado − el esperado)</span>
               <strong>{x.esperado === null ? "No se puede calcular" : de ? firmado(de.importe) : pesos.format(0)}</strong>
               {de ? <span className="sub">{etiquetaDiferencia(de.tipo, de.importe)} · {ESTADO_DIFERENCIA[de.estado]}</span> : null}
