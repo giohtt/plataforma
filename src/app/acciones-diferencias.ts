@@ -6,11 +6,11 @@
  */
 import { redirect } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
-import { revisarDiferencia, type ErrorRevision } from "@/lib/diferencias";
+import { registrarCorreccion, resolverDiferencia, revisarDiferencia, type ErrorResolucion, type ErrorRevision } from "@/lib/diferencias";
 import { leerEntorno } from "@/lib/entorno";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
 
-export type EstadoRevision = { error?: string; errores?: { resultado?: string; motivo?: string }; valores?: Record<string, string>; intento: number } | null;
+export type EstadoRevision = { error?: string; errores?: { resultado?: string; motivo?: string; origen?: string; correccion?: string }; valores?: Record<string, string>; intento: number } | null;
 
 const MENSAJES: Record<ErrorRevision, string> = {
   no_encontrada: "No encontrada.",
@@ -49,4 +49,59 @@ export async function accionRevisarDiferencia(previo: EstadoRevision, datos: For
   if (r.ok) redirect(`/sucursales/${codigo}/diferencias/${r.entregaId}?aviso=revisada`);
   if (r.error === "motivo") return { error: "Revisa los campos marcados.", errores: { motivo: MENSAJES.motivo }, valores, intento };
   return { error: MENSAJES[r.error], valores, intento };
+}
+
+const MENSAJES_RESOLUCION: Record<ErrorResolucion, string> = {
+  no_encontrada: "No encontrada.",
+  sin_permiso: "Resuelve Dirección con asignación en esta sucursal.",
+  participaste: "Participaste en esta entrega: su resolución le corresponde a otra persona.",
+  no_pendiente: "Esta diferencia no está pendiente para Dirección.",
+  ya_resuelta: "Esta diferencia ya fue resuelta. Revisa el historial.",
+  decision: "Elige una decisión válida para esta diferencia.",
+  motivo: "Escribe el motivo (de 5 a 300 caracteres).",
+  origen: "Describe el origen identificado (de 5 a 300 caracteres).",
+  correccion: "Describe la corrección registrada (de 5 a 300 caracteres).",
+  bloqueado_produccion: "Desactivado fuera del entorno de pruebas.",
+};
+
+async function inicio() {
+  const sesion = await obtenerSesionActual();
+  if (!sesion) redirect("/iniciar-sesion");
+  const sql = obtenerBaseDatos();
+  if (!sql) throw new Error("Sin base de datos");
+  return { sesion, sql };
+}
+const lector = (datos: FormData) => (campo: string, max = 40) => {
+  const v = datos.get(campo);
+  return typeof v === "string" ? v.slice(0, max) : "";
+};
+
+export async function accionResolverDiferencia(previo: EstadoRevision, datos: FormData): Promise<EstadoRevision> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo");
+  const valores = { resultado: leer("decision"), motivo: leer("motivo", 400), origen: leer("origen", 400), requiere: leer("requiere") };
+  const intento = (previo?.intento ?? 0) + 1;
+  if (!valores.resultado) return { error: "Revisa los campos marcados.", errores: { resultado: "Elige la decisión." }, valores, intento };
+  const r = await resolverDiferencia(sql, sesion.usuarioId, codigo, {
+    diferenciaId: leer("diferencia"), decision: valores.resultado, motivo: valores.motivo, origen: valores.origen,
+    requiereCorreccion: valores.requiere === "si",
+  }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/diferencias/${r.entregaId}?aviso=resuelta`);
+  if (r.error === "motivo" || r.error === "origen") {
+    return { error: "Revisa los campos marcados.", errores: { [r.error]: MENSAJES_RESOLUCION[r.error] }, valores, intento };
+  }
+  return { error: MENSAJES_RESOLUCION[r.error], valores, intento };
+}
+
+export async function accionRegistrarCorreccion(previo: EstadoRevision, datos: FormData): Promise<EstadoRevision> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo");
+  const valores = { correccion: leer("correccion", 400) };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await registrarCorreccion(sql, sesion.usuarioId, codigo, { diferenciaId: leer("diferencia"), correccion: valores.correccion }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/diferencias/${r.entregaId}?aviso=corregida`);
+  if (r.error === "correccion") return { error: "Revisa los campos marcados.", errores: { correccion: MENSAJES_RESOLUCION.correccion }, valores, intento };
+  return { error: MENSAJES_RESOLUCION[r.error], valores, intento };
 }

@@ -413,7 +413,7 @@ export async function recibirTurno(
 export type DiferenciaEntrega = {
   lugar: TipoLugar; tipo: "contra_esperado" | "entre_personas"; importe: string;
   /** «por_revisar» o el resultado de su revisión (bloque 5, paso 2). */
-  estado: "por_revisar" | "aclarada" | "faltante_confirmado" | "sobrante_confirmado";
+  estado: "por_revisar" | "aclarada" | "faltante_confirmado" | "sobrante_confirmado" | "correccion_pendiente" | "resuelta";
 };
 
 export type EntregaRecibida = {
@@ -440,9 +440,13 @@ export async function entregaRecibida(sql: Sql, turnoId: string): Promise<Entreg
   if (!e) return null;
   const filas = await CONTEOS(sql, e.id);
   const diferencias = await sql<DiferenciaEntrega[]>`
-    select l.tipo as lugar, d.tipo, d.importe::text as importe, coalesce(r.resultado, 'por_revisar') as estado
+    select l.tipo as lugar, d.tipo, d.importe::text as importe, case when r.id is null then 'por_revisar'
+                when x.id is null then r.resultado
+                when x.requiere_correccion and x.correccion is null then 'correccion_pendiente'
+                else 'resuelta' end as estado
     from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id
-    left join revision_diferencia r on r.diferencia_id = d.id where d.entrega_id = ${e.id}
+    left join revision_diferencia r on r.diferencia_id = d.id
+    left join resolucion_diferencia x on x.diferencia_id = d.id where d.entrega_id = ${e.id}
     order by case l.tipo when 'bolsa_visitas' then 0 else 1 end, d.tipo`;
   return {
     entregaPor: e.entrega_por, recibe: e.recibe, creadaEn: e.creada_en, confirmadaEn: e.resuelta_en, nota: e.nota,

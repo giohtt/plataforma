@@ -23,12 +23,26 @@ type Tx = postgres.TransactionSql;
 
 export type TipoDiferencia = "contra_esperado" | "entre_personas";
 export type ResultadoRevision = "aclarada" | "faltante_confirmado" | "sobrante_confirmado";
-export type EstadoDiferencia = "por_revisar" | ResultadoRevision;
+/**
+ * Estado de una diferencia: por revisar; aclarada; confirmada y pendiente para Dirección; resuelta por Dirección con
+ * corrección pendiente; o resuelta (cerrada).
+ */
+export type EstadoDiferencia = "por_revisar" | ResultadoRevision | "correccion_pendiente" | "resuelta";
+export type DecisionDireccion = "absorbe_sucursal" | "queda_en_bolsa" | "origen_identificado";
+export type Resolucion = {
+  decision: DecisionDireccion; motivo: string; origen: string | null; requiereCorreccion: boolean; resueltaPor: string; en: Date;
+  correccion: { texto: string; por: string; en: Date } | null;
+};
+/** Horas a partir de las cuales un caso pendiente para Dirección se marca «Más de 48 horas pendiente». */
+export const HORAS_AVISO_DIRECCION = 48;
 export type NivelRevision = "encargado" | "administracion" | "direccion";
 export type Revision = { resultado: ResultadoRevision; motivo: string; revisadaPor: string; nivel: NivelRevision; en: Date };
 export type Diferencia = {
   id: string; lugar: TipoLugar; tipo: TipoDiferencia; importe: string; estado: EstadoDiferencia; registradaEn: Date;
   revision: Revision | null;
+  resolucion: Resolucion | null;
+  /** Desde cuándo espera a Dirección (confirmado o con corrección pendiente); null si no está pendiente para Dirección. */
+  pendienteDireccionDesde: Date | null;
 };
 
 export type CasoLista = {
@@ -56,19 +70,34 @@ async function sucursalConsultable(sql: Sql, usuarioId: string, codigo: string) 
 type FilaDiferencia = {
   id: string; entrega_id: string; lugar: TipoLugar; tipo: TipoDiferencia; importe: string; registrada_en: Date;
   resultado: ResultadoRevision | null; motivo: string | null; revisor: string | null; nivel: NivelRevision | null; revisada_en: Date | null;
+  decision: DecisionDireccion | null; motivo_dir: string | null; origen: string | null; requiere_correccion: boolean | null;
+  resolutor: string | null; resuelta_en: Date | null; correccion: string | null; corrector: string | null; correccion_en: Date | null;
 };
 const DIFERENCIAS = (sql: Sql | Tx, entregaIds: string[]) => sql<FilaDiferencia[]>`
   select d.id, d.entrega_id, l.tipo as lugar, d.tipo, d.importe::text as importe, d.registrada_en,
-         r.resultado, r.motivo, u.nombre as revisor, r.nivel, r.en as revisada_en
+         r.resultado, r.motivo, u.nombre as revisor, r.nivel, r.en as revisada_en,
+         x.decision, x.motivo as motivo_dir, x.origen, x.requiere_correccion, ux.nombre as resolutor, x.en as resuelta_en,
+         x.correccion, uc.nombre as corrector, x.correccion_en
   from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id
   left join revision_diferencia r on r.diferencia_id = d.id left join usuario u on u.id = r.revisada_por
+  left join resolucion_diferencia x on x.diferencia_id = d.id left join usuario ux on ux.id = x.resuelta_por
+  left join usuario uc on uc.id = x.correccion_por
   where d.entrega_id in ${sql(entregaIds)}
   order by case l.tipo when 'bolsa_visitas' then 0 else 1 end, d.tipo`;
-const aDiferencia = (d: FilaDiferencia): Diferencia => ({
-  id: d.id, lugar: d.lugar, tipo: d.tipo, importe: d.importe, registradaEn: d.registrada_en,
-  estado: d.resultado ?? "por_revisar",
-  revision: d.resultado ? { resultado: d.resultado, motivo: d.motivo!, revisadaPor: d.revisor!, nivel: d.nivel!, en: d.revisada_en! } : null,
-});
+const aDiferencia = (d: FilaDiferencia): Diferencia => {
+  const resolucion: Resolucion | null = d.decision ? {
+    decision: d.decision, motivo: d.motivo_dir!, origen: d.origen, requiereCorreccion: !!d.requiere_correccion, resueltaPor: d.resolutor!,
+    en: d.resuelta_en!, correccion: d.correccion ? { texto: d.correccion, por: d.corrector!, en: d.correccion_en! } : null,
+  } : null;
+  const estado: EstadoDiferencia = !d.resultado ? "por_revisar"
+    : !resolucion ? d.resultado
+    : resolucion.requiereCorreccion && !resolucion.correccion ? "correccion_pendiente" : "resuelta";
+  return {
+    id: d.id, lugar: d.lugar, tipo: d.tipo, importe: d.importe, registradaEn: d.registrada_en, estado, resolucion,
+    revision: d.resultado ? { resultado: d.resultado, motivo: d.motivo!, revisadaPor: d.revisor!, nivel: d.nivel!, en: d.revisada_en! } : null,
+    pendienteDireccionDesde: estado === "faltante_confirmado" || estado === "sobrante_confirmado" || estado === "correccion_pendiente" ? d.revisada_en : null,
+  };
+};
 
 /** Entregas confirmadas de la sucursal: primero las que tienen diferencias por revisar; después, las más recientes. */
 export async function listaDiferencias(sql: Sql, usuarioId: string, codigo: string): Promise<{ sucursal: string; casos: CasoLista[] } | null> {
@@ -88,7 +117,7 @@ export async function listaDiferencias(sql: Sql, usuarioId: string, codigo: stri
     return {
       entregaId: e.id, entregadaEn: e.creada_en, confirmadaEn: e.resuelta_en, entregaPor: e.entrega_por, recibe: e.recibe,
       diferencias, pendientes: diferencias.filter((d) => d.estado === "por_revisar").length,
-      paraDireccion: diferencias.filter((d) => d.estado === "faltante_confirmado" || d.estado === "sobrante_confirmado").length,
+      paraDireccion: diferencias.filter((d) => d.pendienteDireccionDesde).length,
       neto: (neto / 100).toFixed(2),
     };
   });
@@ -135,6 +164,8 @@ export type DetalleDiferencias = {
   /** Perfil al que le toca revisar estas diferencias, y si la cuenta que consulta puede hacerlo. */
   nivel: NivelRevision;
   puedeRevisar: boolean;
+  /** La cuenta puede resolver como Dirección (permiso y perfil de Dirección en la sucursal, sin haber participado). */
+  puedeResolver: boolean;
   /** Apoyo en cada etapa del conteo. El recuento solo aparece si lo hubo. */
   apoyos: ApoyoEtapa[];
   historial: EventoCaso[];
@@ -186,10 +217,12 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   const calculado = ((centavos(d.contado) + centavos(d.importe_cobros) + centavos(d.importe_cancelaciones)) / 100).toFixed(2);
 
   const difs = (await DIFERENCIAS(sql, [e.id])).map(aDiferencia);
-  const [n] = await sql<{ nivel: NivelRevision; puede: boolean }[]>`
+  const [n] = await sql<{ nivel: NivelRevision; puede: boolean; resuelve: boolean }[]>`
     select nivel_revision_entrega(${e.id}) as nivel,
            tiene_permiso(${usuarioId}, 'diferencia.revisar', ${s.id})
-           and exists (select 1 from perfiles_en_sucursal(${usuarioId}, ${s.id}) r where r = nivel_revision_entrega(${e.id})) as puede`;
+           and exists (select 1 from perfiles_en_sucursal(${usuarioId}, ${s.id}) r where r = nivel_revision_entrega(${e.id})) as puede,
+           tiene_permiso(${usuarioId}, 'diferencia.resolver', ${s.id})
+           and exists (select 1 from perfiles_en_sucursal(${usuarioId}, ${s.id}) r where r = 'direccion') as resuelve`;
   const [{ participaste }] = await sql<{ participaste: boolean }[]>`
     select ${usuarioId}::uuid in (select participantes_entrega(${e.id})) as participaste`;
   const recuento = await sql<{ en: Date }[]>`
@@ -211,6 +244,8 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   });
   const ETAPA = { conteo_entrega: "conteo de quien entregó", conteo_recepcion: "conteo de quien recibió", recuento: "recuento" } as const;
   const LUGAR = { bolsa_visitas: "bolsa", cajon_mensualidades: "cajón" } as const;
+  const cual = (d: Diferencia) => `${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : "en la entrega"}`;
+  const DECISION = { absorbe_sucursal: "Lo absorbe la sucursal", queda_en_bolsa: "Se queda en la bolsa", origen_identificado: "Origen identificado" } as const;
   const RESULTADO = { aclarada: "Aclarada", faltante_confirmado: "Faltante confirmado", sobrante_confirmado: "Sobrante confirmado" } as const;
   const dinero = (v: string) => (Number(v) < 0 ? "−" : "+") + "$" + Math.abs(Number(v)).toLocaleString("es-MX", { minimumFractionDigits: 2 });
   const historial: EventoCaso[] = [
@@ -226,10 +261,25 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
       que: `Revisión (${LUGAR[d.lugar]}, ${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : "en la entrega"}): ${RESULTADO[d.revision!.resultado]}. Motivo: «${d.revision!.motivo}»`,
       cuenta: d.revision!.revisadaPor,
     })),
+    ...difs.filter((d) => d.resolucion).map((d) => ({
+      en: d.resolucion!.en,
+      que: `Resolución de Dirección (${LUGAR[d.lugar]}, ${cual(d)}): ${DECISION[d.resolucion!.decision]}${d.resolucion!.origen ? `. Origen: «${d.resolucion!.origen}»` : ""}${d.resolucion!.requiereCorreccion ? " · corrección pendiente" : ""}. Motivo: «${d.resolucion!.motivo}»`,
+      cuenta: d.resolucion!.resueltaPor,
+    })),
+    ...difs.filter((d) => d.resolucion?.correccion).map((d) => ({
+      en: d.resolucion!.correccion!.en,
+      que: `Corrección registrada (${LUGAR[d.lugar]}, ${cual(d)}): «${d.resolucion!.correccion!.texto}»`,
+      cuenta: d.resolucion!.correccion!.por,
+    })),
+    ...difs.filter((d) => d.estado === "resuelta").map((d) => ({
+      en: d.resolucion!.correccion?.en ?? d.resolucion!.en,
+      que: `Seguimiento cerrado (${LUGAR[d.lugar]}, ${cual(d)})`,
+      cuenta: "La plataforma",
+    })),
   ].sort((a, b) => a.en.getTime() - b.en.getTime());
   return {
     sucursal: s.nombre, entregaId: e.id, entregaPor: e.entrega_por, recibe: e.recibe, entregadaEn: e.creada_en, confirmadaEn: e.resuelta_en,
-    nota: e.nota, aclaracion: e.aclaracion, participaste, nivel: n.nivel, puedeRevisar: n.puede && !participaste, historial, apoyos,
+    nota: e.nota, aclaracion: e.aclaracion, participaste, nivel: n.nivel, puedeRevisar: n.puede && !participaste, puedeResolver: n.resuelve && !participaste, historial, apoyos,
     lugares: { bolsa_visitas: cifras("bolsa_visitas"), cajon_mensualidades: cifras("cajon_mensualidades") },
     diferencias: difs,
     desglose: {
@@ -243,10 +293,16 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
 
 /** Cuántas diferencias siguen por revisar en la sucursal (para el botón de la sucursal). null sin permiso. */
 export async function pendientesDeRevision(sql: Sql, usuarioId: string, sucursalId: string): Promise<number | null> {
+  // Por revisar; y, para quien resuelve como Dirección, también lo que espera su resolución o una corrección.
   const [r] = await sql<{ puede: boolean; n: number }[]>`
     select tiene_permiso(${usuarioId}, 'diferencia.consultar', ${sucursalId}) as puede,
            (select count(*)::int from diferencia_efectivo d join turno t on t.id = d.turno_id
-            where t.sucursal_id = ${sucursalId} and not exists (select 1 from revision_diferencia r where r.diferencia_id = d.id)) as n`;
+            left join revision_diferencia rv on rv.diferencia_id = d.id left join resolucion_diferencia x on x.diferencia_id = d.id
+            where t.sucursal_id = ${sucursalId}
+              and (rv.id is null
+                   or (tiene_permiso(${usuarioId}, 'diferencia.resolver', ${sucursalId})
+                       and rv.resultado in ('faltante_confirmado', 'sobrante_confirmado')
+                       and (x.id is null or (x.requiere_correccion and x.correccion is null))))) as n`;
   return r.puede ? r.n : null;
 }
 
@@ -308,4 +364,87 @@ export async function revisarDiferencia(
     if ((error as { code?: string })?.code === "23505") return { ok: false, error: "ya_revisada" };
     throw error;
   }
+}
+
+export type ErrorResolucion =
+  | "no_encontrada" | "sin_permiso" | "participaste" | "no_pendiente" | "ya_resuelta" | "decision" | "motivo" | "origen" | "correccion"
+  | "bloqueado_produccion";
+
+const texto = (v: string) => v.trim().replace(/\s+/g, " ");
+
+async function diferenciaParaDireccion(tx: Tx, usuarioId: string, codigo: string, diferenciaId: string) {
+  const [d] = await tx<{ entrega_id: string; resultado: string | null; consulta: boolean; resuelve: boolean; participo: boolean;
+                         resolucion: string | null; requiere: boolean | null; corregida: boolean | null }[]>`
+    select df.entrega_id, rv.resultado,
+           tiene_permiso(${usuarioId}, 'diferencia.consultar', t.sucursal_id) as consulta,
+           tiene_permiso(${usuarioId}, 'diferencia.resolver', t.sucursal_id)
+             and exists (select 1 from perfiles_en_sucursal(${usuarioId}, t.sucursal_id) r where r = 'direccion') as resuelve,
+           ${usuarioId}::uuid in (select participantes_entrega(df.entrega_id)) as participo,
+           x.id as resolucion, x.requiere_correccion as requiere, x.correccion is not null as corregida
+    from diferencia_efectivo df join turno t on t.id = df.turno_id join sucursal s on s.id = t.sucursal_id
+    left join revision_diferencia rv on rv.diferencia_id = df.id left join resolucion_diferencia x on x.diferencia_id = df.id
+    where df.id = ${diferenciaId} and s.codigo = ${codigo}
+    for update of df`;
+  if (!d || !d.consulta) return { ok: false as const, error: "no_encontrada" as const };
+  if (!d.resuelve) return { ok: false as const, error: "sin_permiso" as const };
+  if (d.participo) return { ok: false as const, error: "participaste" as const };
+  return { ok: true as const, d };
+}
+
+/**
+ * Dirección resuelve un faltante o sobrante confirmado. Faltante: «Lo absorbe la sucursal» (cierra). Sobrante: «Se queda
+ * en la bolsa» (cierra) u «Origen identificado», con o sin corrección pendiente. Motivo obligatorio. No cambia importes.
+ */
+export async function resolverDiferencia(
+  sql: Sql, usuarioId: string, codigo: string,
+  datos: { diferenciaId: string; decision: string; motivo: string; origen?: string; requiereCorreccion?: boolean },
+  { entorno }: { entorno: Entorno },
+): Promise<{ ok: true; entregaId: string } | { ok: false; error: ErrorResolucion }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!/^[A-Z0-9]{2,5}$/.test(codigo) || !esIdentificadorValido(datos.diferenciaId)) return { ok: false, error: "no_encontrada" };
+  if (!["absorbe_sucursal", "queda_en_bolsa", "origen_identificado"].includes(datos.decision)) return { ok: false, error: "decision" };
+  const motivo = texto(datos.motivo);
+  if (motivo.length < 5 || motivo.length > 300) return { ok: false, error: "motivo" };
+  const origen = datos.decision === "origen_identificado" ? texto(datos.origen ?? "") : null;
+  if (origen !== null && (origen.length < 5 || origen.length > 300)) return { ok: false, error: "origen" };
+  const requiere = datos.decision === "origen_identificado" && !!datos.requiereCorreccion;
+  try {
+    return await sql.begin(async (tx) => {
+      const c = await diferenciaParaDireccion(tx, usuarioId, codigo, datos.diferenciaId);
+      if (!c.ok) return c;
+      if (c.d.resolucion) return { ok: false as const, error: "ya_resuelta" as const };
+      if (c.d.resultado !== "faltante_confirmado" && c.d.resultado !== "sobrante_confirmado") return { ok: false as const, error: "no_pendiente" as const };
+      if ((datos.decision === "absorbe_sucursal") !== (c.d.resultado === "faltante_confirmado")) return { ok: false as const, error: "decision" as const };
+      const [x] = await tx<{ id: string }[]>`
+        insert into resolucion_diferencia (diferencia_id, decision, motivo, origen, requiere_correccion, resuelta_por)
+        values (${datos.diferenciaId}, ${datos.decision}, ${motivo}, ${origen}, ${requiere}, ${usuarioId}) returning id`;
+      await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, motivo, usuario_id)
+               values ('diferencia_efectivo', ${datos.diferenciaId}, 'resolver',
+                       ${tx.json({ resolucion: x.id, decision: datos.decision, origen, requiere_correccion: requiere })}, ${motivo}, ${usuarioId})`;
+      return { ok: true as const, entregaId: c.d.entrega_id };
+    });
+  } catch (error) {
+    if ((error as { code?: string })?.code === "23505") return { ok: false, error: "ya_resuelta" };
+    throw error;
+  }
+}
+
+/** Registra la corrección pendiente de un sobrante con origen identificado; queda en el historial y cierra el caso. */
+export async function registrarCorreccion(
+  sql: Sql, usuarioId: string, codigo: string, datos: { diferenciaId: string; correccion: string }, { entorno }: { entorno: Entorno },
+): Promise<{ ok: true; entregaId: string } | { ok: false; error: ErrorResolucion }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!/^[A-Z0-9]{2,5}$/.test(codigo) || !esIdentificadorValido(datos.diferenciaId)) return { ok: false, error: "no_encontrada" };
+  const correccion = texto(datos.correccion);
+  if (correccion.length < 5 || correccion.length > 300) return { ok: false, error: "correccion" };
+  return sql.begin(async (tx) => {
+    const c = await diferenciaParaDireccion(tx, usuarioId, codigo, datos.diferenciaId);
+    if (!c.ok) return c;
+    if (!c.d.resolucion || !c.d.requiere || c.d.corregida) return { ok: false as const, error: "no_pendiente" as const };
+    await tx`update resolucion_diferencia set correccion = ${correccion}, correccion_por = ${usuarioId}, correccion_en = now()
+             where diferencia_id = ${datos.diferenciaId}`;
+    await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
+             values ('diferencia_efectivo', ${datos.diferenciaId}, 'registrar_correccion', ${tx.json({ correccion })}, ${usuarioId})`;
+    return { ok: true as const, entregaId: c.d.entrega_id };
+  });
 }

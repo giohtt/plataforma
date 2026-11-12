@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
-import { FormularioRevision } from "@/components/RevisionDiferencia";
-import { ESTADO_DIFERENCIA, etiquetaDiferencia, NOMBRE_LUGAR, NOMBRE_NIVEL } from "@/lib/datos-diferencia";
+import { FormularioCorreccion, FormularioResolucion, FormularioRevision } from "@/components/RevisionDiferencia";
+import { ESTADO_DIFERENCIA, etiquetaDiferencia, NOMBRE_DECISION, NOMBRE_LUGAR, NOMBRE_NIVEL, tiempoPendiente } from "@/lib/datos-diferencia";
 import { detalleDiferencias } from "@/lib/diferencias";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
@@ -32,6 +32,8 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
         De <strong>{c.entregaPor}</strong> a <strong>{c.recibe}</strong> · entregó {hora.format(c.entregadaEn)} · confirmó {hora.format(c.confirmadaEn)} desde su propia cuenta
       </p>
       {aviso === "revisada" ? <p className="aviso aviso-ok" role="status">Revisión registrada. Los importes no cambiaron.</p> : null}
+      {aviso === "resuelta" ? <p className="aviso aviso-ok" role="status">Decisión de Dirección registrada. Los importes no cambiaron.</p> : null}
+      {aviso === "corregida" ? <p className="aviso aviso-ok" role="status">Corrección registrada. El caso quedó cerrado.</p> : null}
       {c.participaste ? (
         <p className="aviso aviso-info" data-testid="participaste">Participaste en esta entrega: su revisión le corresponde a otra persona.</p>
       ) : null}
@@ -53,11 +55,11 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
               <div className="cifra-caso"><span className="sub">Entregó {c.entregaPor}</span><strong data-testid="cifra-entregado">{pesos.format(Number(x.entregado))}</strong></div>
               <div className="cifra-caso"><span className="sub">Recibió {c.recibe}</span><strong data-testid="cifra-recibido">{pesos.format(Number(x.confirmado))}</strong>
                 <span className="sub">Primer conteo {pesos.format(Number(x.inicial))}</span></div>
-              <div className={`cifra-caso ${!dp ? "cifra-bien" : dp.estado === "aclarada" ? "cifra-aclarada" : "cifra-mal"}`} data-testid="tarjeta-entre-personas"><span className="sub">Diferencia entre entrega y recepción</span>
+              <div className={`cifra-caso ${!dp ? "cifra-bien" : dp.estado === "aclarada" || dp.estado === "resuelta" ? "cifra-aclarada" : "cifra-mal"}`} data-testid="tarjeta-entre-personas"><span className="sub">Diferencia entre entrega y recepción</span>
                 <strong data-testid="cifra-entre-personas">{dp ? firmado(dp.importe) : pesos.format(0)}</strong>
                 {dp ? <span className="sub">{etiquetaDiferencia(dp.tipo, dp.importe)} · {ESTADO_DIFERENCIA[dp.estado]}</span> : null}</div>
             </div>
-            <div className={`cifra-caso ${!de ? "" : de.estado === "aclarada" ? "cifra-aclarada" : "cifra-mal"}`} data-testid="cifra-contra-esperado">
+            <div className={`cifra-caso ${!de ? "" : de.estado === "aclarada" || de.estado === "resuelta" ? "cifra-aclarada" : "cifra-mal"}`} data-testid="cifra-contra-esperado">
               <span className="sub">Diferencia contra el esperado (lo entregado − el esperado)</span>
               <strong>{x.esperado === null ? "No se puede calcular" : de ? firmado(de.importe) : pesos.format(0)}</strong>
               {de ? <span className="sub">{etiquetaDiferencia(de.tipo, de.importe)} · {ESTADO_DIFERENCIA[de.estado]}</span> : null}
@@ -100,13 +102,38 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
             <div key={d.id} className="tarjeta" data-testid="diferencia" data-tipo={d.tipo}>
               <p>
                 <strong>{NOMBRE_LUGAR[d.lugar]} · {etiquetaDiferencia(d.tipo, d.importe)}: {firmado(d.importe)}</strong>{" "}
-                <span className={`chip-estado ${d.estado === "aclarada" ? "chip-aclarada" : "chip-vencida"}`} data-testid="estado-diferencia">{ESTADO_DIFERENCIA[d.estado]}</span>
+                <span className={`chip-estado ${d.estado === "aclarada" || d.estado === "resuelta" ? "chip-aclarada" : "chip-vencida"}`} data-testid="estado-diferencia">{ESTADO_DIFERENCIA[d.estado]}</span>
               </p>
               <p className="sub">Se compara: {comparado}.</p>
               {d.revision ? (
-                <p className="sub" data-testid="revision">
-                  Revisó <strong>{d.revision.revisadaPor}</strong> ({NOMBRE_NIVEL[d.revision.nivel]}) · {hora.format(d.revision.en)} · Motivo: «{d.revision.motivo}»
-                </p>
+                <>
+                  <p className="sub" data-testid="revision">
+                    Revisó <strong>{d.revision.revisadaPor}</strong> ({NOMBRE_NIVEL[d.revision.nivel]}) · {hora.format(d.revision.en)} · Motivo: «{d.revision.motivo}»
+                  </p>
+                  {d.pendienteDireccionDesde ? (() => {
+                    const t = tiempoPendiente(d.pendienteDireccionDesde);
+                    return (
+                      <p className="sub" data-testid="tiempo-pendiente">
+                        Pendiente para Dirección desde hace {t.texto}
+                        {t.masDe48 ? <> · <span className="chip-estado chip-vencida" data-testid="aviso-48">Más de 48 horas pendiente</span></> : null}
+                      </p>
+                    );
+                  })() : null}
+                  {d.resolucion ? (
+                    <p className="sub" data-testid="resolucion">
+                      Decidió <strong>{d.resolucion.resueltaPor}</strong> (Dirección) · {hora.format(d.resolucion.en)} · <strong>{NOMBRE_DECISION[d.resolucion.decision]}</strong>
+                      {d.resolucion.origen ? <> · Origen: «{d.resolucion.origen}»</> : null} · Motivo: «{d.resolucion.motivo}»
+                      {d.resolucion.correccion ? <><br />Corrección: «{d.resolucion.correccion.texto}» · {d.resolucion.correccion.por} · {hora.format(d.resolucion.correccion.en)}</> : null}
+                    </p>
+                  ) : null}
+                  {d.estado === "faltante_confirmado" || d.estado === "sobrante_confirmado" ? (
+                    c.puedeResolver ? <FormularioResolucion codigo={codigo} diferenciaId={d.id} importe={d.importe} />
+                      : <p className="sub">Pendiente de la decisión de Dirección.</p>
+                  ) : d.estado === "correccion_pendiente" ? (
+                    c.puedeResolver ? <FormularioCorreccion codigo={codigo} diferenciaId={d.id} />
+                      : <p className="sub">Pendiente de registrar la corrección.</p>
+                  ) : null}
+                </>
               ) : c.puedeRevisar ? (
                 <FormularioRevision codigo={codigo} diferenciaId={d.id} importe={d.importe} />
               ) : (
@@ -115,7 +142,7 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
             </div>
           );
         }) : <p className="sub">Esta entrega no tiene diferencias.</p>}
-        <p className="sub">Revisar deja constancia de lo ocurrido y conserva todos los importes registrados y el saldo de apertura del turno siguiente.</p>
+        <p className="sub">Revisar y resolver dejan constancia de lo ocurrido y conservan todos los importes registrados y el saldo de apertura del turno siguiente.</p>
       </section>
 
       <section className="tarjeta" aria-labelledby="t-desglose" data-testid="desglose">
