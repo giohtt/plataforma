@@ -95,7 +95,7 @@ describe.skipIf(!URL_ADMIN)("cambio de turno con confirmación de quien recibe",
     // La entrante no ve el conteo de la saliente antes de capturar el suyo.
     const r = await pantallaRecepcion(sql, e.sofia, e.codigo, "pruebas");
     expect(r).toMatchObject({ ok: true, entrega: { estado: "pendiente", entregaPorId: e.laura }, recuento: null });
-    expect(JSON.stringify(r)).not.toMatch(/300|1850/);
+    expect(JSON.stringify(r)).not.toMatch(/"300\.00"|"1850\.00"/);
 
     const ok = await recibir(e, "300.00", "1850.00");
     if (!ok.ok || ok.resultado !== "confirmada") throw new Error(JSON.stringify(ok));

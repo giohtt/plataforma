@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
 import { FormularioCorreccion, FormularioResolucion, FormularioRevision } from "@/components/RevisionDiferencia";
 import { ESTADO_DIFERENCIA, etiquetaDiferencia, NOMBRE_DECISION, NOMBRE_LUGAR, NOMBRE_NIVEL, tiempoPendiente } from "@/lib/datos-diferencia";
-import { detalleDiferencias } from "@/lib/diferencias";
+import { detalleDiferencias, TIPOS_REFERENCIA_CORRECCION } from "@/lib/diferencias";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
 export const metadata = { title: "Diferencia de efectivo · Fitnessland" };
@@ -123,14 +123,14 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
                     <p className="sub" data-testid="resolucion">
                       Decidió <strong>{d.resolucion.resueltaPor}</strong> (Dirección) · {hora.format(d.resolucion.en)} · <strong>{NOMBRE_DECISION[d.resolucion.decision]}</strong>
                       {d.resolucion.origen ? <> · Origen: «{d.resolucion.origen}»</> : null} · Motivo: «{d.resolucion.motivo}»
-                      {d.resolucion.correccion ? <><br />Corrección: «{d.resolucion.correccion.texto}» · {d.resolucion.correccion.por} · {hora.format(d.resolucion.correccion.en)}</> : null}
+                      {d.resolucion.correccion ? <><br />Corrección: «{d.resolucion.correccion.texto}» · referencia {d.resolucion.correccion.referencia.tipo} {d.resolucion.correccion.referencia.id} · {d.resolucion.correccion.por} · {hora.format(d.resolucion.correccion.en)}</> : null}
                     </p>
                   ) : null}
                   {d.estado === "faltante_confirmado" || d.estado === "sobrante_confirmado" ? (
                     c.puedeResolver ? <FormularioResolucion codigo={codigo} diferenciaId={d.id} importe={d.importe} />
                       : <p className="sub">Pendiente de la decisión de Dirección.</p>
                   ) : d.estado === "correccion_pendiente" ? (
-                    c.puedeResolver ? <FormularioCorreccion codigo={codigo} diferenciaId={d.id} />
+                    c.puedeResolver ? <FormularioCorreccion codigo={codigo} diferenciaId={d.id} tipos={TIPOS_REFERENCIA_CORRECCION} />
                       : <p className="sub">Pendiente de registrar la corrección.</p>
                   ) : null}
                 </>

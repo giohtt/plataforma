@@ -10,7 +10,7 @@ import { registrarCorreccion, resolverDiferencia, revisarDiferencia, type ErrorR
 import { leerEntorno } from "@/lib/entorno";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
 
-export type EstadoRevision = { error?: string; errores?: { resultado?: string; motivo?: string; origen?: string; correccion?: string }; valores?: Record<string, string>; intento: number } | null;
+export type EstadoRevision = { error?: string; errores?: { resultado?: string; motivo?: string; origen?: string; correccion?: string; referencia?: string }; valores?: Record<string, string>; intento: number } | null;
 
 const MENSAJES: Record<ErrorRevision, string> = {
   no_encontrada: "No encontrada.",
@@ -60,7 +60,9 @@ const MENSAJES_RESOLUCION: Record<ErrorResolucion, string> = {
   decision: "Elige una decisión válida para esta diferencia.",
   motivo: "Escribe el motivo (de 5 a 300 caracteres).",
   origen: "Describe el origen identificado (de 5 a 300 caracteres).",
-  correccion: "Describe la corrección registrada (de 5 a 300 caracteres).",
+  correccion: "Describe la corrección realizada (de 5 a 300 caracteres).",
+  referencia: "Indica la referencia del registro de la corrección (tipo y folio). Una nota sola no cierra el caso.",
+  referencia_no_verificable: "No se pudo verificar la referencia: todavía no existe en la plataforma un registro para esta corrección. El caso sigue pendiente.",
   bloqueado_produccion: "Desactivado fuera del entorno de pruebas.",
 };
 
@@ -98,10 +100,14 @@ export async function accionRegistrarCorreccion(previo: EstadoRevision, datos: F
   const { sesion, sql } = await inicio();
   const leer = lector(datos);
   const codigo = leer("codigo");
-  const valores = { correccion: leer("correccion", 400) };
+  const valores = { correccion: leer("correccion", 400), referenciaTipo: leer("referencia_tipo"), referenciaId: leer("referencia_id", 100) };
   const intento = (previo?.intento ?? 0) + 1;
-  const r = await registrarCorreccion(sql, sesion.usuarioId, codigo, { diferenciaId: leer("diferencia"), correccion: valores.correccion }, { entorno: leerEntorno() });
+  const r = await registrarCorreccion(sql, sesion.usuarioId, codigo,
+    { diferenciaId: leer("diferencia"), correccion: valores.correccion, referenciaTipo: valores.referenciaTipo, referenciaId: valores.referenciaId },
+    { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/diferencias/${r.entregaId}?aviso=corregida`);
-  if (r.error === "correccion") return { error: "Revisa los campos marcados.", errores: { correccion: MENSAJES_RESOLUCION.correccion }, valores, intento };
+  if (r.error === "correccion" || r.error === "referencia") {
+    return { error: "Revisa los campos marcados.", errores: { [r.error]: MENSAJES_RESOLUCION[r.error] }, valores, intento };
+  }
   return { error: MENSAJES_RESOLUCION[r.error], valores, intento };
 }

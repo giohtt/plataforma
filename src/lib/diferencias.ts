@@ -31,7 +31,7 @@ export type EstadoDiferencia = "por_revisar" | ResultadoRevision | "correccion_p
 export type DecisionDireccion = "absorbe_sucursal" | "queda_en_bolsa" | "origen_identificado";
 export type Resolucion = {
   decision: DecisionDireccion; motivo: string; origen: string | null; requiereCorreccion: boolean; resueltaPor: string; en: Date;
-  correccion: { texto: string; por: string; en: Date } | null;
+  correccion: { texto: string; referencia: { tipo: string; id: string }; por: string; en: Date } | null;
 };
 /** Horas a partir de las cuales un caso pendiente para Dirección se marca «Más de 48 horas pendiente». */
 export const HORAS_AVISO_DIRECCION = 48;
@@ -72,12 +72,13 @@ type FilaDiferencia = {
   resultado: ResultadoRevision | null; motivo: string | null; revisor: string | null; nivel: NivelRevision | null; revisada_en: Date | null;
   decision: DecisionDireccion | null; motivo_dir: string | null; origen: string | null; requiere_correccion: boolean | null;
   resolutor: string | null; resuelta_en: Date | null; correccion: string | null; corrector: string | null; correccion_en: Date | null;
+  correccion_ref_tipo: string | null; correccion_ref_id: string | null;
 };
 const DIFERENCIAS = (sql: Sql | Tx, entregaIds: string[]) => sql<FilaDiferencia[]>`
   select d.id, d.entrega_id, l.tipo as lugar, d.tipo, d.importe::text as importe, d.registrada_en,
          r.resultado, r.motivo, u.nombre as revisor, r.nivel, r.en as revisada_en,
          x.decision, x.motivo as motivo_dir, x.origen, x.requiere_correccion, ux.nombre as resolutor, x.en as resuelta_en,
-         x.correccion, uc.nombre as corrector, x.correccion_en
+         x.correccion, uc.nombre as corrector, x.correccion_en, x.correccion_ref_tipo, x.correccion_ref_id
   from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id
   left join revision_diferencia r on r.diferencia_id = d.id left join usuario u on u.id = r.revisada_por
   left join resolucion_diferencia x on x.diferencia_id = d.id left join usuario ux on ux.id = x.resuelta_por
@@ -87,7 +88,7 @@ const DIFERENCIAS = (sql: Sql | Tx, entregaIds: string[]) => sql<FilaDiferencia[
 const aDiferencia = (d: FilaDiferencia): Diferencia => {
   const resolucion: Resolucion | null = d.decision ? {
     decision: d.decision, motivo: d.motivo_dir!, origen: d.origen, requiereCorreccion: !!d.requiere_correccion, resueltaPor: d.resolutor!,
-    en: d.resuelta_en!, correccion: d.correccion ? { texto: d.correccion, por: d.corrector!, en: d.correccion_en! } : null,
+    en: d.resuelta_en!, correccion: d.correccion ? { texto: d.correccion, referencia: { tipo: d.correccion_ref_tipo!, id: d.correccion_ref_id! }, por: d.corrector!, en: d.correccion_en! } : null,
   } : null;
   const estado: EstadoDiferencia = !d.resultado ? "por_revisar"
     : !resolucion ? d.resultado
@@ -268,7 +269,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     })),
     ...difs.filter((d) => d.resolucion?.correccion).map((d) => ({
       en: d.resolucion!.correccion!.en,
-      que: `Corrección registrada (${LUGAR[d.lugar]}, ${cual(d)}): «${d.resolucion!.correccion!.texto}»`,
+      que: `Corrección registrada (${LUGAR[d.lugar]}, ${cual(d)}): «${d.resolucion!.correccion!.texto}» · referencia ${d.resolucion!.correccion!.referencia.tipo} ${d.resolucion!.correccion!.referencia.id}`,
       cuenta: d.resolucion!.correccion!.por,
     })),
     ...difs.filter((d) => d.estado === "resuelta").map((d) => ({
@@ -368,7 +369,14 @@ export async function revisarDiferencia(
 
 export type ErrorResolucion =
   | "no_encontrada" | "sin_permiso" | "participaste" | "no_pendiente" | "ya_resuelta" | "decision" | "motivo" | "origen" | "correccion"
-  | "bloqueado_produccion";
+  | "referencia" | "referencia_no_verificable" | "bloqueado_produccion";
+
+/**
+ * Tipos de registro que pueden servir como corrección de un sobrante. Hoy ninguno: la plataforma no tiene todavía un
+ * flujo para registrar esa corrección (por ejemplo, regularizar un cobro sin volver a sumar el efectivo). Mientras
+ * tanto ninguna referencia es verificable y el caso sigue pendiente. La base aplica la misma regla.
+ */
+export const TIPOS_REFERENCIA_CORRECCION: readonly string[] = [];
 
 const texto = (v: string) => v.trim().replace(/\s+/g, " ");
 
@@ -429,22 +437,38 @@ export async function resolverDiferencia(
   }
 }
 
-/** Registra la corrección pendiente de un sobrante con origen identificado; queda en el historial y cierra el caso. */
+/**
+ * Cierra un sobrante con corrección pendiente. Pide una descripción y una referencia verificable al registro de la
+ * corrección (tipo y folio de un registro existente); ambas quedan en el historial. Una nota sola no cierra. Si la
+ * referencia no se puede verificar (hoy, ningún tipo existe), el caso sigue pendiente.
+ */
 export async function registrarCorreccion(
-  sql: Sql, usuarioId: string, codigo: string, datos: { diferenciaId: string; correccion: string }, { entorno }: { entorno: Entorno },
+  sql: Sql, usuarioId: string, codigo: string,
+  datos: { diferenciaId: string; correccion: string; referenciaTipo: string; referenciaId: string }, { entorno }: { entorno: Entorno },
 ): Promise<{ ok: true; entregaId: string } | { ok: false; error: ErrorResolucion }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
   if (!/^[A-Z0-9]{2,5}$/.test(codigo) || !esIdentificadorValido(datos.diferenciaId)) return { ok: false, error: "no_encontrada" };
   const correccion = texto(datos.correccion);
   if (correccion.length < 5 || correccion.length > 300) return { ok: false, error: "correccion" };
+  const referenciaId = texto(datos.referenciaId);
+  if (!datos.referenciaTipo || !referenciaId) return { ok: false, error: "referencia" };
+
   return sql.begin(async (tx) => {
     const c = await diferenciaParaDireccion(tx, usuarioId, codigo, datos.diferenciaId);
     if (!c.ok) return c;
     if (!c.d.resolucion || !c.d.requiere || c.d.corregida) return { ok: false as const, error: "no_pendiente" as const };
-    await tx`update resolucion_diferencia set correccion = ${correccion}, correccion_por = ${usuarioId}, correccion_en = now()
+    if (!TIPOS_REFERENCIA_CORRECCION.includes(datos.referenciaTipo) || referenciaId.length > 80) {
+      return { ok: false as const, error: "referencia_no_verificable" as const };
+    }
+    const [{ valida }] = await tx<{ valida: boolean }[]>`
+      select referencia_correccion_valida(${datos.referenciaTipo}, ${referenciaId}, ${datos.diferenciaId}) as valida`;
+    if (!valida) return { ok: false as const, error: "referencia_no_verificable" as const };
+    await tx`update resolucion_diferencia set correccion = ${correccion}, correccion_ref_tipo = ${datos.referenciaTipo},
+             correccion_ref_id = ${referenciaId}, correccion_por = ${usuarioId}, correccion_en = now()
              where diferencia_id = ${datos.diferenciaId}`;
     await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
-             values ('diferencia_efectivo', ${datos.diferenciaId}, 'registrar_correccion', ${tx.json({ correccion })}, ${usuarioId})`;
+             values ('diferencia_efectivo', ${datos.diferenciaId}, 'registrar_correccion',
+                     ${tx.json({ correccion, referencia_tipo: datos.referenciaTipo, referencia_id: referenciaId })}, ${usuarioId})`;
     return { ok: true as const, entregaId: c.d.entrega_id };
   });
 }

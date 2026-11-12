@@ -2,7 +2,9 @@
 -- Indicado el 11 nov 2026:
 --   - Faltante confirmado: «Lo absorbe la sucursal», con motivo; cierra el seguimiento.
 --   - Sobrante confirmado: «Se queda en la bolsa» (cierra), u «Origen identificado»: si queda una corrección pendiente,
---     el caso sigue abierto hasta registrar la corrección, vinculada al historial; si no requiere corrección, cierra.
+--     el caso sigue abierto. Para cerrarlo se piden una descripción y una referencia verificable al registro de la
+--     corrección (tipo y folio/identificador de un registro existente); ambas quedan en el historial. Una nota sola no
+--     cierra. Mientras no exista en la plataforma un registro para ese tipo de corrección, el caso sigue pendiente.
 --   - Todos los importes siguen la misma regla (sin umbrales). La resolución no cambia los importes registrados ni el
 --     saldo de apertura del turno siguiente.
 --   - Pendientes para después: reposición por una persona; retiro y depósito del sobrante (con Encargada de retiros).
@@ -22,13 +24,25 @@ create table resolucion_diferencia (
   en                  timestamptz not null default now(),
   -- Corrección, solo si se requiere: se registra una vez y cierra el caso.
   correccion          text check (correccion is null or char_length(btrim(correccion)) between 5 and 300),
+  correccion_ref_tipo text,
+  correccion_ref_id   text,
   correccion_por      uuid references usuario (id),
   correccion_en       timestamptz,
   constraint origen_solo_identificado check ((decision = 'origen_identificado') = (origen is not null)),
   constraint correccion_solo_con_origen check (not requiere_correccion or decision = 'origen_identificado'),
-  constraint correccion_completa check ((correccion is null) = (correccion_por is null) and (correccion is null) = (correccion_en is null)),
+  constraint correccion_completa check (
+    (correccion is null) = (correccion_por is null) and (correccion is null) = (correccion_en is null)
+    and (correccion is null) = (correccion_ref_tipo is null) and (correccion is null) = (correccion_ref_id is null)),
   constraint correccion_si_se_requiere check (correccion is null or requiere_correccion)
 );
+
+-- ¿La referencia apunta a un registro existente que sirve como corrección de esta diferencia? Hoy no hay ningún tipo de
+-- registro de corrección en la plataforma (por ejemplo, regularizar un cobro sin mover efectivo), así que ninguna
+-- referencia es válida y el caso sigue pendiente. Cuando exista ese flujo, se agrega aquí su tipo y su comprobación.
+create function referencia_correccion_valida(p_tipo text, p_id text, p_diferencia uuid) returns boolean
+language sql stable as $$
+  select false
+$$;
 
 create function resolucion_diferencia_valida() returns trigger
 language plpgsql as $$
@@ -41,6 +55,7 @@ begin
   if tg_op = 'UPDATE' then
     -- Solo se agrega la corrección pendiente, una vez.
     if old.correccion is not null or new.correccion is null or not old.requiere_correccion
+       or not referencia_correccion_valida(new.correccion_ref_tipo, new.correccion_ref_id, new.diferencia_id)
        or (new.id, new.diferencia_id, new.decision, new.motivo, new.origen, new.requiere_correccion, new.resuelta_por, new.en)
           is distinct from (old.id, old.diferencia_id, old.decision, old.motivo, old.origen, old.requiere_correccion, old.resuelta_por, old.en) then
       raise exception 'resolucion_diferencia: cambio no permitido' using errcode = 'insufficient_privilege';

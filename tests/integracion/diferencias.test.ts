@@ -410,7 +410,9 @@ describe.skipIf(!URL_ADMIN)("diferencias de efectivo: lista y desglose del saldo
       expect((await listaDiferencias(sql, e.dir, e.codigo))!.casos[0]).toMatchObject({ pendientes: 0, paraDireccion: 0 });
     });
 
-    it("sobrante confirmado: «Se queda en la bolsa» cierra; «Origen identificado» cierra sin corrección o queda abierto hasta registrarla", async () => {
+    it("sobrante confirmado: «Se queda en la bolsa» cierra; «Origen identificado» cierra sin corrección o queda abierto: una nota sola no lo cierra", async () => {
+      const corregir = (k: { e: Esc; d: { id: string } }, correccion: string, referenciaTipo: string, referenciaId: string, u = k.e.dir) =>
+        registrarCorreccion(sql, u, k.e.codigo, { diferenciaId: k.d.id, correccion, referenciaTipo, referenciaId }, PRUEBAS);
       const sobrante = async () => {
         const e = await escenario();
         const { entregaId } = await cambio(e, "400", "400");
@@ -428,24 +430,31 @@ describe.skipIf(!URL_ADMIN)("diferencias de efectivo: lista y desglose del saldo
       expect(await resolver(b.e.dir, b.e.codigo, b.d.id, "origen_identificado")).toEqual({ ok: false, error: "origen" });
       expect(await resolver(b.e.dir, b.e.codigo, b.d.id, "origen_identificado", { origen: "Propina de un visitante guardada en la bolsa", requiereCorreccion: false })).toMatchObject({ ok: true });
       expect((await difsDe(b.e.dir, b.e.codigo, b.entregaId))[0]).toMatchObject({ estado: "resuelta", resolucion: { origen: "Propina de un visitante guardada en la bolsa", requiereCorreccion: false } });
-      expect(await registrarCorreccion(sql, b.e.dir, b.e.codigo, { diferenciaId: b.d.id, correccion: "No aplica en esta prueba" }, PRUEBAS)).toEqual({ ok: false, error: "no_pendiente" });
+      expect(await corregir(b, "No aplica en esta prueba", "registro", "X-1")).toEqual({ ok: false, error: "no_pendiente" });
 
       const c = await sobrante();
       expect(await resolver(c.e.dir, c.e.codigo, c.d.id, "origen_identificado", { origen: "Una visita cobrada sin registrar", requiereCorreccion: true })).toMatchObject({ ok: true });
       let x = (await difsDe(c.e.dir, c.e.codigo, c.entregaId))[0];
       expect(x).toMatchObject({ estado: "correccion_pendiente", pendienteDireccionDesde: expect.any(Date) });
       expect(await pendientesDeRevision(sql, c.e.dir, ids[c.e.codigo])).toBe(1);
-      expect(await registrarCorreccion(sql, c.e.admin, c.e.codigo, { diferenciaId: c.d.id, correccion: "Cobro regularizado en la prueba" }, PRUEBAS)).toEqual({ ok: false, error: "sin_permiso" });
-      expect(await registrarCorreccion(sql, c.e.dir, c.e.codigo, { diferenciaId: c.d.id, correccion: "no" }, PRUEBAS)).toEqual({ ok: false, error: "correccion" });
-      expect(await registrarCorreccion(sql, c.e.dir, c.e.codigo, { diferenciaId: c.d.id, correccion: "Visita registrada a la ficha ficticia; cobro regularizado" }, PRUEBAS)).toMatchObject({ ok: true });
+      expect(await corregir(c, "Cobro regularizado en la prueba", "cobro_visita", "TEN-0001", c.e.admin)).toEqual({ ok: false, error: "sin_permiso" });
+      expect(await corregir(c, "no", "", "")).toEqual({ ok: false, error: "correccion" });
+      // Una nota sola no cierra el caso.
+      expect(await corregir(c, "Visita registrada a la ficha ficticia; cobro regularizado", "", "")).toEqual({ ok: false, error: "referencia" });
+      // Una referencia que no corresponde a un registro verificable tampoco: hoy no existe el registro de esta corrección.
+      expect(await corregir(c, "Visita registrada a la ficha ficticia; cobro regularizado", "cobro_visita", "TEN-0001")).toEqual({ ok: false, error: "referencia_no_verificable" });
       x = (await difsDe(c.e.dir, c.e.codigo, c.entregaId))[0];
-      expect(x).toMatchObject({ estado: "resuelta", resolucion: { correccion: { texto: "Visita registrada a la ficha ficticia; cobro regularizado" } } });
+      expect(x).toMatchObject({ estado: "correccion_pendiente", resolucion: { correccion: null }, pendienteDireccionDesde: expect.any(Date) });
+      expect(await pendientesDeRevision(sql, c.e.dir, ids[c.e.codigo])).toBe(1);
       const h = (await detalleDiferencias(sql, c.e.dir, c.e.codigo, c.entregaId))!.historial.map((e) => e.que);
-      expect(h.slice(-3)).toEqual([
-        expect.stringContaining("Origen identificado. Origen: «Una visita cobrada sin registrar» · corrección pendiente"),
-        "Corrección registrada (bolsa, +$50.00 contra el esperado): «Visita registrada a la ficha ficticia; cobro regularizado»",
-        "Seguimiento cerrado (bolsa, +$50.00 contra el esperado)",
-      ]);
+      expect(h.at(-1)).toEqual(expect.stringContaining("Origen identificado. Origen: «Una visita cobrada sin registrar» · corrección pendiente"));
+      expect(h.join("\n")).not.toContain("Seguimiento cerrado");
+      // Directo en la base: tampoco se cierra con una nota sola ni con una referencia no verificable.
+      const [dir] = await sql<{ id: string }[]>`select id from usuario where id = ${c.e.dir}`;
+      await expect(sql`update resolucion_diferencia set correccion = 'Nota sola de prueba', correccion_por = ${dir.id}, correccion_en = now()
+                       where diferencia_id = ${c.d.id}`).rejects.toThrow();
+      await expect(sql`update resolucion_diferencia set correccion = 'Nota de prueba', correccion_ref_tipo = 'cobro_visita', correccion_ref_id = 'TEN-0001',
+                       correccion_por = ${dir.id}, correccion_en = now() where diferencia_id = ${c.d.id}`).rejects.toThrow();
       // La base no deja cambiar la decisión ni borrar la resolución.
       await expect(sql`update resolucion_diferencia set motivo = 'Otro motivo' where diferencia_id = ${c.d.id}`).rejects.toThrow();
       await expect(sql`delete from resolucion_diferencia where diferencia_id = ${c.d.id}`).rejects.toThrow();
