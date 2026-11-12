@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
-import { ESTADO_DIFERENCIA, etiquetaDiferencia, NOMBRE_LUGAR } from "@/lib/datos-diferencia";
+import { ESTADO_DIFERENCIA, etiquetaDiferencia, NOMBRE_LUGAR, tiempoPendiente } from "@/lib/datos-diferencia";
 import { listaDiferencias } from "@/lib/diferencias";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
@@ -44,7 +44,18 @@ export default async function Diferencias({ params }: PageProps<"/sucursales/[co
                     </td>
                     <td data-etiqueta="Estado" data-testid="estado-caso">
                       {c.pendientes ? <span className="chip-estado chip-vencida">{c.pendientes} por revisar</span> : null}
-                      {c.paraDireccion ? <> <span className="chip-estado chip-vencida" data-testid="para-direccion">{c.paraDireccion} pendiente{c.paraDireccion === 1 ? "" : "s"} para Dirección</span></> : null}
+                      {c.paraDireccion ? (() => {
+                        const desde = c.diferencias.map((d) => d.pendienteDireccionDesde).filter((x): x is Date => !!x)
+                          .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0];
+                        const t = tiempoPendiente(desde);
+                        return (
+                          <>
+                            {" "}<span className="chip-estado chip-vencida" data-testid="para-direccion">{c.paraDireccion} pendiente{c.paraDireccion === 1 ? "" : "s"} para Dirección</span>
+                            <br /><span className="sub" data-testid="tiempo-pendiente">hace {t.texto}</span>
+                            {t.masDe48 ? <> <span className="chip-estado chip-vencida" data-testid="aviso-48">Más de 48 horas pendiente</span></> : null}
+                          </>
+                        );
+                      })() : null}
                       {!c.pendientes && !c.paraDireccion ? "Sin pendientes" : null}
                     </td>
                     <td data-etiqueta=""><Link href={`/sucursales/${codigo}/diferencias/${c.entregaId}`} data-testid="ver-caso">Ver caso</Link></td>

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolverCancelacion, solicitarCancelacion } from "@/lib/cancelaciones";
-import { detalleDiferencias, listaDiferencias, pendientesDeRevision, revisarDiferencia } from "@/lib/diferencias";
+import { detalleDiferencias, listaDiferencias, pendientesDeRevision, registrarCorreccion, resolverDiferencia, revisarDiferencia } from "@/lib/diferencias";
 import { confirmarApoyo, entregaEnCurso, recibirTurno, registrarEntrega, type DeclaracionApoyo } from "@/lib/entregas";
 import { abrirTurno, estadoTurno } from "@/lib/turnos";
 import { confirmarVisita, pantallaCobro } from "@/lib/visitas";
@@ -371,6 +371,115 @@ describe.skipIf(!URL_ADMIN)("diferencias de efectivo: lista y desglose del saldo
       const otro = await escenario();
       const d = await cambio(otro, "300", "300");
       expect((await detalleDiferencias(sql, otro.encargado, otro.codigo, d.entregaId))!.apoyos.map((a) => a.estado)).toEqual(["nadie", "nadie"]);
+    });
+  });
+
+  describe("resolución de Dirección", () => {
+    const resolver = (u: string, codigo: string, diferenciaId: string, decision: string, extra: { motivo?: string; origen?: string; requiereCorreccion?: boolean } = {}) =>
+      resolverDiferencia(sql, u, codigo, { diferenciaId, decision, motivo: extra.motivo ?? "Decisión de Dirección en la prueba", origen: extra.origen, requiereCorreccion: extra.requiereCorreccion }, PRUEBAS);
+
+    it("faltante confirmado: «Lo absorbe la sucursal» con motivo cierra el seguimiento; importes y apertura se conservan", async () => {
+      const e = await escenario();
+      const { entregaId, turnoNuevo } = await cambio(e, "300", "300");
+      const [d] = await difsDe(e.encargado, e.codigo, entregaId);
+      // Antes de confirmar el faltante, Dirección no resuelve.
+      expect(await resolver(e.dir, e.codigo, d.id, "absorbe_sucursal")).toEqual({ ok: false, error: "no_pendiente" });
+      await revisar(e.encargado, e.codigo, d.id, "faltante_confirmado", "No apareció tras recontar");
+      expect((await difsDe(e.dir, e.codigo, entregaId))[0]).toMatchObject({ estado: "faltante_confirmado", pendienteDireccionDesde: expect.any(Date) });
+      expect(await pendientesDeRevision(sql, e.dir, ids[e.codigo])).toBe(1);
+      expect(await pendientesDeRevision(sql, e.encargado, ids[e.codigo])).toBe(0);
+      // Solo Dirección; motivo obligatorio; decisión acorde al faltante.
+      expect(await resolver(e.admin, e.codigo, d.id, "absorbe_sucursal")).toEqual({ ok: false, error: "sin_permiso" });
+      expect(await resolver(e.dir, e.codigo, d.id, "absorbe_sucursal", { motivo: "no" })).toEqual({ ok: false, error: "motivo" });
+      expect(await resolver(e.dir, e.codigo, d.id, "queda_en_bolsa")).toEqual({ ok: false, error: "decision" });
+      expect(await resolver(e.dir, e.codigo, d.id, "absorbe_sucursal", { motivo: "Monto menor; se absorbe como pérdida de la sucursal" })).toEqual({ ok: true, entregaId });
+      expect(await resolver(e.dir, e.codigo, d.id, "absorbe_sucursal")).toEqual({ ok: false, error: "ya_resuelta" });
+      const c = (await detalleDiferencias(sql, e.dir, e.codigo, entregaId))!;
+      const nombreDir = (await sql<{ nombre: string }[]>`select nombre from usuario where id = ${e.dir}`)[0].nombre;
+      expect(c.diferencias[0]).toMatchObject({
+        estado: "resuelta", pendienteDireccionDesde: null,
+        resolucion: { decision: "absorbe_sucursal", motivo: "Monto menor; se absorbe como pérdida de la sucursal", resueltaPor: nombreDir, correccion: null },
+      });
+      expect(c.historial.map((h) => h.que)).toEqual(expect.arrayContaining([
+        expect.stringContaining("Resolución de Dirección (bolsa, −$50.00 contra el esperado): Lo absorbe la sucursal"),
+        "Seguimiento cerrado (bolsa, −$50.00 contra el esperado)",
+      ]));
+      expect(c.lugares.bolsa_visitas).toEqual({ esperado: "350.00", entregado: "300.00", inicial: "300.00", confirmado: "300.00" });
+      expect((await estadoTurno(sql, e.entra, e.codigo))!.turno).toMatchObject({ id: turnoNuevo, lugares: [{ contadoAlAbrir: "300.00" }, { contadoAlAbrir: "1200.00" }] });
+      expect(await pendientesDeRevision(sql, e.dir, ids[e.codigo])).toBe(0);
+      expect((await listaDiferencias(sql, e.dir, e.codigo))!.casos[0]).toMatchObject({ pendientes: 0, paraDireccion: 0 });
+    });
+
+    it("sobrante confirmado: «Se queda en la bolsa» cierra; «Origen identificado» cierra sin corrección o queda abierto: una nota sola no lo cierra", async () => {
+      const corregir = (k: { e: Esc; d: { id: string } }, correccion: string, referenciaTipo: string, referenciaId: string, u = k.e.dir) =>
+        registrarCorreccion(sql, u, k.e.codigo, { diferenciaId: k.d.id, correccion, referenciaTipo, referenciaId }, PRUEBAS);
+      const sobrante = async () => {
+        const e = await escenario();
+        const { entregaId } = await cambio(e, "400", "400");
+        const [d] = await difsDe(e.encargado, e.codigo, entregaId);
+        expect(d.importe).toBe("50.00");
+        await revisar(e.encargado, e.codigo, d.id, "sobrante_confirmado", "No se encontró de dónde salió");
+        return { e, entregaId, d };
+      };
+      const a = await sobrante();
+      expect(await resolver(a.e.dir, a.e.codigo, a.d.id, "absorbe_sucursal")).toEqual({ ok: false, error: "decision" });
+      expect(await resolver(a.e.dir, a.e.codigo, a.d.id, "queda_en_bolsa")).toMatchObject({ ok: true });
+      expect((await difsDe(a.e.dir, a.e.codigo, a.entregaId))[0].estado).toBe("resuelta");
+
+      const b = await sobrante();
+      expect(await resolver(b.e.dir, b.e.codigo, b.d.id, "origen_identificado")).toEqual({ ok: false, error: "origen" });
+      expect(await resolver(b.e.dir, b.e.codigo, b.d.id, "origen_identificado", { origen: "Propina de un visitante guardada en la bolsa", requiereCorreccion: false })).toMatchObject({ ok: true });
+      expect((await difsDe(b.e.dir, b.e.codigo, b.entregaId))[0]).toMatchObject({ estado: "resuelta", resolucion: { origen: "Propina de un visitante guardada en la bolsa", requiereCorreccion: false } });
+      expect(await corregir(b, "No aplica en esta prueba", "registro", "X-1")).toEqual({ ok: false, error: "no_pendiente" });
+
+      const c = await sobrante();
+      expect(await resolver(c.e.dir, c.e.codigo, c.d.id, "origen_identificado", { origen: "Una visita cobrada sin registrar", requiereCorreccion: true })).toMatchObject({ ok: true });
+      let x = (await difsDe(c.e.dir, c.e.codigo, c.entregaId))[0];
+      expect(x).toMatchObject({ estado: "correccion_pendiente", pendienteDireccionDesde: expect.any(Date) });
+      expect(await pendientesDeRevision(sql, c.e.dir, ids[c.e.codigo])).toBe(1);
+      expect(await corregir(c, "Cobro regularizado en la prueba", "cobro_visita", "TEN-0001", c.e.admin)).toEqual({ ok: false, error: "sin_permiso" });
+      expect(await corregir(c, "no", "", "")).toEqual({ ok: false, error: "correccion" });
+      // Una nota sola no cierra el caso.
+      expect(await corregir(c, "Visita registrada a la ficha ficticia; cobro regularizado", "", "")).toEqual({ ok: false, error: "referencia" });
+      // Una referencia que no corresponde a un registro verificable tampoco: hoy no existe el registro de esta corrección.
+      expect(await corregir(c, "Visita registrada a la ficha ficticia; cobro regularizado", "cobro_visita", "TEN-0001")).toEqual({ ok: false, error: "referencia_no_verificable" });
+      x = (await difsDe(c.e.dir, c.e.codigo, c.entregaId))[0];
+      expect(x).toMatchObject({ estado: "correccion_pendiente", resolucion: { correccion: null }, pendienteDireccionDesde: expect.any(Date) });
+      expect(await pendientesDeRevision(sql, c.e.dir, ids[c.e.codigo])).toBe(1);
+      const h = (await detalleDiferencias(sql, c.e.dir, c.e.codigo, c.entregaId))!.historial.map((e) => e.que);
+      expect(h.at(-1)).toEqual(expect.stringContaining("Origen identificado. Origen: «Una visita cobrada sin registrar» · corrección pendiente"));
+      expect(h.join("\n")).not.toContain("Seguimiento cerrado");
+      // Directo en la base: tampoco se cierra con una nota sola ni con una referencia no verificable.
+      const [dir] = await sql<{ id: string }[]>`select id from usuario where id = ${c.e.dir}`;
+      await expect(sql`update resolucion_diferencia set correccion = 'Nota sola de prueba', correccion_por = ${dir.id}, correccion_en = now()
+                       where diferencia_id = ${c.d.id}`).rejects.toThrow();
+      await expect(sql`update resolucion_diferencia set correccion = 'Nota de prueba', correccion_ref_tipo = 'cobro_visita', correccion_ref_id = 'TEN-0001',
+                       correccion_por = ${dir.id}, correccion_en = now() where diferencia_id = ${c.d.id}`).rejects.toThrow();
+      // La base no deja cambiar la decisión ni borrar la resolución.
+      await expect(sql`update resolucion_diferencia set motivo = 'Otro motivo' where diferencia_id = ${c.d.id}`).rejects.toThrow();
+      await expect(sql`delete from resolucion_diferencia where diferencia_id = ${c.d.id}`).rejects.toThrow();
+    });
+
+    it("tiempo pendiente: más de 48 horas se marca; quien participó no resuelve; en producción no se registra", async () => {
+      const e = await escenario();
+      const { entregaId } = await cambio(e, "300", "300");
+      const [d] = await difsDe(e.encargado, e.codigo, entregaId);
+      await revisar(e.encargado, e.codigo, d.id, "faltante_confirmado");
+      // Simula una revisión de hace 49 horas (solo posible quitando la protección en la prueba).
+      await sql.begin(async (tx) => {
+        await tx`alter table revision_diferencia disable trigger revision_diferencia_inmutable`;
+        await tx`update revision_diferencia set en = now() - interval '49 hours' where diferencia_id = ${d.id}`;
+        await tx`alter table revision_diferencia enable trigger revision_diferencia_inmutable`;
+      });
+      const { tiempoPendiente } = await import("@/lib/datos-diferencia");
+      const x = (await difsDe(e.dir, e.codigo, entregaId))[0];
+      expect(tiempoPendiente(x.pendienteDireccionDesde!)).toEqual({ texto: "2 días 1 h", masDe48: true });
+      expect(tiempoPendiente(new Date(Date.now() - 47 * 3_600_000))).toEqual({ texto: "1 día 23 h", masDe48: false });
+      // Dirección que participó en la entrega no resuelve.
+      await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${e.entra}, 'direccion', ${ids[e.codigo]}, 'Prueba de participación')`;
+      expect(await resolver(e.entra, e.codigo, d.id, "absorbe_sucursal")).toEqual({ ok: false, error: "participaste" });
+      expect(await resolverDiferencia(sql, e.dir, e.codigo, { diferenciaId: d.id, decision: "absorbe_sucursal", motivo: "Prueba ficticia" }, { entorno: "produccion" }))
+        .toEqual({ ok: false, error: "bloqueado_produccion" });
     });
   });
 });

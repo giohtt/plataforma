@@ -152,6 +152,7 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       // Diferencias de efectivo: consultan Encargado, Administración y Dirección. Recepción no.
       expect(filas.filter((f) => f.permiso === "diferencia.consultar").map((f) => f.rol).sort()).toEqual(["administracion", "direccion", "encargado"]);
       expect(filas.filter((f) => f.permiso === "diferencia.revisar").map((f) => f.rol).sort()).toEqual(["administracion", "direccion", "encargado"]);
+      expect(filas.filter((f) => f.permiso === "diferencia.resolver").map((f) => f.rol)).toEqual(["direccion"]);
       // Corregir: Encargado y Dirección. Fusionar: solo Dirección. Historial general: nadie todavía.
       expect(filas.filter((f) => f.permiso === "visitante.corregir").map((f) => f.rol).sort()).toEqual(["direccion", "encargado"]);
       expect(filas.filter((f) => f.permiso === "visitante.fusionar").map((f) => f.rol)).toEqual(["direccion"]);

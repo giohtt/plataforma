@@ -29,6 +29,7 @@ async function escenario() {
   const sofia = await crearCuenta("recepcion", codigo, "Sofía " + letras(5));
   const encargado = await crearCuenta("encargado", codigo, "Encargado " + letras(5));
   const admin = await crearCuenta("administracion", codigo, "Administración " + letras(5));
+  const dir = await crearCuenta("direccion", codigo, "Dirección " + letras(5));
   const [t] = await sql<{ id: string }[]>`
     insert into turno (sucursal_id, abierto_por) select id, ${laura.id} from sucursal where codigo = ${codigo} returning id`;
   await sql`insert into responsable_lugar (lugar_id, turno_id, usuario_id)
@@ -36,7 +37,7 @@ async function escenario() {
   await sql`insert into conteo_efectivo (turno_id, lugar_id, momento, importe, contado_por)
             select ${t.id}, l.id, 'apertura', case l.tipo when 'bolsa_visitas' then 650 else 1200 end, ${laura.id}
             from lugar_efectivo l join sucursal s on s.id = l.sucursal_id where s.codigo = ${codigo}`;
-  return { codigo, laura, sofia, encargado, admin, turnoId: t.id };
+  return { codigo, laura, sofia, encargado, admin, dir, turnoId: t.id };
 }
 async function entrar(page: Page, correo: string) {
   await page.context().clearCookies();
@@ -217,4 +218,65 @@ test("apoyo en el recuento: la Encargada declarada confirma desde su cuenta, no 
   await expect(page.getByTestId("desglose-total")).toBeVisible();
   await tablasSinDeslizar(page);
   if (process.env.CAPTURAR) await page.screenshot({ path: `${process.env.CAPTURAR}/apoyo-${test.info().project.name}.png`, fullPage: true });
+});
+
+test("Dirección resuelve un faltante confirmado: tiempo pendiente, aviso de más de 48 horas, «Lo absorbe la sucursal» y cierre", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.laura.correo);
+  await entregar(page, e.codigo, "600", "1200", e.sofia.nombre);
+  await entrar(page, e.sofia.correo);
+  await recibir(page, e.codigo, "600", "1200");
+
+  await entrar(page, e.encargado.correo);
+  await page.goto(`/sucursales/${e.codigo}/diferencias`);
+  await page.getByTestId("ver-caso").first().click();
+  await page.waitForLoadState("networkidle");
+  const dif = page.getByTestId("diferencia");
+  await dif.getByRole("radio", { name: /Faltante confirmado/ }).check();
+  await dif.getByLabel("Motivo (obligatorio)").fill("No apareció tras recontar dos veces");
+  await dif.getByRole("button", { name: "Registrar revisión" }).click();
+  await expect(page.getByTestId("estado-diferencia")).toHaveText("Faltante confirmado · pendiente para Dirección");
+  await expect(page.getByTestId("formulario-resolucion")).toHaveCount(0);
+
+  // Simula que el caso lleva 50 horas esperando a Dirección.
+  await sql.begin(async (tx) => {
+    await tx`alter table revision_diferencia disable trigger revision_diferencia_inmutable`;
+    await tx`update revision_diferencia r set en = now() - interval '50 hours' from diferencia_efectivo d
+             where d.id = r.diferencia_id and d.turno_id = ${e.turnoId}`;
+    await tx`alter table revision_diferencia enable trigger revision_diferencia_inmutable`;
+  });
+
+  await entrar(page, e.dir.correo);
+  await page.goto(`/sucursales/${e.codigo}`);
+  await expect(page.getByTestId("diferencias")).toHaveText("Diferencias de efectivo (1)");
+  await page.getByTestId("diferencias").click();
+  const caso = page.getByTestId("caso-diferencia").first();
+  await expect(caso.getByTestId("para-direccion")).toHaveText("1 pendiente para Dirección");
+  await expect(caso.getByTestId("tiempo-pendiente")).toHaveText("hace 2 días 2 h");
+  await expect(caso.getByTestId("aviso-48")).toHaveText("Más de 48 horas pendiente");
+  await caso.getByTestId("ver-caso").click();
+  await page.waitForLoadState("networkidle");
+  await expect(page.getByTestId("aviso-48")).toBeVisible();
+  const r = page.getByTestId("formulario-resolucion");
+  await expect(r.getByRole("radio")).toHaveCount(1);
+  await r.getByRole("button", { name: "Registrar decisión" }).click();
+  await expect(page.locator("p.aviso[role=alert]")).toHaveText("Revisa los campos marcados.");
+  await page.getByTestId("formulario-resolucion").getByLabel("Motivo (obligatorio)").fill("Monto menor; se absorbe como pérdida de la sucursal");
+  await page.getByTestId("formulario-resolucion").getByRole("button", { name: "Registrar decisión" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toHaveText("Decisión de Dirección registrada. Los importes no cambiaron.");
+  await expect(page.getByTestId("estado-diferencia")).toHaveText("Resuelta por Dirección · cerrada");
+  await expect(page.getByTestId("resolucion")).toContainText(`Decidió ${e.dir.nombre} (Dirección)`);
+  await expect(page.getByTestId("resolucion")).toContainText("Lo absorbe la sucursal");
+  await expect(page.getByTestId("aviso-48")).toHaveCount(0);
+  await expect(page.getByTestId("historial-caso")).toContainText("Seguimiento cerrado");
+  await expect(page.getByTestId("caso-bolsa_visitas").getByTestId("cifra-esperado")).toHaveText("$650.00");
+  await expect(page.getByTestId("caso-bolsa_visitas").getByTestId("cifra-recibido")).toHaveText("$600.00");
+  await tablasSinDeslizar(page);
+  await page.goto(`/sucursales/${e.codigo}`);
+  await expect(page.getByTestId("diferencias")).toHaveText("Diferencias de efectivo");
+
+  await entrar(page, e.sofia.correo);
+  await page.goto(`/sucursales/${e.codigo}/turno`);
+  await expect(page.getByTestId("recibida-bolsa_visitas").getByTestId("dif-esperado")).toHaveText("−$50.00 · Resuelta por Dirección · cerrada");
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("contado-al-abrir")).toHaveText("$600.00");
 });
