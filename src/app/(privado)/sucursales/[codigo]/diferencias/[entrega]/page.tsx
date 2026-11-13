@@ -110,11 +110,14 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
                   <p className="sub" data-testid="revision">
                     Revisó <strong>{d.revision.revisadaPor}</strong> ({NOMBRE_NIVEL[d.revision.nivel]}) · {hora.format(d.revision.en)} · Motivo: «{d.revision.motivo}»
                   </p>
+                  {/* El tiempo cuenta desde que se confirmó el faltante o sobrante; con la corrección pendiente, el caso sigue abierto. */}
                   {d.pendienteDireccionDesde ? (() => {
                     const t = tiempoPendiente(d.pendienteDireccionDesde);
                     return (
                       <p className="sub" data-testid="tiempo-pendiente">
-                        Pendiente para Dirección desde hace {t.texto}
+                        {d.estado === "correccion_pendiente"
+                          ? <>Corrección pendiente · Caso abierto desde hace {t.texto}</>
+                          : <>Pendiente para Dirección desde hace {t.texto}</>}
                         {t.masDe48 ? <> · <span className="chip-estado chip-vencida" data-testid="aviso-48">Más de 48 horas pendiente</span></> : null}
                       </p>
                     );

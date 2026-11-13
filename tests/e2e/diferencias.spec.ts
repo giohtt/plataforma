@@ -280,3 +280,67 @@ test("Dirección resuelve un faltante confirmado: tiempo pendiente, aviso de má
   await expect(page.getByTestId("recibida-bolsa_visitas").getByTestId("dif-esperado")).toHaveText("−$50.00 · Resuelta por Dirección · cerrada");
   await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("contado-al-abrir")).toHaveText("$600.00");
 });
+
+test("sobrante con corrección pendiente: «Caso abierto desde hace…», aviso de 48 horas y una nota sola no cierra", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.laura.correo);
+  await entregar(page, e.codigo, "700", "1200", e.sofia.nombre);
+  await entrar(page, e.sofia.correo);
+  await recibir(page, e.codigo, "700", "1200");
+
+  await entrar(page, e.encargado.correo);
+  await page.goto(`/sucursales/${e.codigo}/diferencias`);
+  await page.getByTestId("ver-caso").first().click();
+  await page.waitForLoadState("networkidle");
+  const dif = page.getByTestId("diferencia");
+  await dif.getByRole("radio", { name: /Sobrante confirmado/ }).check();
+  await dif.getByLabel("Motivo (obligatorio)").fill("Prueba ficticia: no se encontró el origen");
+  await dif.getByRole("button", { name: "Registrar revisión" }).click();
+  await expect(page.getByTestId("estado-diferencia")).toHaveText("Sobrante confirmado · pendiente para Dirección");
+
+  // Simula que el sobrante se confirmó hace 50 horas.
+  await sql.begin(async (tx) => {
+    await tx`alter table revision_diferencia disable trigger revision_diferencia_inmutable`;
+    await tx`update revision_diferencia r set en = now() - interval '50 hours' from diferencia_efectivo d
+             where d.id = r.diferencia_id and d.turno_id = ${e.turnoId}`;
+    await tx`alter table revision_diferencia enable trigger revision_diferencia_inmutable`;
+  });
+
+  await entrar(page, e.dir.correo);
+  await page.goto(`/sucursales/${e.codigo}/diferencias`);
+  await page.getByTestId("ver-caso").first().click();
+  await page.waitForLoadState("networkidle");
+  await expect(page.getByTestId("tiempo-pendiente")).toHaveText(/^Pendiente para Dirección desde hace 2 días 2 h/);
+  const r = page.getByTestId("formulario-resolucion");
+  await r.getByRole("radio", { name: /Origen identificado/ }).check();
+  await r.locator("textarea[name=origen]").fill("Prueba ficticia: visita cobrada sin registrar");
+  await r.getByRole("radio", { name: /Sí: el caso sigue abierto/ }).check();
+  await r.getByLabel("Motivo (obligatorio)").fill("Prueba ficticia: falta regularizar el cobro");
+  await r.getByRole("button", { name: "Registrar decisión" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toHaveText("Decisión de Dirección registrada. Los importes no cambiaron.");
+  await expect(page.getByTestId("estado-diferencia")).toHaveText("Resuelta por Dirección · corrección pendiente");
+  // El tiempo sigue contando desde que se confirmó el sobrante, con el aviso de más de 48 horas.
+  await expect(page.getByTestId("tiempo-pendiente")).toHaveText(/^Corrección pendiente · Caso abierto desde hace 2 días 2 h/);
+  await expect(page.getByTestId("tiempo-pendiente")).not.toContainText("Pendiente para Dirección");
+  await expect(page.getByTestId("aviso-48")).toHaveText("Más de 48 horas pendiente");
+
+  // Una nota sola no cierra; tras recargar, el caso sigue igual y el historial no tiene cierre.
+  const c = page.getByTestId("formulario-correccion");
+  await c.getByLabel("Descripción de la corrección realizada").fill("Prueba ficticia: se regularizó el cobro");
+  await c.getByRole("button", { name: "Registrar corrección y cerrar" }).click();
+  await expect(page.locator("p.aviso[role=alert]")).toHaveText("Revisa los campos marcados.");
+  await expect(page.getByTestId("formulario-correccion")).toContainText("Una nota sola no cierra el caso.");
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+  await expect(page.getByTestId("estado-diferencia")).toHaveText("Resuelta por Dirección · corrección pendiente");
+  await expect(page.getByTestId("tiempo-pendiente")).toHaveText(/^Corrección pendiente · Caso abierto desde hace 2 días 2 h/);
+  await expect(page.getByTestId("historial-caso")).not.toContainText("Seguimiento cerrado");
+  await expect(page.getByTestId("historial-caso")).not.toContainText("se regularizó el cobro");
+  await expect(page.getByTestId("caso-bolsa_visitas").getByTestId("cifra-esperado")).toHaveText("$650.00");
+  await expect(page.getByTestId("caso-bolsa_visitas").getByTestId("cifra-recibido")).toHaveText("$700.00");
+  await tablasSinDeslizar(page);
+
+  await entrar(page, e.sofia.correo);
+  await page.goto(`/sucursales/${e.codigo}/turno`);
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("contado-al-abrir")).toHaveText("$700.00");
+});
