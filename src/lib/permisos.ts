@@ -7,7 +7,7 @@ import type postgres from "postgres";
  */
 type Sql = postgres.Sql;
 
-export type Rol = "recepcion" | "encargado" | "administracion" | "direccion" | "contabilidad" | "mantenimiento" | "marketing" | "soporte";
+export type Rol = "recepcion" | "encargado" | "administracion" | "direccion" | "encargada_retiros" | "contabilidad" | "mantenimiento" | "marketing" | "soporte";
 
 export type SucursalAccesible = {
   id: string;
@@ -101,6 +101,7 @@ export const NOMBRE_PERFIL: Record<Rol, string> = {
   encargado: "Encargado de sucursal",
   administracion: "Administración",
   direccion: "Dirección",
+  encargada_retiros: "Encargada de retiros",
   contabilidad: "Contabilidad y fiscal",
   mantenimiento: "Mantenimiento",
   marketing: "Marketing y atención digital",

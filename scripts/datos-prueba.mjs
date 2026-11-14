@@ -38,6 +38,7 @@ export const USUARIOS_PRUEBA = [
   { correo: "recepcion.tenango.vespertina@prueba.fitnessland.invalid", nombre: "Recepción Tenango vespertina (prueba)" },
   { correo: "recepcion.santaana@prueba.fitnessland.invalid", nombre: "Recepción Santa Ana (prueba)" },
   { correo: "encargado.tenango@prueba.fitnessland.invalid", nombre: "Encargado Tenango (prueba)" },
+  { correo: "encargada.retiros@prueba.fitnessland.invalid", nombre: "Encargada de retiros (prueba)" },
   { correo: "administracion@prueba.fitnessland.invalid", nombre: "Administración (prueba)" },
   { correo: "administracion.tenango@prueba.fitnessland.invalid", nombre: "Administración Tenango (prueba)" },
   { correo: "direccion@prueba.fitnessland.invalid", nombre: "Dirección (prueba)" },
@@ -58,6 +59,8 @@ export const ASIGNACIONES_PRUEBA = [
   // Santa Ana se creó desde la pantalla en el sitio de pruebas: en una base nueva no existe y la asignación no se crea.
   { correo: `recepcion.santaana${D}`, rol: "recepcion", codigo: "SAA", siExiste: true },
   { correo: `encargado.tenango${D}`, rol: "encargado", codigo: "TEN" },
+  // Indicado el 13 nov 2026: Encargada de retiros autorizada solo en Tenango (bloque 5, retiros).
+  { correo: `encargada.retiros${D}`, rol: "encargada_retiros", codigo: "TEN" },
   { correo: `administracion${D}`, rol: "administracion", codigo: "TEN" },
   { correo: `administracion${D}`, rol: "administracion", codigo: "STG" },
   // Indicado el 10 nov 2026: Administración asignada solo a Tenango, para probar el alcance del historial.

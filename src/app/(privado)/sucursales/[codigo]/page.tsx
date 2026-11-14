@@ -8,6 +8,7 @@ import { historialSucursal } from "@/lib/catalogo-sucursales";
 import { NOMBRE_PERFIL, sucursalAccesiblePorCodigo, tienePermiso, type Rol } from "@/lib/permisos";
 import { requerirSesion } from "@/lib/sesion-servidor";
 import { puedeAutorizarCancelaciones } from "@/lib/cancelaciones";
+import { retirosPorConfirmar, retirosPorRevisar } from "@/lib/retiros";
 
 const ESTADO: Record<string, string> = { activa: "Activa", proxima: "Próxima apertura", inactiva: "Inactiva" };
 
@@ -24,6 +25,10 @@ const VISTAS: Partial<Record<Rol, { descripcion: string; pendientes: string[] }>
   administracion: {
     descripcion: "Revisar movimientos, comprobantes, gastos y cierres dentro de tu alcance.",
     pendientes: ["Revisión de cierres y entregas", "Gastos y comprobantes", "Conciliación bancaria"],
+  },
+  encargada_retiros: {
+    descripcion: "Confirmar desde tu cuenta los retiros que recibes en persona y registrar su depósito.",
+    pendientes: [],
   },
   direccion: {
     descripcion: "Consultar la sucursal y configurar según los permisos y facultades que tengas otorgados.",
@@ -58,7 +63,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -77,6 +82,8 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     sql<{ n: number }[]>`select count(*)::int as n from apoyo_conteo a join entrega_turno e on e.id = a.entrega_id
       join turno t on t.id = e.turno_id where a.usuario_id = ${sesion.usuarioId} and a.confirmado_en is null and t.sucursal_id = ${sucursal.id}`,
     historialSucursal(sql, sesion.usuarioId, sucursal.id),
+    retirosPorRevisar(sql, sesion.usuarioId, sucursal.id),
+    retirosPorConfirmar(sql, sesion.usuarioId, sucursal.id),
   ]);
 
   const permisos = await sql<{ clave: string; descripcion: string }[]>`
@@ -98,7 +105,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
       {sucursal.estadoOperativo === "inactiva" ? (
         <p className="aviso aviso-info" data-testid="sucursal-inactiva">Esta sucursal está desactivada.</p>
       ) : null}
-      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno || puedeVerReporteTurnos || puedeVerReporteVisitas || puedeVerificarAbonos || puedeAutorizarCancel || puedeAutorizarAcceso || puedeRevisarAccesos || puedeCobertura ? (
+      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno || puedeVerReporteTurnos || puedeVerReporteVisitas || puedeVerificarAbonos || puedeAutorizarCancel || puedeAutorizarAcceso || puedeRevisarAccesos || puedeCobertura || retirosRevisar !== null || retirosConfirmar !== null ? (
         <p className="fila-acciones">
           {puedeAbrirTurno || puedeVerTurno ? (
             <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/turno`} data-testid="turno">
@@ -123,6 +130,16 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
           {apoyosPendientes.n ? (
             <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/apoyos`} data-testid="apoyos-pendientes">
               Confirmar tu apoyo en un conteo ({apoyosPendientes.n})
+            </Link>
+          ) : null}
+          {retirosConfirmar !== null ? (
+            <Link className={retirosConfirmar ? "boton boton-principal" : "boton"} href="/retiros" data-testid="retiros-por-confirmar">
+              Retiros por confirmar{retirosConfirmar ? ` (${retirosConfirmar})` : ""}
+            </Link>
+          ) : null}
+          {retirosRevisar !== null ? (
+            <Link className="boton" href={`/sucursales/${sucursal.codigo}/retiros`} data-testid="retiros">
+              Retiros de efectivo{retirosRevisar ? ` (${retirosRevisar})` : ""}
             </Link>
           ) : null}
           {diferenciasPendientes !== null ? (
@@ -174,7 +191,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
           <section key={perfil} className="tarjeta" data-perfil={perfil}>
             <p className="etiqueta-perfil">Vista de {NOMBRE_PERFIL[perfil]}</p>
             <p>{vista?.descripcion ?? "Este perfil todavía no tiene pantallas en esta etapa."}</p>
-            {vista ? (
+            {vista?.pendientes.length ? (
               <ul className="pendientes">
                 {vista.pendientes.map((p) => (
                   <li key={p}><span>{p}</span><span className="chip-pendiente">Aún no disponible</span></li>
