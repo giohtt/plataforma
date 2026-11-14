@@ -436,6 +436,40 @@ describe.skipIf(!URL_ADMIN)("retiros a Encargada de retiros", () => {
     await expect(sql`update folio_retiro_contador set ultimo = 1 where sucursal_id = ${e.sucursalId}`).rejects.toThrow(/solo avanza/);
   });
 
+  it("el consecutivo tiene al menos dos dígitos y conserva todos desde 100: …-99 y …-100 se usan para confirmar sus entregas", async () => {
+    const e = await escenario();
+    const fecha = hoyLocal();
+    // Simula que ya se generaron 98 folios hoy en esta sucursal.
+    await sql`insert into folio_retiro_contador (sucursal_id, fecha, ultimo)
+              values (${e.sucursalId}, (now() at time zone 'America/Mexico_City')::date, 98)`;
+    const f99 = await generar(e, "bolsa_visitas");
+    expect(f99.folio).toBe(`${e.codigo}-${fecha}-99`);
+    const r99 = await registrarRetiro(sql, e.recepcion, e.codigo, { turnoId: e.turnoId, folioId: f99.folioId, contado: "900", cambio: "500", encargada: e.encargada }, PRUEBAS);
+    expect(r99).toMatchObject({ ok: true, folio: `${e.codigo}-${fecha}-99` });
+    const f100 = await generar(e, "bolsa_visitas");
+    expect(f100.folio).toBe(`${e.codigo}-${fecha}-100`);
+    const r100 = await registrarRetiro(sql, e.recepcion, e.codigo, { turnoId: e.turnoId, folioId: f100.folioId, contado: "500", cambio: "100", encargada: e.encargada }, PRUEBAS);
+    expect(r100).toMatchObject({ ok: true, folio: `${e.codigo}-${fecha}-100` });
+    expect((await retirosDelTurno(sql, e.turnoId)).map((r) => [r.folio, r.importe, r.textoEstado])).toEqual([
+      [`${e.codigo}-${fecha}-99`, "400.00", "Pendiente de confirmar por Encargada de retiros"],
+      [`${e.codigo}-${fecha}-100`, "400.00", "Pendiente de confirmar por Encargada de retiros"],
+    ]);
+    expect((await sql`select consecutivo, estado from folio_retiro where sucursal_id = ${e.sucursalId} order by consecutivo`).map((x) => [x.consecutivo, x.estado]))
+      .toEqual([[99, "usado"], [100, "usado"]]);
+    // La base no acepta un folio recortado («…-10» para el consecutivo 100) ni sin el cero («…-1» para el 1).
+    await sql`update folio_retiro_contador set ultimo = ultimo + 1 where sucursal_id = ${e.sucursalId}`;
+    const lugar = (await sql`select id from lugar_efectivo where sucursal_id = ${e.sucursalId} and tipo = 'cajon_mensualidades'`)[0].id;
+    await expect(sql`insert into folio_retiro (sucursal_id, fecha, consecutivo, folio, turno_id, lugar_id, reservado_por)
+      values (${e.sucursalId}, (now() at time zone 'America/Mexico_City')::date, 101, ${`${e.codigo}-${fecha}-10`}, ${e.turnoId}, ${lugar}, ${e.recepcion})`)
+      .rejects.toThrow(/no válido/);
+    const otra = await escenario();
+    await sql`insert into folio_retiro_contador (sucursal_id, fecha, ultimo) values (${otra.sucursalId}, (now() at time zone 'America/Mexico_City')::date, 1)`;
+    const lugarOtra = (await sql`select id from lugar_efectivo where sucursal_id = ${otra.sucursalId} and tipo = 'bolsa_visitas'`)[0].id;
+    await expect(sql`insert into folio_retiro (sucursal_id, fecha, consecutivo, folio, turno_id, lugar_id, reservado_por)
+      values (${otra.sucursalId}, (now() at time zone 'America/Mexico_City')::date, 1, ${`${otra.codigo}-${fecha}-1`}, ${otra.turnoId}, ${lugarOtra}, ${otra.recepcion})`)
+      .rejects.toThrow(/no válido/);
+  });
+
   it("dos retiros preparados al mismo tiempo reciben folios distintos", async () => {
     const e = await escenario();
     const [a, b] = await Promise.all([
