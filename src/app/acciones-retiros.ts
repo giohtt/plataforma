@@ -9,7 +9,7 @@ import { leerImporte, MENSAJES_IMPORTE } from "@/lib/datos-turno";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import {
-  confirmarRetiro, recontarRetiro, registrarDeposito, registrarRetiro, revisarRetiro,
+  cancelarFolio, confirmarRetiro, generarFolio, recontarRetiro, registrarDeposito, registrarRetiro, revisarRetiro,
   type ErrorConfirmacion, type ErrorDeposito, type ErrorRetiro, type ErrorRevisionRetiro,
 } from "@/lib/retiros";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
@@ -44,33 +44,53 @@ const MENSAJES_RETIRO: Record<ErrorRetiro, string> = {
   entrega_en_curso: "Hay un cambio de turno en curso: no se registran retiros hasta que se confirme o se cancele.",
   lugar: "Elige la bolsa de visitas o el cajón de mensualidades.",
   cambio_mayor: "Lo que deja para cambio debe ser menor que lo contado: el retiro no puede quedar en $0.",
-  folio: "Escribe el folio del sobre: de 3 a 30 letras, números o guiones.",
-  folio_repetido: "Ese folio ya se usó en esta sucursal. Revisa el sobre: cada folio es único.",
+  folio: "Ese folio ya se usó, se canceló o es de otro turno. Genera un folio nuevo.",
+  folio_repetido: "Ese folio ya se usó en otro retiro con otros datos. Revisa el turno.",
   encargada: "Elige a la Encargada de retiros que recibe el sobre en persona.",
   cambio: "El turno cambió mientras tenías abierta la pantalla. Revisa los datos actuales.",
   bloqueado_produccion: "Los retiros están desactivados fuera del entorno de pruebas.",
 };
 
+/** «Generar folio»: reserva el folio y vuelve a la pantalla para anotarlo en el sobre. No mueve efectivo. */
+export async function accionGenerarFolio(previo: EstadoFormularioRetiro, datos: FormData): Promise<EstadoFormularioRetiro> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo");
+  const r = await generarFolio(sql, sesion.usuarioId, codigo, { turnoId: leer("turno"), lugar: leer("lugar") }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/turno/retiro`);
+  return { error: MENSAJES_RETIRO[r.error], intento: (previo?.intento ?? 0) + 1 };
+}
+
+/** «Cancelar preparación»: el folio queda cancelado, sin salida y sin reutilizarse. */
+export async function accionCancelarFolio(previo: EstadoFormularioRetiro, datos: FormData): Promise<EstadoFormularioRetiro> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo");
+  const r = await cancelarFolio(sql, sesion.usuarioId, codigo, { folioId: leer("folio") }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/turno/retiro?cancelado=${encodeURIComponent(r.folio)}`);
+  return { error: MENSAJES_RETIRO[r.error], intento: (previo?.intento ?? 0) + 1 };
+}
+
+/** «Confirmar entrega»: el sobre con el folio generado ya se entregó en persona; se descuenta la salida. */
 export async function accionEntregarRetiro(previo: EstadoFormularioRetiro, datos: FormData): Promise<EstadoFormularioRetiro> {
   const { sesion, sql } = await inicio();
   const leer = lector(datos);
   const codigo = leer("codigo");
-  const valores = { lugar: leer("lugar"), contado: leer("contado", 30), cambio: leer("cambio", 30), folio: leer("folio"), encargada: leer("encargada") };
+  const valores = { contado: leer("contado", 30), cambio: leer("cambio", 30), encargada: leer("encargada") };
   const intento = (previo?.intento ?? 0) + 1;
   const contado = leerImporte(valores.contado);
   const cambio = leerImporte(valores.cambio);
   const errores: NonNullable<EstadoFormularioRetiro>["errores"] = {
     contado: contado.ok ? undefined : MENSAJES_IMPORTE[contado.motivo],
     cambio: cambio.ok ? undefined : cambio.motivo === "vacio" ? "Escribe cuánto deja para cambio. Si no deja nada, escribe 0." : MENSAJES_IMPORTE[cambio.motivo],
-    folio: valores.folio.trim() ? undefined : MENSAJES_RETIRO.folio,
     encargada: valores.encargada ? undefined : MENSAJES_RETIRO.encargada,
   };
-  if (!contado.ok || !cambio.ok || errores.folio || errores.encargada) return { error: REVISA, errores, valores, intento };
+  if (!contado.ok || !cambio.ok || errores.encargada) return { error: REVISA, errores, valores, intento };
   const r = await registrarRetiro(sql, sesion.usuarioId, codigo,
-    { turnoId: leer("turno"), lugar: valores.lugar, contado: contado.valor, cambio: cambio.valor, folio: valores.folio, encargada: valores.encargada },
+    { turnoId: leer("turno"), folioId: leer("folio"), contado: contado.valor, cambio: cambio.valor, encargada: valores.encargada },
     { entorno: leerEntorno() });
-  if (r.ok) redirect(`/sucursales/${codigo}/turno?aviso=retiro${r.diferencia ? `&dif=${r.diferencia}` : ""}`);
-  const campo = r.error === "cambio_mayor" ? "cambio" : r.error === "folio" || r.error === "folio_repetido" ? "folio" : r.error === "encargada" ? "encargada" : null;
+  if (r.ok) redirect(`/sucursales/${codigo}/turno?aviso=retiro&folio=${encodeURIComponent(r.folio)}${r.diferencia ? `&dif=${r.diferencia}` : ""}`);
+  const campo = r.error === "cambio_mayor" ? "cambio" : r.error === "encargada" ? "encargada" : null;
   if (campo) return { error: REVISA, errores: { [campo]: MENSAJES_RETIRO[r.error] }, valores, intento };
   return { error: MENSAJES_RETIRO[r.error], valores, intento };
 }

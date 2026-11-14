@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from "react";
 import {
-  accionConfirmarRetiro, accionEntregarRetiro, accionRecontarRetiro, accionRegistrarDeposito, accionRevisarRetiro,
+  accionCancelarFolio, accionConfirmarRetiro, accionEntregarRetiro, accionGenerarFolio, accionRecontarRetiro, accionRegistrarDeposito, accionRevisarRetiro,
   type EstadoFormularioRetiro,
 } from "@/app/acciones-retiros";
 import { leerImporte } from "@/lib/datos-turno";
@@ -41,27 +41,20 @@ function Importe({ estado, campo, id, etiqueta, ayuda, alCambiar }: {
 const NOMBRE = { bolsa_visitas: "Bolsa de visitas", cajon_mensualidades: "Cajón de mensualidades" } as const;
 
 /**
- * Recepción entrega en persona el sobre de UN lugar: cuenta, captura lo que deja para cambio (lo indica Encargada de
- * retiros) y el folio. Se lleva = contado − cambio.
+ * Recepción prepara y entrega en persona el sobre de UN lugar, en dos pasos:
+ * 1. «Generar folio»: la plataforma reserva el folio (por ejemplo TEN-20261113-01) para anotarlo en el sobre.
+ * 2. «Confirmar entrega»: con el sobre ya entregado, registra lo contado y lo que deja para cambio (lo indica
+ *    Encargada de retiros). La salida (contado − cambio) se descuenta en ese momento.
+ * «Cancelar preparación» deja el folio cancelado, sin salida y sin reutilizarse.
  */
-export function FormularioRetiro({ codigo, turnoId, lugar, esperado, diferenciaRetiros, encargadas }: {
+export function FormularioRetiro({ codigo, turnoId, lugar, esperado, diferenciaRetiros, encargadas, reserva }: {
   codigo: string; turnoId: string; lugar: keyof typeof NOMBRE; esperado: string | null; diferenciaRetiros: string;
   encargadas: { id: string; nombre: string }[];
+  reserva: { id: string; folio: string } | null;
 }) {
-  const [estado, accion, enviando] = useActionState(accionEntregarRetiro, null);
-  const [contado, setContado] = useState(estado?.valores?.contado ?? "");
-  const [cambio, setCambio] = useState(estado?.valores?.cambio ?? "");
-  const c = leerImporte(contado);
-  const k = leerImporte(cambio);
-  const llevaC = c.ok && k.ok ? cent(c.valor) - cent(k.valor) : null;
-  const id = (x: string) => `${x}-${lugar}`;
   return (
-    <form action={accion} className="formulario tarjeta" key={estado?.intento ?? 0} noValidate data-testid={`retiro-${lugar}`}>
+    <div className="formulario tarjeta" data-testid={`retiro-${lugar}`}>
       <h2 className="titulo-seccion">{NOMBRE[lugar]}</h2>
-      <Aviso estado={estado} />
-      <input type="hidden" name="codigo" value={codigo} />
-      <input type="hidden" name="turno" value={turnoId} />
-      <input type="hidden" name="lugar" value={lugar} />
       <dl className="cuentas-lugar">
         <dt>Efectivo esperado</dt>
         <dd data-testid="retiro-esperado">{esperado !== null ? <strong>{pesos.format(Number(esperado))}</strong> : "No calculado: faltan datos de Open Desk"}</dd>
@@ -71,33 +64,78 @@ export function FormularioRetiro({ codigo, turnoId, lugar, esperado, diferenciaR
           Este esperado ya considera la diferencia de {firmado(cent(diferenciaRetiros))} registrada en un retiro anterior de este turno, para no registrarla dos veces.
         </p>
       ) : null}
-      <Importe estado={estado} campo="contado" id={id("contado")} etiqueta="Total contado antes del retiro" alCambiar={setContado}
-        ayuda={esperado !== null && c.ok ? (cent(c.valor) === cent(esperado) ? "Coincide con el esperado." : `No coincide con el esperado: al entregar se registra una diferencia de ${firmado(cent(c.valor) - cent(esperado))} contra el esperado. Se vincula al cambio de turno si sigue presente, sin duplicarse.`) : undefined} />
-      <Importe estado={estado} campo="cambio" id={id("cambio")} etiqueta="Deja para cambio (lo indica Encargada de retiros)" alCambiar={setCambio}
-        ayuda="Si no deja nada, escribe 0." />
-      <p data-testid="se-lleva">
-        Se lleva Encargada de retiros: <strong>{llevaC !== null ? (llevaC > 0 ? pesos.format(llevaC / 100) : "debe ser mayor que $0") : "—"}</strong>
-      </p>
-      <div className="campo">
-        <label htmlFor={id("folio")}>Folio del sobre</label>
-        <input id={id("folio")} name="folio" autoComplete="off" maxLength={30} defaultValue={estado?.valores?.folio ?? ""} className="mono"
-          aria-invalid={estado?.errores?.folio ? true : undefined} />
-        <span className="sub">Único en la sucursal. Letras, números y guiones.</span>
-        <ErrorCampo estado={estado} campo="folio" id={id("folio")} />
-      </div>
-      <div className="campo">
-        <label htmlFor={id("encargada")}>Encargada de retiros que recibe en persona</label>
-        <select id={id("encargada")} name="encargada" defaultValue={estado?.valores?.encargada ?? (encargadas.length === 1 ? encargadas[0].id : "")}>
-          <option value="">Elige</option>
-          {encargadas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
-        </select>
-        <ErrorCampo estado={estado} campo="encargada" id={id("encargada")} />
-      </div>
-      <button className="boton boton-principal" type="submit" disabled={enviando}>
-        {enviando ? "Registrando…" : `Entregar a Encargada de retiros${llevaC && llevaC > 0 ? ` · ${pesos.format(llevaC / 100)}` : ""}`}
-      </button>
-      <p className="sub">La salida se descuenta al registrar la entrega. Queda «Pendiente de confirmar por Encargada de retiros» hasta que ella cuente desde su cuenta.</p>
+      {reserva
+        ? <ConfirmarEntrega codigo={codigo} turnoId={turnoId} lugar={lugar} esperado={esperado} encargadas={encargadas} reserva={reserva} />
+        : <GenerarFolio codigo={codigo} turnoId={turnoId} lugar={lugar} />}
+    </div>
+  );
+}
+
+function GenerarFolio({ codigo, turnoId, lugar }: { codigo: string; turnoId: string; lugar: string }) {
+  const [estado, accion, enviando] = useActionState(accionGenerarFolio, null);
+  return (
+    <form action={accion} className="formulario" noValidate>
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="turno" value={turnoId} />
+      <input type="hidden" name="lugar" value={lugar} />
+      <p className="sub">Primero genera el folio y anótalo en el sobre. Generarlo no mueve efectivo.</p>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Generando…" : "Generar folio"}</button>
     </form>
+  );
+}
+
+function ConfirmarEntrega({ codigo, turnoId, lugar, esperado, encargadas, reserva }: {
+  codigo: string; turnoId: string; lugar: string; esperado: string | null;
+  encargadas: { id: string; nombre: string }[]; reserva: { id: string; folio: string };
+}) {
+  const [estado, accion, enviando] = useActionState(accionEntregarRetiro, null);
+  const [cancelacion, cancelar, cancelando] = useActionState(accionCancelarFolio, null);
+  const [contado, setContado] = useState(estado?.valores?.contado ?? "");
+  const [cambio, setCambio] = useState(estado?.valores?.cambio ?? "");
+  const c = leerImporte(contado);
+  const k = leerImporte(cambio);
+  const llevaC = c.ok && k.ok ? cent(c.valor) - cent(k.valor) : null;
+  const id = (x: string) => `${x}-${lugar}`;
+  return (
+    <>
+      <div className="folio-generado" data-testid="folio-generado">
+        <span className="sub">Anota este folio en el sobre</span>
+        <strong className="mono">{reserva.folio}</strong>
+      </div>
+      <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate>
+        <Aviso estado={estado} />
+        <input type="hidden" name="codigo" value={codigo} />
+        <input type="hidden" name="turno" value={turnoId} />
+        <input type="hidden" name="folio" value={reserva.id} />
+        <Importe estado={estado} campo="contado" id={id("contado")} etiqueta="Total contado antes del retiro" alCambiar={setContado}
+          ayuda={esperado !== null && c.ok ? (cent(c.valor) === cent(esperado) ? "Coincide con el esperado." : `No coincide con el esperado: al confirmar se registra una diferencia de ${firmado(cent(c.valor) - cent(esperado))} contra el esperado. Se vincula al cambio de turno si sigue presente, sin duplicarse.`) : undefined} />
+        <Importe estado={estado} campo="cambio" id={id("cambio")} etiqueta="Deja para cambio (lo indica Encargada de retiros)" alCambiar={setCambio}
+          ayuda="Si no deja nada, escribe 0." />
+        <p data-testid="se-lleva">
+          Se lleva Encargada de retiros: <strong>{llevaC !== null ? (llevaC > 0 ? pesos.format(llevaC / 100) : "debe ser mayor que $0") : "—"}</strong>
+        </p>
+        <div className="campo">
+          <label htmlFor={id("encargada")}>Encargada de retiros que recibe en persona</label>
+          <select id={id("encargada")} name="encargada" defaultValue={estado?.valores?.encargada ?? (encargadas.length === 1 ? encargadas[0].id : "")}>
+            <option value="">Elige</option>
+            {encargadas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+          </select>
+          <ErrorCampo estado={estado} campo="encargada" id={id("encargada")} />
+        </div>
+        <button className="boton boton-principal" type="submit" disabled={enviando}>
+          {enviando ? "Registrando…" : `Confirmar entrega${llevaC && llevaC > 0 ? ` · ${pesos.format(llevaC / 100)}` : ""}`}
+        </button>
+        <p className="sub">Pulsa «Confirmar entrega» cuando el sobre ya se entregó en persona: en ese momento se descuenta la salida. Queda «Pendiente de confirmar por Encargada de retiros» hasta que ella cuente desde su cuenta.</p>
+      </form>
+      <form action={cancelar} className="formulario">
+        <Aviso estado={cancelacion} />
+        <input type="hidden" name="codigo" value={codigo} />
+        <input type="hidden" name="folio" value={reserva.id} />
+        <button className="boton" type="submit" disabled={cancelando}>{cancelando ? "Cancelando…" : "Cancelar preparación"}</button>
+        <span className="sub">Sin salida de efectivo. El folio {reserva.folio} queda cancelado y no se vuelve a usar.</span>
+      </form>
+    </>
   );
 }
 

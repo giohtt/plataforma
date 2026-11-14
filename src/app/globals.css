@@ -935,3 +935,16 @@ fieldset.sin-marco {
 td.mono {
   white-space: nowrap;
 }
+.folio-generado {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.folio-generado strong {
+  font-size: 26px;
+  letter-spacing: 0.02em;
+}
