@@ -79,6 +79,8 @@ export type LugarRetiro = {
   /** Diferencias contra el esperado ya registradas al retirar en este turno. */
   diferenciaRetiros: string;
   responsable: boolean;
+  /** Folio generado y reservado para la preparación en curso de este lugar, si la hay. */
+  reserva: { id: string; folio: string; en: Date } | null;
 };
 export type PantallaRetiro =
   | { ok: true; sucursal: string; turnoId: string; lugares: LugarRetiro[]; encargadas: Persona[]; retiros: RetiroDelTurno[] }
@@ -102,11 +104,18 @@ export async function pantallaRetiro(sql: Sql, usuarioId: string, codigo: string
     if ((await tx`select 1 from entrega_turno where turno_id = ${t.id} and estado in ('pendiente', 'recuento')`).length) {
       return { ok: false, error: "entrega_en_curso" };
     }
+    const reservas = await tx<{ id: string; folio: string; en: Date; tipo: TipoLugar }[]>`
+      select f.id, f.folio, f.reservado_en as en, l.tipo from folio_retiro f join lugar_efectivo l on l.id = f.lugar_id
+      where f.turno_id = ${t.id} and f.estado = 'reservado'`;
     return {
       ok: true, sucursal: s.nombre, turnoId: t.id,
-      lugares: t.lugares.map((l) => ({
-        tipo: l.tipo, esperado: esperadoParaRetiro(l), diferenciaRetiros: l.diferenciaRetiros, responsable: l.responsableId === usuarioId,
-      })),
+      lugares: t.lugares.map((l) => {
+        const r = reservas.find((x) => x.tipo === l.tipo);
+        return {
+          tipo: l.tipo, esperado: esperadoParaRetiro(l), diferenciaRetiros: l.diferenciaRetiros, responsable: l.responsableId === usuarioId,
+          reserva: r ? { id: r.id, folio: r.folio, en: r.en } : null,
+        };
+      }),
       encargadas: await encargadas(tx, s.id, usuarioId),
       retiros: await retirosDelTurno(tx, t.id),
     };
@@ -114,62 +123,140 @@ export async function pantallaRetiro(sql: Sql, usuarioId: string, codigo: string
 }
 
 /**
- * Recepción registra la entrega en persona de un sobre: lo contado, lo que deja para cambio (lo indica Encargada de
- * retiros) y el folio. La salida (contado − cambio) se descuenta del lugar en la misma transacción.
+ * Comprobaciones comunes de Recepción y bloqueo del turno (primero el turno, como cobros, cancelaciones y cambio de
+ * turno). Devuelve la sucursal, el turno y el lugar del que es responsable vigente.
+ */
+async function lugarDeRecepcion(tx: Tx, usuarioId: string, codigo: string, turnoId: string, lugar: string) {
+  const s = await sucursalDe(tx, usuarioId, codigo);
+  if (!s) return { ok: false as const, error: "no_encontrada" as const };
+  if (!s.retira) return { ok: false as const, error: "sin_permiso" as const };
+  if (s.inactiva) return { ok: false as const, error: "sucursal_inactiva" as const };
+  const [t] = await tx<{ id: string }[]>`select id from turno where sucursal_id = ${s.id} and cerrado_en is null for update`;
+  if (!t) return { ok: false as const, error: "sin_turno" as const };
+  if (t.id !== turnoId) return { ok: false as const, error: "cambio" as const };
+  const [l] = await tx<{ id: string; responsable: string }[]>`
+    select l.id, r.usuario_id as responsable from lugar_efectivo l
+    join responsable_lugar r on r.lugar_id = l.id and r.turno_id = ${t.id} and r.hasta is null
+    where l.sucursal_id = ${s.id} and l.tipo = ${lugar}`;
+  if (!l || l.responsable !== usuarioId) return { ok: false as const, error: "no_responsable" as const };
+  if ((await tx`select 1 from entrega_turno where turno_id = ${t.id} and estado in ('pendiente', 'recuento')`).length) {
+    return { ok: false as const, error: "entrega_en_curso" as const };
+  }
+  return { ok: true as const, s, t, l };
+}
+
+/**
+ * «Generar folio»: reserva el siguiente folio de la sucursal para la fecha local, por ejemplo TEN-20261113-01, y lo
+ * devuelve para anotarlo en el sobre. No mueve efectivo. Si ya hay una preparación abierta para ese lugar y turno,
+ * devuelve la misma (un doble clic no gasta otro folio). El consecutivo nunca se reutiliza.
+ */
+export async function generarFolio(
+  sql: Sql,
+  usuarioId: string,
+  codigo: string,
+  datos: { turnoId: string; lugar: string },
+  { entorno }: { entorno: Entorno },
+): Promise<{ ok: true; folioId: string; folio: string } | { ok: false; error: ErrorRetiro }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (datos.lugar !== "bolsa_visitas" && datos.lugar !== "cajon_mensualidades") return { ok: false, error: "lugar" };
+  if (!esIdentificadorValido(datos.turnoId)) return { ok: false, error: "cambio" };
+  return sql.begin(async (tx) => {
+    const c = await lugarDeRecepcion(tx, usuarioId, codigo, datos.turnoId, datos.lugar);
+    if (!c.ok) return c;
+    const [abierta] = await tx<{ id: string; folio: string }[]>`
+      select id, folio from folio_retiro where turno_id = ${c.t.id} and lugar_id = ${c.l.id} and estado = 'reservado'`;
+    if (abierta) return { ok: true as const, folioId: abierta.id, folio: abierta.folio };
+    // El contador por sucursal y fecha se incrementa con bloqueo de fila: dos preparaciones a la vez reciben folios distintos.
+    const [n] = await tx<{ fecha: string; iso: string; ultimo: number }[]>`
+      insert into folio_retiro_contador (sucursal_id, fecha, ultimo)
+      values (${c.s.id}, (now() at time zone 'America/Mexico_City')::date, 1)
+      on conflict (sucursal_id, fecha) do update set ultimo = folio_retiro_contador.ultimo + 1
+      returning to_char(fecha, 'YYYYMMDD') as fecha, fecha::text as iso, ultimo`;
+    const folio = `${codigo}-${n.fecha}-${String(n.ultimo).padStart(2, "0")}`;
+    const [f] = await tx<{ id: string }[]>`
+      insert into folio_retiro (sucursal_id, fecha, consecutivo, folio, turno_id, lugar_id, reservado_por)
+      values (${c.s.id}, ${n.iso}::text::date, ${n.ultimo}, ${folio}, ${c.t.id}, ${c.l.id}, ${usuarioId})
+      returning id`;
+    await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
+             values ('folio_retiro', ${f.id}, 'generar', ${tx.json({ sucursal: codigo, lugar: datos.lugar, folio })}, ${usuarioId})`;
+    return { ok: true as const, folioId: f.id, folio };
+  });
+}
+
+/** «Cancelar preparación»: el folio queda cancelado, sin salida de efectivo y sin reutilizarse. */
+export async function cancelarFolio(
+  sql: Sql,
+  usuarioId: string,
+  codigo: string,
+  datos: { folioId: string },
+  { entorno }: { entorno: Entorno },
+): Promise<{ ok: true; folio: string } | { ok: false; error: ErrorRetiro }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!esIdentificadorValido(datos.folioId)) return { ok: false, error: "folio" };
+  return sql.begin(async (tx) => {
+    const s = await sucursalDe(tx, usuarioId, codigo);
+    if (!s) return { ok: false as const, error: "no_encontrada" as const };
+    const [f] = await tx<{ id: string; folio: string; estado: string; reservado_por: string }[]>`
+      select id, folio, estado, reservado_por from folio_retiro where id = ${datos.folioId} and sucursal_id = ${s.id} for update`;
+    if (!f || f.reservado_por !== usuarioId) return { ok: false as const, error: "folio" as const };
+    if (f.estado === "cancelado") return { ok: true as const, folio: f.folio };
+    if (f.estado !== "reservado") return { ok: false as const, error: "folio" as const };
+    await tx`update folio_retiro set estado = 'cancelado', resuelto_en = now() where id = ${f.id}`;
+    await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
+             values ('folio_retiro', ${f.id}, 'cancelar', ${tx.json({ sucursal: codigo, folio: f.folio })}, ${usuarioId})`;
+    return { ok: true as const, folio: f.folio };
+  });
+}
+
+/**
+ * «Confirmar entrega»: el sobre con el folio generado ya se entregó en persona. Registra lo contado, lo que deja para
+ * cambio (lo indica Encargada de retiros) y descuenta la salida (contado − cambio) en la misma transacción. La reserva
+ * queda usada.
  */
 export async function registrarRetiro(
   sql: Sql,
   usuarioId: string,
   codigo: string,
-  datos: { turnoId: string; lugar: string; contado: string; cambio: string; folio: string; encargada: string },
+  datos: { turnoId: string; folioId: string; contado: string; cambio: string; encargada: string },
   { entorno }: { entorno: Entorno },
-): Promise<{ ok: true; retiroId: string; diferencia: string | null } | { ok: false; error: ErrorRetiro }> {
+): Promise<{ ok: true; retiroId: string; folio: string; diferencia: string | null } | { ok: false; error: ErrorRetiro }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
-  if (datos.lugar !== "bolsa_visitas" && datos.lugar !== "cajon_mensualidades") return { ok: false, error: "lugar" };
-  const folio = leerFolio(datos.folio);
-  if (!folio) return { ok: false, error: "folio" };
+  if (!esIdentificadorValido(datos.folioId)) return { ok: false, error: "folio" };
   if (!esIdentificadorValido(datos.encargada)) return { ok: false, error: "encargada" };
   if (!esIdentificadorValido(datos.turnoId)) return { ok: false, error: "cambio" };
   const importe = cent(datos.contado) - cent(datos.cambio);
   if (importe <= 0) return { ok: false, error: "cambio_mayor" };
   return sql.begin(async (tx) => {
-    const s = await sucursalDe(tx, usuarioId, codigo);
-    if (!s) return { ok: false as const, error: "no_encontrada" as const };
-    if (!s.retira) return { ok: false as const, error: "sin_permiso" as const };
-    if (s.inactiva) return { ok: false as const, error: "sucursal_inactiva" as const };
-    // Mismo orden de bloqueo que cobros, cancelaciones y cambio de turno: primero el turno.
-    const [t] = await tx<{ id: string }[]>`select id from turno where sucursal_id = ${s.id} and cerrado_en is null for update`;
-    if (!t) return { ok: false as const, error: "sin_turno" as const };
-    if (t.id !== datos.turnoId) return { ok: false as const, error: "cambio" as const };
-    const [l] = await tx<{ id: string; responsable: string }[]>`
-      select l.id, r.usuario_id as responsable from lugar_efectivo l
-      join responsable_lugar r on r.lugar_id = l.id and r.turno_id = ${t.id} and r.hasta is null
-      where l.sucursal_id = ${s.id} and l.tipo = ${datos.lugar}`;
-    if (!l || l.responsable !== usuarioId) return { ok: false as const, error: "no_responsable" as const };
-    if ((await tx`select 1 from entrega_turno where turno_id = ${t.id} and estado in ('pendiente', 'recuento')`).length) {
-      return { ok: false as const, error: "entrega_en_curso" as const };
+    const [reserva] = await tx<{ tipo: TipoLugar }[]>`
+      select l.tipo from folio_retiro f join lugar_efectivo l on l.id = f.lugar_id where f.id = ${datos.folioId}`;
+    if (!reserva) return { ok: false as const, error: "folio" as const };
+    const c = await lugarDeRecepcion(tx, usuarioId, codigo, datos.turnoId, reserva.tipo);
+    if (!c.ok) return c;
+    const { s, t, l } = c;
+    const [f] = await tx<{ id: string; folio: string; estado: string; reservado_por: string; turno_id: string; lugar_id: string }[]>`
+      select id, folio, estado, reservado_por, turno_id, lugar_id from folio_retiro where id = ${datos.folioId} and sucursal_id = ${s.id} for update`;
+    if (!f || f.reservado_por !== usuarioId || f.turno_id !== t.id || f.lugar_id !== l.id) return { ok: false as const, error: "folio" as const };
+    if (f.estado === "usado") {
+      // Reintento del mismo envío (por ejemplo, doble clic): devuelve el retiro ya registrado si los datos son los mismos.
+      const [previo] = await tx<{ id: string; contado: string; cambio: string; encargada_id: string }[]>`
+        select id, contado::text, cambio::text, encargada_id from retiro where folio_retiro_id = ${f.id}`;
+      const mismo = previo && cent(previo.contado) === cent(datos.contado) && cent(previo.cambio) === cent(datos.cambio) && previo.encargada_id === datos.encargada;
+      if (!mismo) return { ok: false as const, error: "folio_repetido" as const };
+      const [d] = await tx<{ importe: string }[]>`select importe::text from diferencia_retiro where retiro_id = ${previo.id}`;
+      return { ok: true as const, retiroId: previo.id, folio: f.folio, diferencia: d?.importe ?? null };
     }
+    if (f.estado !== "reservado") return { ok: false as const, error: "folio" as const };
     if (!(await encargadas(tx, s.id, usuarioId)).some((e) => e.id === datos.encargada)) {
       return { ok: false as const, error: "encargada" as const };
     }
-    const [previo] = await tx<{ id: string; turno_id: string; lugar_id: string; entregado_por: string; contado: string; cambio: string; encargada_id: string }[]>`
-      select id, turno_id, lugar_id, entregado_por, contado::text, cambio::text, encargada_id from retiro
-      where sucursal_id = ${s.id} and folio = ${folio}`;
-    if (previo) {
-      // Reintento del mismo envío (por ejemplo, doble clic): devuelve el retiro ya registrado.
-      const mismo = previo.turno_id === t.id && previo.lugar_id === l.id && previo.entregado_por === usuarioId
-        && cent(previo.contado) === cent(datos.contado) && cent(previo.cambio) === cent(datos.cambio) && previo.encargada_id === datos.encargada;
-      if (!mismo) return { ok: false as const, error: "folio_repetido" as const };
-      const [d] = await tx<{ importe: string }[]>`select importe::text from diferencia_retiro where retiro_id = ${previo.id}`;
-      return { ok: true as const, retiroId: previo.id, diferencia: d?.importe ?? null };
-    }
-    const lugar = (await turnoAbiertoDe(tx, s.id))!.lugares.find((x) => x.tipo === datos.lugar)!;
+    const lugar = (await turnoAbiertoDe(tx, s.id))!.lugares.find((x) => x.tipo === reserva.tipo)!;
     const esperado = esperadoParaRetiro(lugar);
     const [r] = await tx<{ id: string }[]>`
-      insert into retiro (sucursal_id, turno_id, lugar_id, folio, contado, cambio, importe, esperado, entregado_por, encargada_id)
-      values (${s.id}, ${t.id}, ${l.id}, ${folio}, ${datos.contado}, ${datos.cambio}, ${pesos(importe)}, ${esperado},
+      insert into retiro (sucursal_id, turno_id, lugar_id, folio, folio_retiro_id, contado, cambio, importe, esperado, entregado_por, encargada_id)
+      values (${s.id}, ${t.id}, ${l.id}, ${f.folio}, ${f.id}, ${datos.contado}, ${datos.cambio}, ${pesos(importe)}, ${esperado},
               ${usuarioId}, ${datos.encargada})
       returning id`;
+    await tx`update folio_retiro set estado = 'usado', resuelto_en = now() where id = ${f.id}`;
     // Diferencia contra el esperado al retirar: se registra ahora, una vez, ligada al retiro.
     const dif = esperado === null ? 0 : cent(datos.contado) - cent(esperado);
     if (dif) {
@@ -182,10 +269,10 @@ export async function registrarRetiro(
     await tx`
       insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
       values ('retiro', ${r.id}, 'entregar',
-              ${tx.json({ sucursal: codigo, lugar: datos.lugar, folio, contado: datos.contado, cambio: datos.cambio, importe: pesos(importe), encargada: datos.encargada,
+              ${tx.json({ sucursal: codigo, lugar: reserva.tipo, folio: f.folio, contado: datos.contado, cambio: datos.cambio, importe: pesos(importe), encargada: datos.encargada,
                           esperado, diferencia_contra_esperado: dif ? pesos(dif) : null })},
               ${usuarioId})`;
-    return { ok: true as const, retiroId: r.id, diferencia: dif ? pesos(dif) : null };
+    return { ok: true as const, retiroId: r.id, folio: f.folio, diferencia: dif ? pesos(dif) : null };
   });
 }
 

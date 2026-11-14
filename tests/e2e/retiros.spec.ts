@@ -46,17 +46,30 @@ async function entrar(page: Page, correo: string) {
   await page.getByRole("button", { name: "Iniciar sesión" }).click();
   await expect(page).toHaveURL(/\/$/);
 }
-async function retirar(page: Page, codigo: string, lugar: "bolsa_visitas" | "cajon_mensualidades", contado: string, cambio: string, folio: string) {
+type Lugar = "bolsa_visitas" | "cajon_mensualidades";
+/** «Generar folio»: la plataforma lo reserva y lo muestra para anotarlo en el sobre. Devuelve el folio. */
+async function prepararRetiro(page: Page, codigo: string, lugar: Lugar) {
   await page.goto(`/sucursales/${codigo}/turno`);
   await page.getByTestId("ir-retiro").click();
   await page.waitForLoadState("networkidle");
+  await page.getByTestId(`retiro-${lugar}`).getByRole("button", { name: "Generar folio" }).click();
+  const folio = page.getByTestId(`retiro-${lugar}`).getByTestId("folio-generado").locator("strong");
+  await expect(folio).toHaveText(new RegExp(`^${codigo}-\\d{8}-\\d{2}$`));
+  return (await folio.textContent())!;
+}
+/** «Confirmar entrega» con el sobre ya entregado: se descuenta la salida. */
+async function confirmarEntrega(page: Page, lugar: Lugar, contado: string, cambio: string, folio: string) {
   const f = page.getByTestId(`retiro-${lugar}`);
   await f.getByLabel("Total contado antes del retiro").fill(contado);
   await f.getByLabel("Deja para cambio (lo indica Encargada de retiros)").fill(cambio);
-  await f.getByLabel("Folio del sobre").fill(folio);
   await capturar(page, "formulario-retiro");
-  await f.getByRole("button", { name: /Entregar a Encargada de retiros/ }).click();
-  await expect(page.locator("p.aviso[role=status]")).toContainText("Retiro registrado");
+  await f.getByRole("button", { name: /Confirmar entrega/ }).click();
+  await expect(page.locator("p.aviso[role=status]")).toContainText(`Retiro registrado con el folio ${folio}`);
+}
+async function retirar(page: Page, codigo: string, lugar: Lugar, contado: string, cambio: string) {
+  const folio = await prepararRetiro(page, codigo, lugar);
+  await confirmarEntrega(page, lugar, contado, cambio, folio);
+  return folio;
 }
 const fechaLocal = () => {
   const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
@@ -79,9 +92,10 @@ test("$2,300 registrados y $2,250 contados: solo ese folio en pausa, los $50 fue
   const e = await escenario();
   // Recepción entrega la bolsa ($800, deja $100) y el cajón ($2,300), cada uno con su folio.
   await entrar(page, e.laura.correo);
-  await retirar(page, e.codigo, "bolsa_visitas", "900", "100", "T-01");
+  const t01 = await retirar(page, e.codigo, "bolsa_visitas", "900", "100");
   await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText("$100.00");
-  await retirar(page, e.codigo, "cajon_mensualidades", "2300", "0", "T-02");
+  const t02 = await retirar(page, e.codigo, "cajon_mensualidades", "2300", "0");
+  expect(t01).not.toBe(t02);
   await expect(page.getByTestId("retiro-turno")).toHaveCount(2);
   for (const r of await page.getByTestId("estado-retiro").all()) await expect(r).toHaveText("Pendiente de confirmar por Encargada de retiros");
   await expect(page.getByRole("link", { name: "Registrar visita" })).toBeVisible();
@@ -91,41 +105,41 @@ test("$2,300 registrados y $2,250 contados: solo ese folio en pausa, los $50 fue
   await entrar(page, e.encargada.correo);
   await page.goto("/retiros");
   await expect(page.getByTestId("por-confirmar")).not.toContainText("2,300");
-  const b = page.locator('[data-testid=retiro-por-confirmar][data-folio="T-01"]');
+  const b = page.locator(`[data-testid=retiro-por-confirmar][data-folio="${t01}"]`);
   await b.getByLabel("¿Cuánto contaste en el sobre?").fill("800");
   await b.getByRole("radio", { name: "Sí, coincide" }).check();
   await b.getByRole("button", { name: "Confirmar lo que recibí" }).click();
   await expect(page.locator("p.aviso[role=status]")).toContainText("Retiro confirmado");
-  const c = page.locator('[data-testid=retiro-por-confirmar][data-folio="T-02"]');
+  const c = page.locator(`[data-testid=retiro-por-confirmar][data-folio="${t02}"]`);
   await c.getByLabel("¿Cuánto contaste en el sobre?").fill("2250");
   await c.getByRole("radio", { name: "Sí, coincide" }).check();
   await c.getByRole("button", { name: "Confirmar lo que recibí" }).click();
-  const rc = page.locator('[data-testid=retiro-por-recontar][data-folio="T-02"]');
+  const rc = page.locator(`[data-testid=retiro-por-recontar][data-folio="${t02}"]`);
   await expect(rc.getByTestId("no-coincide")).toContainText("Registró Recepción: $2,300.00 · Contaste: $2,250.00 · Diferencia: −$50.00");
   await capturar(page, "recuento");
   await rc.getByRole("radio", { name: "No pudimos recontar en este momento" }).check();
   await rc.getByRole("button", { name: "No coincide · registrar mi conteo" }).click();
   await expect(page.locator("p.aviso[role=alert]")).toHaveText("Revisa los campos marcados.");
-  await page.locator('[data-testid=retiro-por-recontar][data-folio="T-02"]').getByRole("radio", { name: "No pudimos recontar en este momento" }).check();
-  await page.locator('[data-testid=retiro-por-recontar][data-folio="T-02"]').getByLabel("Motivo (obligatorio si no coincide)").fill("Prueba ficticia: Recepción ya no estaba");
-  await page.locator('[data-testid=retiro-por-recontar][data-folio="T-02"]').getByRole("button", { name: "No coincide · registrar mi conteo" }).click();
+  await page.locator(`[data-testid=retiro-por-recontar][data-folio="${t02}"]`).getByRole("radio", { name: "No pudimos recontar en este momento" }).check();
+  await page.locator(`[data-testid=retiro-por-recontar][data-folio="${t02}"]`).getByLabel("Motivo (obligatorio si no coincide)").fill("Prueba ficticia: Recepción ya no estaba");
+  await page.locator(`[data-testid=retiro-por-recontar][data-folio="${t02}"]`).getByRole("button", { name: "No coincide · registrar mi conteo" }).click();
   await expect(page.locator("p.aviso[role=status]")).toContainText("solo los depósitos de ese folio quedan en pausa");
   // Su saldo: $800 de la bolsa; el cajón en pausa con lo que contó y los $50 aparte.
   await expect(page.getByTestId("saldo-sin-destino")).toHaveText("$800.00");
   await expect(page.getByTestId("saldo-en-pausa")).toContainText("$2,250.00");
   await expect(page.getByTestId("saldo-por-aclarar")).toContainText("−$50.00");
-  await expect(page.locator('[data-testid=mi-retiro][data-folio="T-02"]').getByTestId("estado")).toContainText("No coincide · Por revisar");
-  await expect(page.locator('[data-testid=mi-retiro][data-folio="T-02"]').getByTestId("estado")).toContainText("Por revisar desde hace menos de 1 h");
+  await expect(page.locator(`[data-testid=mi-retiro][data-folio="${t02}"]`).getByTestId("estado")).toContainText("No coincide · Por revisar");
+  await expect(page.locator(`[data-testid=mi-retiro][data-folio="${t02}"]`).getByTestId("estado")).toContainText("Por revisar desde hace menos de 1 h");
   await tablasSinDeslizar(page);
 
   await capturar(page, "bandeja");
 
   // El folio en pausa no ofrece depósito; el de la bolsa sí (parcial).
-  await page.locator('[data-testid=mi-retiro][data-folio="T-02"]').getByTestId("ver-retiro").click();
+  await page.locator(`[data-testid=mi-retiro][data-folio="${t02}"]`).getByTestId("ver-retiro").click();
   await expect(page.getByTestId("pausa")).toContainText("en pausa");
   await expect(page.getByTestId("registrar-deposito")).toHaveCount(0);
   await page.goto("/retiros");
-  await page.locator('[data-testid=mi-retiro][data-folio="T-01"]').getByTestId("ver-retiro").click();
+  await page.locator(`[data-testid=mi-retiro][data-folio="${t01}"]`).getByTestId("ver-retiro").click();
   const dep = page.getByTestId("registrar-deposito");
   await dep.getByLabel("Importe depositado").fill("500");
   await expect(dep).toContainText("Depósito parcial: quedarán $300.00");
@@ -138,8 +152,8 @@ test("$2,300 registrados y $2,250 contados: solo ese folio en pausa, los $50 fue
   // Recepción ve el estado, no el detalle.
   await entrar(page, e.laura.correo);
   await page.goto(`/sucursales/${e.codigo}/turno`);
-  await expect(page.locator('[data-testid=retiro-turno][data-folio="T-02"]').getByTestId("estado-retiro")).toHaveText("No coincide · Por revisar");
-  await expect(page.locator('[data-testid=retiro-turno][data-folio="T-01"]').getByTestId("estado-retiro")).toHaveText("Confirmado por Encargada de retiros");
+  await expect(page.locator(`[data-testid=retiro-turno][data-folio="${t02}"]`).getByTestId("estado-retiro")).toHaveText("No coincide · Por revisar");
+  await expect(page.locator(`[data-testid=retiro-turno][data-folio="${t01}"]`).getByTestId("estado-retiro")).toHaveText("Confirmado por Encargada de retiros");
 
   // Encargado (no participó) revisa: faltante confirmado con $2,250 verificados.
   await entrar(page, e.encargado.correo);
@@ -169,7 +183,7 @@ test("$2,300 registrados y $2,250 contados: solo ese folio en pausa, los $50 fue
   // Encargada de retiros deposita: no más del monto verificado.
   await entrar(page, e.encargada.correo);
   await page.goto("/retiros");
-  await page.locator('[data-testid=mi-retiro][data-folio="T-02"]').getByTestId("ver-retiro").click();
+  await page.locator(`[data-testid=mi-retiro][data-folio="${t02}"]`).getByTestId("ver-retiro").click();
   await expect(page.getByTestId("habilitado")).toHaveText("$2,250.00");
   let d = page.getByTestId("registrar-deposito");
   await d.getByLabel("Importe depositado").fill("2300");
@@ -202,10 +216,17 @@ test("diferencia contra el esperado al retirar y folio que no coincide: se verif
   await entrar(page, e.laura.correo);
   await page.goto(`/sucursales/${e.codigo}/turno/retiro`);
   await page.waitForLoadState("networkidle");
+  // Generar el folio no mueve efectivo; al cancelar la preparación, ese folio no se vuelve a usar.
+  const cancelado = await prepararRetiro(page, e.codigo, "bolsa_visitas");
+  await expect(page.getByTestId("retiro-bolsa_visitas").getByTestId("retiro-esperado")).toHaveText("$900.00");
+  await page.getByTestId("retiro-bolsa_visitas").getByRole("button", { name: "Cancelar preparación" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toContainText(`El folio ${cancelado} queda cancelado y no se vuelve a usar`);
+  const t03 = await prepararRetiro(page, e.codigo, "bolsa_visitas");
+  expect(t03).not.toBe(cancelado);
   const f = page.getByTestId("retiro-bolsa_visitas");
   await f.getByLabel("Total contado antes del retiro").fill("880");
-  await expect(f).toContainText("al entregar se registra una diferencia de −$20.00 contra el esperado");
-  await retirar(page, e.codigo, "bolsa_visitas", "880", "80", "T-03");
+  await expect(f).toContainText("al confirmar se registra una diferencia de −$20.00 contra el esperado");
+  await confirmarEntrega(page, "bolsa_visitas", "880", "80", t03);
   await expect(page.locator("p.aviso[role=status]")).toContainText("Se registró una diferencia de −$20.00 contra el esperado al retirar");
   await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("diferencia-retiros")).toHaveText("−$20.00");
   await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText("$100.00");
@@ -213,12 +234,12 @@ test("diferencia contra el esperado al retirar y folio que no coincide: se verif
   await page.goto(`/sucursales/${e.codigo}/turno/retiro`);
   await expect(page.getByTestId("retiro-bolsa_visitas").getByTestId("retiro-esperado")).toHaveText("$80.00");
   await expect(page.getByTestId("retiro-bolsa_visitas").getByTestId("retiro-diferencias-previas")).toContainText("−$20.00");
-  await retirar(page, e.codigo, "cajon_mensualidades", "2300", "0", "T-04");
+  const t04 = await retirar(page, e.codigo, "cajon_mensualidades", "2300", "0");
 
   // Encargada de retiros: el folio del cajón no coincide.
   await entrar(page, e.encargada.correo);
   await page.goto("/retiros");
-  const c = page.locator('[data-testid=retiro-por-confirmar][data-folio="T-04"]');
+  const c = page.locator(`[data-testid=retiro-por-confirmar][data-folio="${t04}"]`);
   await c.getByLabel("¿Cuánto contaste en el sobre?").fill("2300");
   await c.getByRole("radio", { name: "No coincide" }).check();
   await c.getByLabel("Folio que trae el sobre").fill("T-99");
@@ -241,12 +262,12 @@ test("diferencia contra el esperado al retirar y folio que no coincide: se verif
   await expect(page.getByTestId("estado-retiro")).toHaveText("No coincide · Por revisar");
   const rv2 = page.getByTestId("revisar-retiro");
   await rv2.getByRole("radio", { name: /Aclarada/ }).check();
-  await rv2.getByLabel("Folio verificado del sobre").fill("T-04");
+  await rv2.getByLabel("Folio verificado del sobre").fill(t04);
   await rv2.getByLabel("Monto verificado en el sobre").fill("2300");
-  await rv2.getByLabel("Motivo (obligatorio)").fill("Prueba ficticia: el efectivo es del sobre T-04; se etiquetó mal");
+  await rv2.getByLabel("Motivo (obligatorio)").fill("Prueba ficticia: el efectivo es de este sobre; se etiquetó mal");
   await rv2.getByRole("button", { name: "Registrar revisión" }).click();
   await expect(page.getByTestId("estado-retiro")).toHaveText("Revisado · aclarada");
-  await expect(page.getByTestId("folio-verificado")).toContainText("T-04");
+  await expect(page.getByTestId("folio-verificado")).toContainText(t04);
   await expect(page.getByTestId("habilitado")).toHaveText("$2,300.00");
   await capturar(page, "folio-verificado");
   await tablasSinDeslizar(page);

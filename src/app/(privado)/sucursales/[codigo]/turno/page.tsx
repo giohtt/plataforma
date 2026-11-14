@@ -27,7 +27,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   const { codigo } = await params;
   const e = await estadoTurno(obtenerBaseDatos()!, sesion.usuarioId, codigo);
   if (!e) notFound();
-  const { aviso, dif: difRetiro } = await searchParams;
+  const { aviso, dif: difRetiro, folio: folioRetiro } = await searchParams;
   const t = e.turno;
   const sql = obtenerBaseDatos()!;
   const puedeCobrar = t ? (await impedimentoRegistroVisita(sql, sesion.usuarioId, codigo, leerEntorno())) === null : false;
@@ -75,7 +75,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
       {aviso === "entrega-cancelada" ? <p className="aviso aviso-ok" role="status">Entrega cancelada. El turno sigue a tu cargo.</p> : null}
       {aviso === "retiro" ? (
         <p className="aviso aviso-ok" role="status">
-          Retiro registrado: la salida ya se descontó. Queda pendiente de confirmar por Encargada de retiros.
+          Retiro registrado{typeof folioRetiro === "string" ? ` con el folio ${folioRetiro}` : ""}: la salida ya se descontó. Queda pendiente de confirmar por Encargada de retiros.
           {typeof difRetiro === "string" && /^-?\d+\.\d{2}$/.test(difRetiro) ? ` Se registró una diferencia de ${(Number(difRetiro) < 0 ? "−" : "+") + pesos.format(Math.abs(Number(difRetiro)))} contra el esperado al retirar; se vincula al cambio de turno si sigue presente.` : ""}
         </p>
       ) : null}
