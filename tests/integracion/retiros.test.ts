@@ -409,6 +409,44 @@ describe.skipIf(!URL_ADMIN)("retiros a Encargada de retiros", () => {
     expect((await sql`select sum(importe)::text as s from deposito_retiro where retiro_id = ${id}`)[0].s).toBe("500.00");
   });
 
+  it("la base exige una revisión válida para pasar a revisado, con el monto habilitado igual al verificado", async () => {
+    const e = await escenario();
+    const id = await retirar(e, "cajon_mensualidades", "2300", "0", "C-30");
+    await confirmar(e, id, "2250");
+    await recontarRetiro(sql, e.encargada, { retiroId: id, version: await version(id), recontaron: false, importe: null, con: null, motivo: "Prueba ficticia: sin recuento" }, PRUEBAS);
+    const revisado = (monto: string) => sql`
+      update retiro set estado = 'revisado', monto_habilitado = ${monto}, habilitado_en = now(), version = version + 1 where id = ${id}`;
+    // Sin revisión: rechazado.
+    await expect(revisado("2250")).rejects.toThrow(/se necesita su revisión/);
+    // Con revisión de $2,250 verificados, pero habilitando otro monto: rechazado.
+    await sql`insert into retiro_revision (retiro_id, resultado, motivo, monto_verificado, nivel, revisada_por)
+              values (${id}, 'faltante_confirmado', 'Prueba ficticia directa', 2250, 'encargado', ${e.encargado})`;
+    await expect(revisado("2300")).rejects.toThrow(/monto habilitado igual al verificado/);
+    await expect(revisado("0")).rejects.toThrow(/monto habilitado igual al verificado/);
+    expect((await sql`select estado, monto_habilitado from retiro where id = ${id}`)[0]).toEqual({ estado: "por_revisar", monto_habilitado: null });
+    // Con el monto verificado: se acepta.
+    await revisado("2250");
+    expect((await sql`select estado, monto_habilitado::text from retiro where id = ${id}`)[0]).toEqual({ estado: "revisado", monto_habilitado: "2250.00" });
+  });
+
+  it("la base exige el folio verificado para pasar a revisado un retiro con el folio en duda, y el importe al confirmar", async () => {
+    const e = await escenario();
+    const id = await retirar(e, "cajon_mensualidades", "2300", "0", "C-31");
+    await confirmar(e, id, "2300", false, "Prueba ficticia: el sobre trae otro folio", "C-32");
+    await expect(sql`update retiro set estado = 'revisado', monto_habilitado = 2300, habilitado_en = now(), version = version + 1 where id = ${id}`)
+      .rejects.toThrow(/se necesita su revisión/);
+    // Una revisión sin el folio correcto no se puede registrar; con el folio correcto sí, y entonces pasa.
+    await expect(sql`insert into retiro_revision (retiro_id, resultado, motivo, monto_verificado, nivel, revisada_por, folio_verificado)
+                     values (${id}, 'aclarada', 'Prueba ficticia directa', 2300, 'encargado', ${e.encargado}, 'C-32')`).rejects.toThrow(/verificar/);
+    await sql`insert into retiro_revision (retiro_id, resultado, motivo, monto_verificado, nivel, revisada_por, folio_verificado)
+              values (${id}, 'aclarada', 'Prueba ficticia directa', 2300, 'encargado', ${e.encargado}, 'C-31')`;
+    await sql`update retiro set estado = 'revisado', monto_habilitado = 2300, habilitado_en = now(), version = version + 1 where id = ${id}`;
+    // Confirmar sin revisión habilita exactamente el importe registrado.
+    const otro = await retirar(e, "bolsa_visitas", "900", "100", "B-33");
+    await expect(sql`update retiro set estado = 'confirmado', monto_habilitado = 900, habilitado_en = now(), version = version + 1 where id = ${otro}`)
+      .rejects.toThrow(/importe registrado/);
+  });
+
   it("los registros no se editan ni se borran", async () => {
     const e = await escenario();
     const id = await retirar(e, "bolsa_visitas", "900", "100", "B-16");
