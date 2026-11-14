@@ -28,6 +28,9 @@ export type SaldoTurno = {
   cantidadEntradas: number;
   ajustes: string;
   cantidadAjustes: number;
+  /** Salidas por retiros a Encargada de retiros (negativo). */
+  retiros: string;
+  cantidadRetiros: number;
   esperado: string;
 };
 export type SucursalReporte = {
@@ -98,7 +101,8 @@ export async function reporteVisitas(
       select t.sucursal_id, t.id as "turnoId", t.abierto_en as "abiertoEn", t.cerrado_en as "cerradoEn", u.nombre as "abiertoPor",
              ca.importe::text as "contadoAlAbrir",
              m.entradas::text as entradas, m.cuantas as "cantidadEntradas", m.ajustes::text as ajustes, m.cuantos_ajustes as "cantidadAjustes",
-             (ca.importe + m.entradas + m.ajustes)::text as esperado
+             m.salidas::text as retiros, m.cuantas_salidas as "cantidadRetiros",
+             (ca.importe + m.entradas + m.ajustes + m.salidas)::text as esperado
       from turno t
       join usuario u on u.id = t.abierto_por
       join lugar_efectivo l on l.sucursal_id = t.sucursal_id and l.tipo = 'bolsa_visitas'
@@ -107,7 +111,9 @@ export async function reporteVisitas(
         select coalesce(sum(me.importe) filter (where me.tipo = 'entrada_cobro_visita'), 0)::numeric(12, 2) as entradas,
                (count(*) filter (where me.tipo = 'entrada_cobro_visita'))::int as cuantas,
                coalesce(sum(me.importe) filter (where me.tipo = 'ajuste_cancelacion_cobro'), 0)::numeric(12, 2) as ajustes,
-               (count(*) filter (where me.tipo = 'ajuste_cancelacion_cobro'))::int as cuantos_ajustes
+               (count(*) filter (where me.tipo = 'ajuste_cancelacion_cobro'))::int as cuantos_ajustes,
+               coalesce(sum(me.importe) filter (where me.tipo = 'salida_retiro'), 0)::numeric(12, 2) as salidas,
+               (count(*) filter (where me.tipo = 'salida_retiro'))::int as cuantas_salidas
         from movimiento_efectivo me where me.turno_id = t.id and me.lugar_id = l.id
       ) m
       where t.sucursal_id = any(${ids}::uuid[])

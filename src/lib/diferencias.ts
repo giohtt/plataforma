@@ -136,6 +136,8 @@ export type Desglose = {
   contadoAlAbrir: string;
   cobros: { cuantos: number; visitas: number; importe: string };
   cancelaciones: { cuantas: number; importe: string };
+  /** Salidas por retiros a Encargada de retiros (negativo). */
+  retiros: { cuantos: number; importe: string };
   /** Calculado aquí con los movimientos hasta la entrega. Debe coincidir con el esperado guardado al entregar. */
   calculado: string;
 };
@@ -200,14 +202,16 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
 
   // Desglose de la bolsa: lo contado al abrir y los movimientos del turno registrados antes de la entrega.
   const [d] = await sql<{ abierto_en: Date; abierto_por: string; contado: string; cobros: number; visitas: number; importe_cobros: string;
-                          cancelaciones: number; importe_cancelaciones: string }[]>`
+                          cancelaciones: number; importe_cancelaciones: string; retiros: number; importe_retiros: string }[]>`
     select t.abierto_en, u.nombre as abierto_por, c.importe::text as contado,
            (count(m.id) filter (where m.tipo = 'entrada_cobro_visita'))::int as cobros,
            coalesce(sum((select count(*) from pase_visita p join cobro_visita cv on cv.operacion_id = p.operacion_id where cv.id = m.cobro_id))
                     filter (where m.tipo = 'entrada_cobro_visita'), 0)::int as visitas,
            coalesce(sum(m.importe) filter (where m.tipo = 'entrada_cobro_visita'), 0)::numeric(12, 2)::text as importe_cobros,
            (count(m.id) filter (where m.tipo = 'ajuste_cancelacion_cobro'))::int as cancelaciones,
-           coalesce(sum(m.importe) filter (where m.tipo = 'ajuste_cancelacion_cobro'), 0)::numeric(12, 2)::text as importe_cancelaciones
+           coalesce(sum(m.importe) filter (where m.tipo = 'ajuste_cancelacion_cobro'), 0)::numeric(12, 2)::text as importe_cancelaciones,
+           (count(m.id) filter (where m.tipo = 'salida_retiro'))::int as retiros,
+           coalesce(sum(m.importe) filter (where m.tipo = 'salida_retiro'), 0)::numeric(12, 2)::text as importe_retiros
     from turno t join usuario u on u.id = t.abierto_por
     join lugar_efectivo l on l.sucursal_id = t.sucursal_id and l.tipo = 'bolsa_visitas'
     join conteo_efectivo c on c.turno_id = t.id and c.lugar_id = l.id and c.momento = 'apertura'
@@ -215,7 +219,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     where t.id = ${e.turno_id}
     group by t.abierto_en, u.nombre, c.importe`;
   const centavos = (v: string) => Math.round(Number(v) * 100);
-  const calculado = ((centavos(d.contado) + centavos(d.importe_cobros) + centavos(d.importe_cancelaciones)) / 100).toFixed(2);
+  const calculado = ((centavos(d.contado) + centavos(d.importe_cobros) + centavos(d.importe_cancelaciones) + centavos(d.importe_retiros)) / 100).toFixed(2);
 
   const difs = (await DIFERENCIAS(sql, [e.id])).map(aDiferencia);
   const [n] = await sql<{ nivel: NivelRevision; puede: boolean; resuelve: boolean }[]>`
@@ -286,7 +290,8 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     desglose: {
       abiertoEn: d.abierto_en, abiertoPor: d.abierto_por, contadoAlAbrir: d.contado,
       cobros: { cuantos: d.cobros, visitas: d.visitas, importe: d.importe_cobros },
-      cancelaciones: { cuantas: d.cancelaciones, importe: d.importe_cancelaciones }, calculado,
+      cancelaciones: { cuantas: d.cancelaciones, importe: d.importe_cancelaciones },
+      retiros: { cuantos: d.retiros, importe: d.importe_retiros }, calculado,
     },
     fueraDeLaBolsa: ventasDelTurno(await cobrosDelTurno(sql, e.turno_id)),
   };

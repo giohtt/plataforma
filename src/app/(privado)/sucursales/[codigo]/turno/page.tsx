@@ -10,6 +10,7 @@ import { leerEntorno } from "@/lib/entorno";
 import { requerirSesion } from "@/lib/sesion-servidor";
 import { resumenAccesosTurno } from "@/lib/accesos";
 import { tienePermiso } from "@/lib/permisos";
+import { retirosDelTurno } from "@/lib/retiros";
 import { estadoTurno, type TipoLugar } from "@/lib/turnos";
 import { ventasDelTurno, type Grupo } from "@/lib/ventas";
 import { cobrosDelTurno, impedimentoRegistroVisita } from "@/lib/visitas";
@@ -34,6 +35,10 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   const accesos = t ? await resumenAccesosTurno(sql, t.id) : null;
   const enCurso = t ? await entregaEnCurso(sql, t.id) : null;
   const recibida = t ? await entregaRecibida(sql, t.id) : null;
+  const retiros = t ? await retirosDelTurno(sql, t.id) : [];
+  const puedeRetirar = t && !enCurso && leerEntorno() !== "produccion" && !e.sucursal.inactiva
+    && t.lugares.some((l) => l.responsableId === sesion.usuarioId)
+    && (await tienePermiso(sql, sesion.usuarioId, "caja.retirar", e.sucursal.id));
   const puedeEntregar = t && !enCurso && leerEntorno() !== "produccion" && !e.sucursal.inactiva
     && t.lugares.every((l) => l.responsableId === sesion.usuarioId)
     && (await tienePermiso(sql, sesion.usuarioId, "turno.entregar", e.sucursal.id));
@@ -68,6 +73,9 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
         <p className="aviso aviso-ok" role="status">Entrega registrada. Queda pendiente hasta que {enCurso.recibe} cuente y confirme desde su cuenta.</p>
       ) : null}
       {aviso === "entrega-cancelada" ? <p className="aviso aviso-ok" role="status">Entrega cancelada. El turno sigue a tu cargo.</p> : null}
+      {aviso === "retiro" ? (
+        <p className="aviso aviso-ok" role="status">Retiro registrado: la salida ya se descontó. Queda pendiente de confirmar por Encargada de retiros.</p>
+      ) : null}
       {aviso === "recibido" && recibida ? <p className="aviso aviso-ok" role="status">Turno recibido. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
 
       {t ? (
@@ -148,6 +156,37 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
               <p className="sub">Las diferencias no se corrigen: quedan registradas y se revisan aparte, sin cambiar los importes. Este turno empieza con lo que se confirmó.</p>
             </section>
           ) : null}
+          {retiros.length || puedeRetirar ? (
+            <section className="tarjeta" aria-labelledby="t-retiros" data-testid="retiros-turno">
+              <h2 id="t-retiros" className="titulo-seccion">Retiros a Encargada de retiros</h2>
+              {retiros.length ? (
+                <div className="tabla-desplazable" tabIndex={0} aria-label="Retiros del turno: desliza para ver todas las columnas">
+                  <table className="tabla tabla-ancha">
+                    <thead><tr><th>Lugar</th><th>Folio</th><th>Contado</th><th>Deja para cambio</th><th>Se lleva</th><th>Entregó</th><th>Estado</th></tr></thead>
+                    <tbody>
+                      {retiros.map((r) => (
+                        <tr key={r.id} data-testid="retiro-turno" data-folio={r.folio}>
+                          <td>{NOMBRE[r.lugar]}</td>
+                          <td className="mono">{r.folio}</td>
+                          <td>{pesos.format(Number(r.contado))}</td>
+                          <td>{pesos.format(Number(r.cambio))}</td>
+                          <td>{pesos.format(Number(r.importe))}</td>
+                          <td>{r.entregadoPor} · {hora.format(r.entregadoEn)} · a {r.encargada}</td>
+                          <td data-testid="estado-retiro"><strong>{r.textoEstado}</strong></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <p className="sub">Todavía no hay retiros en este turno.</p>}
+              <p className="sub">La salida se descuenta al entregar el sobre. Recepción ve el estado; el detalle de una discrepancia lo revisa quien corresponde.</p>
+              {puedeRetirar ? (
+                <p className="fila-acciones">
+                  <Link className="boton" href={`/sucursales/${codigo}/turno/retiro`} data-testid="ir-retiro">Entregar a Encargada de retiros</Link>
+                </p>
+              ) : null}
+            </section>
+          ) : null}
           <div className="lugares-turno">
             {t.lugares.map((l) => (
               <section key={l.tipo} className="tarjeta" data-testid={`lugar-${l.tipo}`} aria-label={NOMBRE[l.tipo]}>
@@ -165,6 +204,12 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                           <dd data-testid="ajustes">− {pesos.format(-Number(l.ajustes))}</dd>
                         </>
                       ) : null}
+                    </>
+                  ) : null}
+                  {l.cantidadRetiros ? (
+                    <>
+                      <dt>Retiros a Encargada de retiros ({l.cantidadRetiros})</dt>
+                      <dd data-testid="retiros">− {pesos.format(-Number(l.retiros))}</dd>
                     </>
                   ) : null}
                   <dt>Efectivo esperado</dt>

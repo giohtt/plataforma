@@ -32,7 +32,10 @@ export type LugarEnTurno = {
   /** Ajustes por cobros cancelados (negativo) y cuántos. El esperado los descuenta una sola vez. */
   ajustes: string;
   cantidadAjustes: number;
-  /** Contado al abrir + entradas. null en el cajón: no se calcula mientras falten los datos de Open Desk. */
+  /** Salidas por retiros entregados a Encargada de retiros (negativo) y cuántos. */
+  retiros: string;
+  cantidadRetiros: number;
+  /** Contado al abrir + entradas + ajustes − retiros. null en el cajón: no se calcula mientras falten los datos de Open Desk. */
   esperado: string | null;
 };
 
@@ -71,7 +74,8 @@ export async function turnoAbiertoDe(tx: Tx | Sql, sucursalId: string): Promise<
            r.desde as "responsableDesde", false as conciliado,
            m.suma::text as entradas, m.cuantas as "cantidadEntradas", m.visitas as "visitasEntradas",
            m.ajustes::text as ajustes, m.cuantos_ajustes as "cantidadAjustes",
-           case when l.tipo = 'bolsa_visitas' then (c.importe + m.suma + m.ajustes)::text end as esperado
+           m.salidas::text as retiros, m.cuantas_salidas as "cantidadRetiros",
+           case when l.tipo = 'bolsa_visitas' then (c.importe + m.suma + m.ajustes + m.salidas)::text end as esperado
     from lugar_efectivo l
     join conteo_efectivo c on c.lugar_id = l.id and c.turno_id = ${t.id} and c.momento = 'apertura'
     join responsable_lugar r on r.lugar_id = l.id and r.turno_id = ${t.id} and r.hasta is null
@@ -82,7 +86,9 @@ export async function turnoAbiertoDe(tx: Tx | Sql, sucursalId: string): Promise<
              coalesce(sum((select count(*) from pase_visita p join cobro_visita c on c.operacion_id = p.operacion_id
                            where c.id = me.cobro_id)) filter (where me.tipo = 'entrada_cobro_visita'), 0)::int as visitas,
              coalesce(sum(me.importe) filter (where me.tipo = 'ajuste_cancelacion_cobro'), 0)::numeric(12, 2) as ajustes,
-             (count(*) filter (where me.tipo = 'ajuste_cancelacion_cobro'))::int as cuantos_ajustes
+             (count(*) filter (where me.tipo = 'ajuste_cancelacion_cobro'))::int as cuantos_ajustes,
+             coalesce(sum(me.importe) filter (where me.tipo = 'salida_retiro'), 0)::numeric(12, 2) as salidas,
+             (count(*) filter (where me.tipo = 'salida_retiro'))::int as cuantas_salidas
       from movimiento_efectivo me where me.turno_id = ${t.id} and me.lugar_id = l.id
     ) m
     order by case l.tipo when 'bolsa_visitas' then 0 else 1 end`;

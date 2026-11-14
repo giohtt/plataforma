@@ -162,7 +162,9 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
               <tr data-testid="desglose-cancelaciones"><td>Cancelaciones aprobadas</td>
                 <td>{c.desglose.cancelaciones.cuantas} {c.desglose.cancelaciones.cuantas === 1 ? "cobro duplicado" : "cobros duplicados"}</td>
                 <td>{Number(c.desglose.cancelaciones.importe) ? `− ${pesos.format(Math.abs(Number(c.desglose.cancelaciones.importe)))}` : pesos.format(0)}</td></tr>
-              <tr><td>Retiros</td><td>Ninguno (llegan en un paso siguiente del bloque 5)</td><td>{pesos.format(0)}</td></tr>
+              <tr data-testid="desglose-retiros"><td>Retiros a Encargada de retiros</td>
+                <td>{c.desglose.retiros.cuantos ? `${c.desglose.retiros.cuantos} ${c.desglose.retiros.cuantos === 1 ? "retiro" : "retiros"}` : "Ninguno"}</td>
+                <td>{Number(c.desglose.retiros.importe) ? `− ${pesos.format(Math.abs(Number(c.desglose.retiros.importe)))}` : pesos.format(0)}</td></tr>
               <tr><td><strong>Saldo esperado al entregar</strong></td><td></td><td data-testid="desglose-total"><strong>{pesos.format(Number(c.desglose.calculado))}</strong></td></tr>
             </tbody>
           </table>

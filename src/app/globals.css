@@ -916,3 +916,22 @@ fieldset.sin-marco {
   background: var(--ok-soft);
   color: var(--ok);
 }
+
+/* --- Retiros a Encargada de retiros (bloque 5) --- */
+.tarjeta-oscura {
+  background: var(--demo-bg);
+  color: var(--demo-fg);
+  border-color: var(--demo-bg);
+}
+.tarjeta-oscura .sub {
+  color: #c9ced6;
+}
+.cifra-grande {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+td.mono {
+  white-space: nowrap;
+}
