@@ -27,7 +27,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   const { codigo } = await params;
   const e = await estadoTurno(obtenerBaseDatos()!, sesion.usuarioId, codigo);
   if (!e) notFound();
-  const { aviso } = await searchParams;
+  const { aviso, dif: difRetiro } = await searchParams;
   const t = e.turno;
   const sql = obtenerBaseDatos()!;
   const puedeCobrar = t ? (await impedimentoRegistroVisita(sql, sesion.usuarioId, codigo, leerEntorno())) === null : false;
@@ -74,7 +74,10 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
       ) : null}
       {aviso === "entrega-cancelada" ? <p className="aviso aviso-ok" role="status">Entrega cancelada. El turno sigue a tu cargo.</p> : null}
       {aviso === "retiro" ? (
-        <p className="aviso aviso-ok" role="status">Retiro registrado: la salida ya se descontó. Queda pendiente de confirmar por Encargada de retiros.</p>
+        <p className="aviso aviso-ok" role="status">
+          Retiro registrado: la salida ya se descontó. Queda pendiente de confirmar por Encargada de retiros.
+          {typeof difRetiro === "string" && /^-?\d+\.\d{2}$/.test(difRetiro) ? ` Se registró una diferencia de ${(Number(difRetiro) < 0 ? "−" : "+") + pesos.format(Math.abs(Number(difRetiro)))} contra el esperado al retirar; se vincula al cambio de turno si sigue presente.` : ""}
+        </p>
       ) : null}
       {aviso === "recibido" && recibida ? <p className="aviso aviso-ok" role="status">Turno recibido. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
 
@@ -216,7 +219,16 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                   <dd data-testid="esperado" className={l.esperado === null ? "dd-largo" : undefined}>
                     {l.esperado !== null ? <strong>{pesos.format(Number(l.esperado))}</strong> : "No calculado: faltan datos de Open Desk"}
                   </dd>
+                  {l.cantidadDiferenciasRetiro ? (
+                    <>
+                      <dt>Diferencia contra el esperado registrada al retirar ({l.cantidadDiferenciasRetiro})</dt>
+                      <dd data-testid="diferencia-retiros">{(Number(l.diferenciaRetiros) < 0 ? "−" : "+") + pesos.format(Math.abs(Number(l.diferenciaRetiros)))}</dd>
+                    </>
+                  ) : null}
                 </dl>
+                {l.cantidadDiferenciasRetiro ? (
+                  <p className="sub">Ya está registrada: en el cambio de turno se vincula a la diferencia contra el esperado si sigue presente, sin duplicarse.</p>
+                ) : null}
                 <p className="sub">Responsable: <strong>{l.responsable}</strong>, desde {hora.format(l.responsableDesde)}</p>
                 {l.tipo === "cajon_mensualidades" ? (
                   <p className="aviso aviso-info" data-testid="no-conciliado">No conciliado: faltan datos de Open Desk</p>

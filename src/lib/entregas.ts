@@ -383,9 +383,21 @@ export async function recibirTurno(
     for (const l of lugares) {
       const dEsperado = l.tipo === "bolsa_visitas" ? cent(bolsaEntregada.importe) - cent(bolsaEntregada.esperado!) : 0;
       const dPersonas = cent(importe(l.tipo)) - cent(l.tipo === "bolsa_visitas" ? entregado.bolsa : entregado.cajon);
+      let difEsperadoId: string | null = null;
       if (dEsperado) {
-        await tx`insert into diferencia_efectivo (entrega_id, turno_id, lugar_id, tipo, importe)
-                 values (${c.e.id}, ${c.turnoId}, ${l.id}, 'contra_esperado', ${(dEsperado / 100).toFixed(2)})`;
+        [{ id: difEsperadoId }] = await tx<{ id: string }[]>`insert into diferencia_efectivo (entrega_id, turno_id, lugar_id, tipo, importe)
+                 values (${c.e.id}, ${c.turnoId}, ${l.id}, 'contra_esperado', ${(dEsperado / 100).toFixed(2)}) returning id`;
+      }
+      // Diferencias registradas al retirar en este turno: se vinculan a esta entrega con la parte que sigue presente en
+      // la diferencia contra el esperado (mismo caso; no se duplica ni se suma otra vez).
+      let resto = dEsperado;
+      for (const dr of await tx<{ id: string; importe: string }[]>`
+        select id, importe::text from diferencia_retiro where turno_id = ${c.turnoId} and lugar_id = ${l.id} order by registrada_en, id`) {
+        const r = cent(dr.importe);
+        const presente = resto !== 0 && Math.sign(resto) === Math.sign(r) ? Math.sign(r) * Math.min(Math.abs(resto), Math.abs(r)) : 0;
+        resto -= presente;
+        await tx`insert into diferencia_retiro_entrega (diferencia_retiro_id, entrega_id, diferencia_id, presente)
+                 values (${dr.id}, ${c.e.id}, ${presente ? difEsperadoId : null}, ${(presente / 100).toFixed(2)})`;
       }
       if (dPersonas) {
         await tx`insert into diferencia_efectivo (entrega_id, turno_id, lugar_id, tipo, importe)

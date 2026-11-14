@@ -67,6 +67,20 @@ export default async function Retiro({ params, searchParams }: PageProps<"/sucur
             <div className="cifra-caso cifra-mal" data-testid="cifra-diferencia"><span className="sub">Diferencia (contado al recibir − registrado)</span><strong>{firmado(cent(contado) - cent(d.registrado.importe))}</strong></div>
           ) : null}
         </div>
+        {d.diferenciaEsperado ? (
+          <div className="cifra-caso cifra-mal" data-testid="diferencia-al-retirar">
+            <span className="sub">Diferencia contra el esperado al retirar (contado {pesos.format(Number(d.diferenciaEsperado.contado))} − esperado {pesos.format(Number(d.diferenciaEsperado.esperado))})</span>
+            <strong>{firmado(cent(d.diferenciaEsperado.importe))}</strong>
+            <span className="sub" data-testid="vinculo-cambio-turno">
+              {!d.diferenciaEsperado.cambioDeTurno
+                ? "Registrada al retirar. Se vincula al cambio de turno si sigue presente, sin duplicarse."
+                : cent(d.diferenciaEsperado.cambioDeTurno.presente)
+                  ? <>Sigue presente {firmado(cent(d.diferenciaEsperado.cambioDeTurno.presente))} en el cambio de turno: es la misma diferencia contra el esperado de la entrega, no otra. <Link href={`/sucursales/${codigo}/diferencias/${d.diferenciaEsperado.cambioDeTurno.entregaId}`}>Ver el cambio de turno</Link></>
+                  : "Ya no está presente en el cambio de turno."}
+            </span>
+          </div>
+        ) : null}
+        {d.folioEnSobre ? <p className="sub" data-testid="folio-en-sobre">Folio registrado: <span className="mono">{r.folio}</span> · el sobre trae: <span className="mono">{d.folioEnSobre}</span></p> : null}
         {d.motivo ? <p className="sub" data-testid="motivo-discrepancia">«No coincide» ({r.discrepancia === "folio" ? "folio" : "importe"}) · {d.reportadoEn ? hora.format(d.reportadoEn) : ""} · Motivo: «{d.motivo}»</p> : null}
         {r.discrepancia ? (
           <p className="sub" data-testid="quien-revisa">
@@ -82,6 +96,7 @@ export default async function Retiro({ params, searchParams }: PageProps<"/sucur
           <p>
             <strong>{d.revision.resultado === "aclarada" ? "Aclarada" : "Faltante confirmado"}</strong> · revisó <strong>{d.revision.revisadaPor}</strong> ({NOMBRE_NIVEL_RETIRO[d.revision.nivel]}) · {hora.format(d.revision.en)}
           </p>
+          {d.revision.folioVerificado ? <p data-testid="folio-verificado">Folio verificado: <span className="mono">{d.revision.folioVerificado}</span></p> : null}
           <p>Monto verificado: <strong data-testid="monto-verificado">{pesos.format(Number(d.revision.montoVerificado))}</strong> · Motivo: «{d.revision.motivo}»</p>
           {d.revision.resultado === "faltante_confirmado" ? (
             <p className="aviso aviso-info" data-testid="faltante-direccion">
@@ -92,11 +107,11 @@ export default async function Retiro({ params, searchParams }: PageProps<"/sucur
       ) : d.puedeRevisar ? (
         <section className="tarjeta" aria-labelledby="t-revisar">
           <h2 id="t-revisar" className="titulo-seccion">Revisar la discrepancia</h2>
-          <FormularioRevisionRetiro codigo={codigo} retiroId={r.id} version={r.version} registrado={d.registrado!.importe} />
+          <FormularioRevisionRetiro codigo={codigo} retiroId={r.id} version={r.version} registrado={d.registrado!.importe} folio={r.folio} folioEnSobre={d.folioEnSobre} />
         </section>
       ) : r.estado === "por_revisar" ? (
         <p className="aviso aviso-info" data-testid="pausa">
-          Por revisar ({NOMBRE_NIVEL_RETIRO[d.nivel]}). Los depósitos de este folio están en pausa hasta aclararlo; los demás folios siguen normales.
+          Por revisar ({NOMBRE_NIVEL_RETIRO[d.nivel]}). Los depósitos de este folio están en pausa hasta {r.discrepancia === "folio" ? "verificar a qué sobre corresponde el efectivo" : "aclararlo"}; los demás folios siguen normales.
         </p>
       ) : null}
 

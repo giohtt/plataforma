@@ -16,7 +16,7 @@ import { obtenerSesionActual } from "@/lib/sesion-servidor";
 
 export type EstadoFormularioRetiro = {
   error?: string;
-  errores?: Partial<Record<"contado" | "cambio" | "folio" | "encargada" | "importe" | "folioCoincide" | "motivo" | "recontaron" | "con"
+  errores?: Partial<Record<"contado" | "cambio" | "folio" | "encargada" | "importe" | "folioCoincide" | "folioEnSobre" | "folioVerificado" | "motivo" | "recontaron" | "con"
     | "fecha" | "referencia" | "resultado" | "monto", string>>;
   valores?: Record<string, string>;
   intento: number;
@@ -69,7 +69,7 @@ export async function accionEntregarRetiro(previo: EstadoFormularioRetiro, datos
   const r = await registrarRetiro(sql, sesion.usuarioId, codigo,
     { turnoId: leer("turno"), lugar: valores.lugar, contado: contado.valor, cambio: cambio.valor, folio: valores.folio, encargada: valores.encargada },
     { entorno: leerEntorno() });
-  if (r.ok) redirect(`/sucursales/${codigo}/turno?aviso=retiro`);
+  if (r.ok) redirect(`/sucursales/${codigo}/turno?aviso=retiro${r.diferencia ? `&dif=${r.diferencia}` : ""}`);
   const campo = r.error === "cambio_mayor" ? "cambio" : r.error === "folio" || r.error === "folio_repetido" ? "folio" : r.error === "encargada" ? "encargada" : null;
   if (campo) return { error: REVISA, errores: { [campo]: MENSAJES_RETIRO[r.error] }, valores, intento };
   return { error: MENSAJES_RETIRO[r.error], valores, intento };
@@ -81,6 +81,7 @@ const MENSAJES_CONFIRMACION: Record<ErrorConfirmacion, string> = {
   cambio: "El retiro cambió mientras tenías abierta la pantalla. Revisa su estado actual.",
   importe: "Escribe lo que contaste en el sobre.",
   folio: "Indica si el folio del sobre coincide.",
+  folio_sobre: "Escribe el folio que trae el sobre: de 3 a 30 letras, números o guiones.",
   motivo: "Escribe el motivo (de 5 a 300 caracteres).",
   persona: "Elige con quién recontaste en persona.",
   bloqueado_produccion: "Los retiros están desactivados fuera del entorno de pruebas.",
@@ -89,7 +90,7 @@ const MENSAJES_CONFIRMACION: Record<ErrorConfirmacion, string> = {
 export async function accionConfirmarRetiro(previo: EstadoFormularioRetiro, datos: FormData): Promise<EstadoFormularioRetiro> {
   const { sesion, sql } = await inicio();
   const leer = lector(datos);
-  const valores = { importe: leer("importe", 30), folioCoincide: leer("folio_coincide", 4), motivo: leer("motivo", 400) };
+  const valores = { importe: leer("importe", 30), folioCoincide: leer("folio_coincide", 4), folioEnSobre: leer("folio_en_sobre"), motivo: leer("motivo", 400) };
   const intento = (previo?.intento ?? 0) + 1;
   const importe = leerImporte(valores.importe);
   const folioOk = valores.folioCoincide === "si" || valores.folioCoincide === "no";
@@ -100,10 +101,11 @@ export async function accionConfirmarRetiro(previo: EstadoFormularioRetiro, dato
     };
   }
   const r = await confirmarRetiro(sql, sesion.usuarioId,
-    { retiroId: leer("retiro"), version: Number(leer("version")), importe: importe.valor, folioCoincide: valores.folioCoincide === "si", motivo: valores.motivo },
+    { retiroId: leer("retiro"), version: Number(leer("version")), importe: importe.valor, folioCoincide: valores.folioCoincide === "si", folioEnSobre: valores.folioEnSobre, motivo: valores.motivo },
     { entorno: leerEntorno() });
   if (r.ok) redirect(`/retiros?aviso=${r.resultado}`);
   if (r.error === "motivo") return { error: REVISA, errores: { motivo: "Si el folio no coincide, escribe el motivo (de 5 a 300 caracteres)." }, valores, intento };
+  if (r.error === "folio_sobre") return { error: REVISA, errores: { folioEnSobre: MENSAJES_CONFIRMACION.folio_sobre }, valores, intento };
   return { error: MENSAJES_CONFIRMACION[r.error], valores, intento };
 }
 
@@ -183,6 +185,7 @@ const MENSAJES_REVISION: Record<ErrorRevisionRetiro, string> = {
   resultado: "Elige «Aclarada» o «Faltante confirmado».",
   motivo: "Escribe el motivo (de 5 a 300 caracteres).",
   monto: "Con «Faltante confirmado», el monto verificado debe ser menor que lo registrado.",
+  folio_verificado: "Escribe el folio verificado: debe ser el de este retiro. Si el efectivo corresponde a otro sobre, el retiro sigue en pausa hasta verificarlo.",
   bloqueado_produccion: "Los retiros están desactivados fuera del entorno de pruebas.",
 };
 
@@ -191,7 +194,7 @@ export async function accionRevisarRetiro(previo: EstadoFormularioRetiro, datos:
   const leer = lector(datos);
   const codigo = leer("codigo");
   const retiroId = leer("retiro");
-  const valores = { resultado: leer("resultado"), motivo: leer("motivo", 400), monto: leer("monto", 30) };
+  const valores = { resultado: leer("resultado"), motivo: leer("motivo", 400), monto: leer("monto", 30), folioVerificado: leer("folio_verificado") };
   const intento = (previo?.intento ?? 0) + 1;
   const monto = leerImporte(valores.monto);
   const errores: NonNullable<EstadoFormularioRetiro>["errores"] = {
@@ -201,9 +204,10 @@ export async function accionRevisarRetiro(previo: EstadoFormularioRetiro, datos:
   };
   if (Object.values(errores).some(Boolean) || !monto.ok) return { error: REVISA, errores, valores, intento };
   const r = await revisarRetiro(sql, sesion.usuarioId, codigo,
-    { retiroId, version: Number(leer("version")), resultado: valores.resultado, motivo: valores.motivo, montoVerificado: monto.valor },
+    { retiroId, version: Number(leer("version")), resultado: valores.resultado, motivo: valores.motivo, montoVerificado: monto.valor, folioVerificado: valores.folioVerificado },
     { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/retiros/${retiroId}?aviso=revisado`);
+  if (r.error === "folio_verificado") return { error: REVISA, errores: { folioVerificado: MENSAJES_REVISION.folio_verificado }, valores, intento };
   const campo = r.error === "motivo" || r.error === "monto" || r.error === "resultado" ? r.error : null;
   if (campo) return { error: REVISA, errores: { [campo]: MENSAJES_REVISION[r.error] }, valores, intento };
   return { error: MENSAJES_REVISION[r.error], valores, intento };

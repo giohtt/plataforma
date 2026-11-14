@@ -38,7 +38,7 @@ export default async function EntregarRetiro({ params }: PageProps<"/sucursales/
       ) : (
         <div className="lugares-turno">
           {p.lugares.filter((l) => l.responsable).map((l) => (
-            <FormularioRetiro key={l.tipo} codigo={codigo} turnoId={p.turnoId} lugar={l.tipo} esperado={l.esperado} encargadas={p.encargadas} />
+            <FormularioRetiro key={l.tipo} codigo={codigo} turnoId={p.turnoId} lugar={l.tipo} esperado={l.esperado} diferenciaRetiros={l.diferenciaRetiros} encargadas={p.encargadas} />
           ))}
         </div>
       )}

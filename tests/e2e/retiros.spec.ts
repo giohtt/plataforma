@@ -195,3 +195,59 @@ test("$2,300 registrados y $2,250 contados: solo ese folio en pausa, los $50 fue
   await capturar(page, "administracion");
   await tablasSinDeslizar(page);
 });
+
+test("diferencia contra el esperado al retirar y folio que no coincide: se verifica el folio antes de habilitar depósitos", async ({ page }) => {
+  const e = await escenario();
+  // Esperado $900: Recepción cuenta $880, deja $80 y se lleva $800.
+  await entrar(page, e.laura.correo);
+  await page.goto(`/sucursales/${e.codigo}/turno/retiro`);
+  await page.waitForLoadState("networkidle");
+  const f = page.getByTestId("retiro-bolsa_visitas");
+  await f.getByLabel("Total contado antes del retiro").fill("880");
+  await expect(f).toContainText("al entregar se registra una diferencia de −$20.00 contra el esperado");
+  await retirar(page, e.codigo, "bolsa_visitas", "880", "80", "T-03");
+  await expect(page.locator("p.aviso[role=status]")).toContainText("Se registró una diferencia de −$20.00 contra el esperado al retirar");
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("diferencia-retiros")).toHaveText("−$20.00");
+  await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText("$100.00");
+  // El siguiente retiro de la bolsa ya considera los −$20: no se registran otra vez.
+  await page.goto(`/sucursales/${e.codigo}/turno/retiro`);
+  await expect(page.getByTestId("retiro-bolsa_visitas").getByTestId("retiro-esperado")).toHaveText("$80.00");
+  await expect(page.getByTestId("retiro-bolsa_visitas").getByTestId("retiro-diferencias-previas")).toContainText("−$20.00");
+  await retirar(page, e.codigo, "cajon_mensualidades", "2300", "0", "T-04");
+
+  // Encargada de retiros: el folio del cajón no coincide.
+  await entrar(page, e.encargada.correo);
+  await page.goto("/retiros");
+  const c = page.locator('[data-testid=retiro-por-confirmar][data-folio="T-04"]');
+  await c.getByLabel("¿Cuánto contaste en el sobre?").fill("2300");
+  await c.getByRole("radio", { name: "No coincide" }).check();
+  await c.getByLabel("Folio que trae el sobre").fill("T-99");
+  await c.getByLabel("Motivo (obligatorio)").fill("Prueba ficticia: el sobre trae otro folio");
+  await c.getByRole("button", { name: "Confirmar lo que recibí" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toContainText("solo los depósitos de ese folio quedan en pausa");
+
+  // Encargado revisa: sin el folio verificado (o con otro), no se habilita.
+  await entrar(page, e.encargado.correo);
+  await page.goto(`/sucursales/${e.codigo}/retiros`);
+  await page.getByTestId("ver-retiro").click();
+  await expect(page.getByTestId("folio-en-sobre")).toContainText("el sobre trae: T-99");
+  const rv = page.getByTestId("revisar-retiro");
+  await rv.getByRole("radio", { name: /Aclarada/ }).check();
+  await rv.getByLabel("Folio verificado del sobre").fill("T-99");
+  await rv.getByLabel("Monto verificado en el sobre").fill("2300");
+  await rv.getByLabel("Motivo (obligatorio)").fill("Prueba ficticia: se revisó el sobre");
+  await rv.getByRole("button", { name: "Registrar revisión" }).click();
+  await expect(page.getByTestId("revisar-retiro")).toContainText("debe ser el de este retiro");
+  await expect(page.getByTestId("estado-retiro")).toHaveText("No coincide · Por revisar");
+  const rv2 = page.getByTestId("revisar-retiro");
+  await rv2.getByRole("radio", { name: /Aclarada/ }).check();
+  await rv2.getByLabel("Folio verificado del sobre").fill("T-04");
+  await rv2.getByLabel("Monto verificado en el sobre").fill("2300");
+  await rv2.getByLabel("Motivo (obligatorio)").fill("Prueba ficticia: el efectivo es del sobre T-04; se etiquetó mal");
+  await rv2.getByRole("button", { name: "Registrar revisión" }).click();
+  await expect(page.getByTestId("estado-retiro")).toHaveText("Revisado · aclarada");
+  await expect(page.getByTestId("folio-verificado")).toContainText("T-04");
+  await expect(page.getByTestId("habilitado")).toHaveText("$2,300.00");
+  await capturar(page, "folio-verificado");
+  await tablasSinDeslizar(page);
+});

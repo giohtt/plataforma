@@ -176,6 +176,11 @@ export type DetalleDiferencias = {
   diferencias: Diferencia[];
   desglose: Desglose;
   fueraDeLaBolsa: VentasTurno;
+  /**
+   * Diferencias contra el esperado registradas al retirar en el turno, vinculadas a esta entrega: la parte que sigue
+   * presente forma parte de la diferencia contra el esperado de la entrega (el mismo caso, no otro).
+   */
+  deRetiros: { retiroId: string; folio: string; importe: string; presente: string; en: Date }[];
 };
 
 export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: string, entregaId: string): Promise<DetalleDiferencias | null> {
@@ -294,6 +299,10 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
       retiros: { cuantos: d.retiros, importe: d.importe_retiros }, calculado,
     },
     fueraDeLaBolsa: ventasDelTurno(await cobrosDelTurno(sql, e.turno_id)),
+    deRetiros: [...(await sql<DetalleDiferencias["deRetiros"]>`
+      select r.id as "retiroId", r.folio, dr.importe::text, v.presente::text, dr.registrada_en as en
+      from diferencia_retiro_entrega v join diferencia_retiro dr on dr.id = v.diferencia_retiro_id join retiro r on r.id = dr.retiro_id
+      where v.entrega_id = ${e.id} order by dr.registrada_en`)],
   };
 }
 

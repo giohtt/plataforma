@@ -35,6 +35,12 @@ export type LugarEnTurno = {
   /** Salidas por retiros entregados a Encargada de retiros (negativo) y cuántos. */
   retiros: string;
   cantidadRetiros: number;
+  /**
+   * Diferencias contra el esperado registradas al retirar (lo contado − el esperado) y cuántas. No cambian el esperado:
+   * se vinculan a la diferencia contra el esperado del cambio de turno, sin duplicarse.
+   */
+  diferenciaRetiros: string;
+  cantidadDiferenciasRetiro: number;
   /** Contado al abrir + entradas + ajustes − retiros. null en el cajón: no se calcula mientras falten los datos de Open Desk. */
   esperado: string | null;
 };
@@ -75,6 +81,7 @@ export async function turnoAbiertoDe(tx: Tx | Sql, sucursalId: string): Promise<
            m.suma::text as entradas, m.cuantas as "cantidadEntradas", m.visitas as "visitasEntradas",
            m.ajustes::text as ajustes, m.cuantos_ajustes as "cantidadAjustes",
            m.salidas::text as retiros, m.cuantas_salidas as "cantidadRetiros",
+           dr.suma::text as "diferenciaRetiros", dr.cuantas as "cantidadDiferenciasRetiro",
            case when l.tipo = 'bolsa_visitas' then (c.importe + m.suma + m.ajustes + m.salidas)::text end as esperado
     from lugar_efectivo l
     join conteo_efectivo c on c.lugar_id = l.id and c.turno_id = ${t.id} and c.momento = 'apertura'
@@ -91,6 +98,10 @@ export async function turnoAbiertoDe(tx: Tx | Sql, sucursalId: string): Promise<
              (count(*) filter (where me.tipo = 'salida_retiro'))::int as cuantas_salidas
       from movimiento_efectivo me where me.turno_id = ${t.id} and me.lugar_id = l.id
     ) m
+    cross join lateral (
+      select coalesce(sum(x.importe), 0)::numeric(12, 2) as suma, count(*)::int as cuantas
+      from diferencia_retiro x where x.turno_id = ${t.id} and x.lugar_id = l.id
+    ) dr
     order by case l.tipo when 'bolsa_visitas' then 0 else 1 end`;
   return { id: t.id, abiertoPor: t.abierto_por, abiertoEn: t.abierto_en, lugares: [...lugares] };
 }

@@ -44,8 +44,9 @@ const NOMBRE = { bolsa_visitas: "Bolsa de visitas", cajon_mensualidades: "Cajón
  * Recepción entrega en persona el sobre de UN lugar: cuenta, captura lo que deja para cambio (lo indica Encargada de
  * retiros) y el folio. Se lleva = contado − cambio.
  */
-export function FormularioRetiro({ codigo, turnoId, lugar, esperado, encargadas }: {
-  codigo: string; turnoId: string; lugar: keyof typeof NOMBRE; esperado: string | null; encargadas: { id: string; nombre: string }[];
+export function FormularioRetiro({ codigo, turnoId, lugar, esperado, diferenciaRetiros, encargadas }: {
+  codigo: string; turnoId: string; lugar: keyof typeof NOMBRE; esperado: string | null; diferenciaRetiros: string;
+  encargadas: { id: string; nombre: string }[];
 }) {
   const [estado, accion, enviando] = useActionState(accionEntregarRetiro, null);
   const [contado, setContado] = useState(estado?.valores?.contado ?? "");
@@ -65,8 +66,13 @@ export function FormularioRetiro({ codigo, turnoId, lugar, esperado, encargadas 
         <dt>Efectivo esperado</dt>
         <dd data-testid="retiro-esperado">{esperado !== null ? <strong>{pesos.format(Number(esperado))}</strong> : "No calculado: faltan datos de Open Desk"}</dd>
       </dl>
+      {esperado !== null && cent(diferenciaRetiros) ? (
+        <p className="sub" data-testid="retiro-diferencias-previas">
+          Este esperado ya considera la diferencia de {firmado(cent(diferenciaRetiros))} registrada en un retiro anterior de este turno, para no registrarla dos veces.
+        </p>
+      ) : null}
       <Importe estado={estado} campo="contado" id={id("contado")} etiqueta="Total contado antes del retiro" alCambiar={setContado}
-        ayuda={esperado !== null && c.ok ? (cent(c.valor) === cent(esperado) ? "Coincide con el esperado." : `No coincide con el esperado (${firmado(cent(c.valor) - cent(esperado))}). Se registra lo contado.`) : undefined} />
+        ayuda={esperado !== null && c.ok ? (cent(c.valor) === cent(esperado) ? "Coincide con el esperado." : `No coincide con el esperado: al entregar se registra una diferencia de ${firmado(cent(c.valor) - cent(esperado))} contra el esperado. Se vincula al cambio de turno si sigue presente, sin duplicarse.`) : undefined} />
       <Importe estado={estado} campo="cambio" id={id("cambio")} etiqueta="Deja para cambio (lo indica Encargada de retiros)" alCambiar={setCambio}
         ayuda="Si no deja nada, escribe 0." />
       <p data-testid="se-lleva">
@@ -119,6 +125,14 @@ export function FormularioConfirmarRetiro({ retiroId, version, folio }: { retiro
         </label>
         <ErrorCampo estado={estado} campo="folioCoincide" id={id("folio")} />
       </fieldset>
+      {folioOk === "no" ? (
+        <div className="campo">
+          <label htmlFor={id("folio-sobre")}>Folio que trae el sobre</label>
+          <input id={id("folio-sobre")} name="folio_en_sobre" maxLength={30} autoComplete="off" className="mono" defaultValue={estado?.valores?.folioEnSobre ?? ""}
+            aria-invalid={estado?.errores?.folioEnSobre ? true : undefined} />
+          <ErrorCampo estado={estado} campo="folioEnSobre" id={id("folio-sobre")} />
+        </div>
+      ) : null}
       {folioOk === "no" ? (
         <div className="campo">
           <label htmlFor={id("motivo")}>Motivo (obligatorio)</label>
@@ -234,7 +248,11 @@ export function FormularioDeposito({ codigo, retiroId, porDepositar, corrige }: 
 }
 
 /** Revisión de una discrepancia: «Aclarada» o «Faltante confirmado», con motivo y monto verificado. */
-export function FormularioRevisionRetiro({ codigo, retiroId, version, registrado }: { codigo: string; retiroId: string; version: number; registrado: string }) {
+export function FormularioRevisionRetiro({ codigo, retiroId, version, registrado, folio, folioEnSobre }: {
+  codigo: string; retiroId: string; version: number; registrado: string; folio: string;
+  /** Si se reportó que el folio no coincide: el que trae el sobre. Se exige verificar el folio antes de habilitar. */
+  folioEnSobre: string | null;
+}) {
   const [estado, accion, enviando] = useActionState(accionRevisarRetiro, null);
   const id = (x: string) => `${x}-rev-${retiroId}`;
   return (
@@ -255,6 +273,18 @@ export function FormularioRevisionRetiro({ codigo, retiroId, version, registrado
         </label>
         <ErrorCampo estado={estado} campo="resultado" id={id("resultado")} />
       </fieldset>
+      {folioEnSobre ? (
+        <div className="campo">
+          <label htmlFor={id("folio")}>Folio verificado del sobre</label>
+          <input id={id("folio")} name="folio_verificado" maxLength={30} autoComplete="off" className="mono" defaultValue={estado?.valores?.folioVerificado ?? ""}
+            aria-invalid={estado?.errores?.folioVerificado ? true : undefined} />
+          <span className="sub">
+            Se reportó que el sobre trae <span className="mono">{folioEnSobre}</span>. Escribe el folio que verificaste: debe ser <span className="mono">{folio}</span>,
+            el de este retiro. Sin esa verificación los depósitos siguen en pausa.
+          </span>
+          <ErrorCampo estado={estado} campo="folioVerificado" id={id("folio")} />
+        </div>
+      ) : null}
       <Importe estado={estado} campo="monto" id={id("monto")} etiqueta="Monto verificado en el sobre"
         ayuda={`Lo registrado por Recepción fue ${pesos.format(Number(registrado))}. Los depósitos del folio se habilitan por el monto verificado.`} />
       <div className="campo">

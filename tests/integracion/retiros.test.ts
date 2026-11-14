@@ -53,8 +53,8 @@ async function retirar(e: Esc, lugar: "bolsa_visitas" | "cajon_mensualidades", c
   return r.retiroId;
 }
 const version = async (id: string) => (await sql<{ version: number }[]>`select version from retiro where id = ${id}`)[0].version;
-const confirmar = async (e: Esc, id: string, importe: string, folioCoincide = true, motivo = "") =>
-  confirmarRetiro(sql, e.encargada, { retiroId: id, version: await version(id), importe, folioCoincide, motivo }, PRUEBAS);
+const confirmar = async (e: Esc, id: string, importe: string, folioCoincide = true, motivo = "", folioEnSobre = "") =>
+  confirmarRetiro(sql, e.encargada, { retiroId: id, version: await version(id), importe, folioCoincide, folioEnSobre, motivo }, PRUEBAS);
 const depositar = (e: Esc, id: string, importe: string, referencia = "DEP-FICTICIO-0001", corrige: string | null = null, motivo = "") =>
   registrarDeposito(sql, e.encargada, { retiroId: id, importe, depositadoEn: ahoraLocal(), referencia, corrige, motivo }, PRUEBAS);
 /** Hora de México de hace un minuto, como la escribe el formulario. */
@@ -247,18 +247,96 @@ describe.skipIf(!URL_ADMIN)("retiros a Encargada de retiros", () => {
     expect(d.conteos).toMatchObject({ inicial: { importe: "750.00" }, recuento: { importe: "800.00" } });
   });
 
-  it("si el folio no coincide, queda por revisar y en pausa hasta verificar a qué sobre corresponde", async () => {
+  it("si el folio no coincide: se registra el folio del sobre y, sin verificar el folio, la revisión no habilita depósitos", async () => {
     const e = await escenario();
     const id = await retirar(e, "cajon_mensualidades", "2300", "0", "C-8");
-    expect(await confirmar(e, id, "2300", false, "")).toEqual({ ok: false, error: "motivo" });
-    expect(await confirmar(e, id, "2300", false, "Prueba ficticia: el sobre dice C-9")).toEqual({ ok: true, resultado: "por_revisar" });
+    expect(await confirmar(e, id, "2300", false, "Prueba ficticia: el sobre dice C-9", "")).toEqual({ ok: false, error: "folio_sobre" });
+    expect(await confirmar(e, id, "2300", false, "", "C-9")).toEqual({ ok: false, error: "motivo" });
+    expect(await confirmar(e, id, "2300", false, "Prueba ficticia: el sobre dice C-9", "c-9")).toEqual({ ok: true, resultado: "por_revisar" });
     const d = (await detalleRetiro(sql, e.encargado, e.codigo, id))!;
-    expect(d).toMatchObject({ retiro: { discrepancia: "folio", saldo: { enPausa: "2300.00", porAclarar: "0.00", habilitado: null } }, puedeRevisar: true });
+    expect(d).toMatchObject({ folioEnSobre: "C-9", retiro: { discrepancia: "folio", saldo: { enPausa: "2300.00", porAclarar: "0.00", habilitado: null } }, puedeRevisar: true });
+    expect(d.historial.map((h) => h.que).join("\n")).toMatch(/No coincide \(folio: el sobre trae C-9\)/);
     expect(await depositar(e, id, "100")).toEqual({ ok: false, error: "en_pausa" });
-    expect(await revisarRetiro(sql, e.encargado, e.codigo, {
-      retiroId: id, version: await version(id), resultado: "aclarada", motivo: "Prueba ficticia: se verificó que el sobre es el C-8", montoVerificado: "2300",
-    }, PRUEBAS)).toEqual({ ok: true });
+    const revisar = async (folioVerificado?: string) => revisarRetiro(sql, e.encargado, e.codigo, {
+      retiroId: id, version: await version(id), resultado: "aclarada", motivo: "Prueba ficticia: se verificó que el sobre es el C-8", montoVerificado: "2300", folioVerificado,
+    }, PRUEBAS);
+    // Sin folio verificado, o con otro folio, sigue en pausa.
+    expect(await revisar()).toEqual({ ok: false, error: "folio_verificado" });
+    expect(await revisar("C-9")).toEqual({ ok: false, error: "folio_verificado" });
+    expect((await detalleRetiro(sql, e.encargada, e.codigo, id))!.retiro).toMatchObject({ estado: "por_revisar", saldo: { habilitado: null } });
+    expect(await depositar(e, id, "100")).toEqual({ ok: false, error: "en_pausa" });
+    // La base lo respalda: sin la verificación no se registra la revisión.
+    await expect(sql`insert into retiro_revision (retiro_id, resultado, motivo, monto_verificado, nivel, revisada_por)
+                     values (${id}, 'aclarada', 'Prueba ficticia directa', 2300, 'encargado', ${e.encargado})`).rejects.toThrow(/verificar/);
+    expect(await revisar("c-8")).toEqual({ ok: true });
+    const x = (await detalleRetiro(sql, e.encargada, e.codigo, id))!;
+    expect(x.revision).toMatchObject({ folioVerificado: "C-8" });
+    expect(x.historial.map((h) => h.que).join("\n")).toMatch(/Aclarada · folio verificado C-8 · monto verificado \$2,300\.00/);
     expect(await depositar(e, id, "2300")).toMatchObject({ ok: true });
+  });
+
+  it("con el importe en duda (folio correcto), la revisión no lleva folio verificado", async () => {
+    const e = await escenario();
+    const id = await retirar(e, "cajon_mensualidades", "2300", "0", "C-8B");
+    await confirmar(e, id, "2250");
+    await recontarRetiro(sql, e.encargada, { retiroId: id, version: await version(id), recontaron: false, importe: null, con: null, motivo: "Prueba ficticia: sin recuento" }, PRUEBAS);
+    await expect(sql`insert into retiro_revision (retiro_id, resultado, motivo, monto_verificado, nivel, revisada_por, folio_verificado)
+                     values (${id}, 'aclarada', 'Prueba ficticia directa', 2300, 'encargado', ${e.encargado}, 'C-8B')`).rejects.toThrow(/solo aplica/);
+  });
+
+  it("diferencia contra el esperado al retirar: se registra al momento, no se repite en otro retiro y en el cambio de turno es el mismo caso", async () => {
+    const e = await escenario();
+    // Esperado $900; cuenta $880 (−$20), deja $80 y se lleva $800.
+    const r1 = await registrarRetiro(sql, e.recepcion, e.codigo,
+      { turnoId: e.turnoId, lugar: "bolsa_visitas", contado: "880", cambio: "80", folio: "B-20", encargada: e.encargada }, PRUEBAS);
+    expect(r1).toMatchObject({ ok: true, diferencia: "-20.00" });
+    const [dr] = await sql`select esperado::text, contado::text, importe::text from diferencia_retiro where retiro_id = ${r1.ok && r1.retiroId}`;
+    expect(dr).toEqual({ esperado: "900.00", contado: "880.00", importe: "-20.00" });
+    let t = (await estadoTurno(sql, e.recepcion, e.codigo))!.turno!;
+    expect(t.lugares[0]).toMatchObject({ esperado: "100.00", diferenciaRetiros: "-20.00", cantidadDiferenciasRetiro: 1 });
+    // El segundo retiro compara contra el esperado que ya considera los −$20: no los registra otra vez.
+    const p = await pantallaRetiro(sql, e.recepcion, e.codigo, "pruebas");
+    expect(p.ok && p.lugares[0]).toMatchObject({ esperado: "80.00", diferenciaRetiros: "-20.00" });
+    const r2 = await registrarRetiro(sql, e.recepcion, e.codigo,
+      { turnoId: e.turnoId, lugar: "bolsa_visitas", contado: "80", cambio: "20", folio: "B-21", encargada: e.encargada }, PRUEBAS);
+    expect(r2).toMatchObject({ ok: true, diferencia: null });
+    expect((await sql`select count(*)::int as n from diferencia_retiro where turno_id = ${e.turnoId}`)[0].n).toBe(1);
+    t = (await estadoTurno(sql, e.recepcion, e.codigo))!.turno!;
+    expect(t.lugares[0]).toMatchObject({ esperado: "40.00", diferenciaRetiros: "-20.00" });
+    // Cambio de turno: hay $20 en la bolsa (esperado $40): la diferencia sigue presente y es el mismo caso, no otro.
+    const en = await registrarEntrega(sql, e.recepcion, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "20", cajon: "2300" }, recibe: e.otraRecepcion, nota: "", apoyo: NADIE }, PRUEBAS);
+    if (!en.ok) throw new Error(en.error);
+    const x = (await entregaEnCurso(sql, e.turnoId))!;
+    await recibirTurno(sql, e.otraRecepcion, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: "20", cajon: "2300" }, aclaracion: "", apoyo: NADIE }, PRUEBAS);
+    const d = (await detalleDiferencias(sql, e.admin, e.codigo, en.entregaId))!;
+    expect(d.diferencias.filter((y) => y.tipo === "contra_esperado").map((y) => y.importe)).toEqual(["-20.00"]);
+    expect(d.deRetiros).toMatchObject([{ folio: "B-20", importe: "-20.00", presente: "-20.00" }]);
+    const det = (await detalleRetiro(sql, e.admin, e.codigo, r1.ok ? r1.retiroId : ""))!;
+    expect(det.diferenciaEsperado).toMatchObject({ importe: "-20.00", cambioDeTurno: { entregaId: en.entregaId, presente: "-20.00" } });
+    expect(det.historial.map((h) => h.que).join("\n")).toMatch(/Cambio de turno: sigue presente −\$20\.00 de esta diferencia/);
+    // La Encargada de retiros, mientras cuenta a ciegas, no ve la diferencia (revelaría lo registrado).
+    const e2 = await escenario();
+    const ciego = await registrarRetiro(sql, e2.recepcion, e2.codigo,
+      { turnoId: e2.turnoId, lugar: "bolsa_visitas", contado: "880", cambio: "80", folio: "B-22", encargada: e2.encargada }, PRUEBAS);
+    expect((await detalleRetiro(sql, e2.encargada, e2.codigo, ciego.ok ? ciego.retiroId : ""))!.diferenciaEsperado).toBeNull();
+  });
+
+  it("si la diferencia registrada al retirar ya no está en el cambio de turno, se vincula sin crear otra", async () => {
+    const e = await escenario();
+    // Esperado $900; cuenta $880 (−$20), deja $80, se lleva $800. Luego aparecen los $20: entrega $100 = esperado.
+    const r = await registrarRetiro(sql, e.recepcion, e.codigo,
+      { turnoId: e.turnoId, lugar: "bolsa_visitas", contado: "880", cambio: "80", folio: "B-23", encargada: e.encargada }, PRUEBAS);
+    if (!r.ok) throw new Error(r.error);
+    const en = await registrarEntrega(sql, e.recepcion, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "100", cajon: "2300" }, recibe: e.otraRecepcion, nota: "", apoyo: NADIE }, PRUEBAS);
+    if (!en.ok) throw new Error(en.error);
+    const x = (await entregaEnCurso(sql, e.turnoId))!;
+    await recibirTurno(sql, e.otraRecepcion, e.codigo, { entregaId: x.id, version: x.version, conteo: { bolsa: "100", cajon: "2300" }, aclaracion: "", apoyo: NADIE }, PRUEBAS);
+    const d = (await detalleDiferencias(sql, e.admin, e.codigo, en.entregaId))!;
+    expect(d.diferencias).toHaveLength(0);
+    expect(d.deRetiros).toMatchObject([{ folio: "B-23", importe: "-20.00", presente: "0.00" }]);
+    expect((await detalleRetiro(sql, e.admin, e.codigo, r.retiroId))!.diferenciaEsperado!.cambioDeTurno).toMatchObject({ presente: "0.00" });
+    // El vínculo no se edita, y la base no acepta una parte presente de otro signo.
+    await expect(sql`update diferencia_retiro_entrega set presente = -20`).rejects.toThrow();
   });
 
   it("avisos: «48 horas o más en revisión» desde que se reportó, y saldo sin destino 48 horas después de habilitar, aunque haya un depósito parcial", async () => {
