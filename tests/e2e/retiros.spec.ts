@@ -92,6 +92,10 @@ test("$2,300 registrados y $2,250 contados: solo ese folio en pausa, los $50 fue
   const e = await escenario();
   // Recepción entrega la bolsa ($800, deja $100) y el cajón ($2,300), cada uno con su folio.
   await entrar(page, e.laura.correo);
+  // La acción de retiros está justo debajo de «Turno abierto», con el botón «Entregar efectivo».
+  await page.goto(`/sucursales/${e.codigo}/turno`);
+  await expect(page.locator("[data-testid=turno-abierto] + [data-testid=retiros-turno]")).toBeVisible();
+  await expect(page.getByTestId("ir-retiro")).toHaveText("Entregar efectivo");
   const t01 = await retirar(page, e.codigo, "bolsa_visitas", "900", "100");
   await expect(page.getByTestId("lugar-bolsa_visitas").getByTestId("esperado")).toHaveText("$100.00");
   const t02 = await retirar(page, e.codigo, "cajon_mensualidades", "2300", "0");

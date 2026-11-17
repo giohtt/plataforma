@@ -93,6 +93,38 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
               </p>
             ) : null}
           </section>
+          {retiros.length || puedeRetirar ? (
+            <section className="tarjeta" aria-labelledby="t-retiros" data-testid="retiros-turno">
+              <h2 id="t-retiros" className="titulo-seccion">Retiros a Encargada de retiros</h2>
+              {puedeRetirar ? (
+                <p className="fila-acciones">
+                  <Link className="boton" href={`/sucursales/${codigo}/turno/retiro`} data-testid="ir-retiro">Entregar efectivo</Link>
+                </p>
+              ) : null}
+              {puedeRetirar ? <p className="sub">Genera el folio del sobre y entrégalo en persona a Encargada de retiros.</p> : null}
+              {retiros.length ? (
+                <div className="tabla-desplazable" tabIndex={0} aria-label="Retiros del turno: desliza para ver todas las columnas">
+                  <table className="tabla tabla-ancha">
+                    <thead><tr><th>Lugar</th><th>Folio</th><th>Contado</th><th>Deja para cambio</th><th>Se lleva</th><th>Entregó</th><th>Estado</th></tr></thead>
+                    <tbody>
+                      {retiros.map((r) => (
+                        <tr key={r.id} data-testid="retiro-turno" data-folio={r.folio}>
+                          <td>{NOMBRE[r.lugar]}</td>
+                          <td className="mono">{r.folio}</td>
+                          <td>{pesos.format(Number(r.contado))}</td>
+                          <td>{pesos.format(Number(r.cambio))}</td>
+                          <td>{pesos.format(Number(r.importe))}</td>
+                          <td>{r.entregadoPor} · {hora.format(r.entregadoEn)} · a {r.encargada}</td>
+                          <td data-testid="estado-retiro"><strong>{r.textoEstado}</strong></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <p className="sub">Todavía no hay retiros en este turno.</p>}
+              <p className="sub">La salida se descuenta al entregar el sobre. Recepción ve el estado; el detalle de una discrepancia lo revisa quien corresponde.</p>
+            </section>
+          ) : null}
           {enCurso ? (
             <section className="tarjeta" aria-labelledby="t-entrega" data-testid="entrega-en-curso">
               <h2 id="t-entrega" className="titulo-seccion">Cambio de turno</h2>
@@ -157,37 +189,6 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
               {recibida.nota ? <p className="sub">Nota de quien entregó: {recibida.nota}</p> : null}
               {recibida.aclaracion ? <p className="sub" data-testid="aclaracion">Aclaración del recuento: {recibida.aclaracion}</p> : null}
               <p className="sub">Las diferencias no se corrigen: quedan registradas y se revisan aparte, sin cambiar los importes. Este turno empieza con lo que se confirmó.</p>
-            </section>
-          ) : null}
-          {retiros.length || puedeRetirar ? (
-            <section className="tarjeta" aria-labelledby="t-retiros" data-testid="retiros-turno">
-              <h2 id="t-retiros" className="titulo-seccion">Retiros a Encargada de retiros</h2>
-              {retiros.length ? (
-                <div className="tabla-desplazable" tabIndex={0} aria-label="Retiros del turno: desliza para ver todas las columnas">
-                  <table className="tabla tabla-ancha">
-                    <thead><tr><th>Lugar</th><th>Folio</th><th>Contado</th><th>Deja para cambio</th><th>Se lleva</th><th>Entregó</th><th>Estado</th></tr></thead>
-                    <tbody>
-                      {retiros.map((r) => (
-                        <tr key={r.id} data-testid="retiro-turno" data-folio={r.folio}>
-                          <td>{NOMBRE[r.lugar]}</td>
-                          <td className="mono">{r.folio}</td>
-                          <td>{pesos.format(Number(r.contado))}</td>
-                          <td>{pesos.format(Number(r.cambio))}</td>
-                          <td>{pesos.format(Number(r.importe))}</td>
-                          <td>{r.entregadoPor} · {hora.format(r.entregadoEn)} · a {r.encargada}</td>
-                          <td data-testid="estado-retiro"><strong>{r.textoEstado}</strong></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : <p className="sub">Todavía no hay retiros en este turno.</p>}
-              <p className="sub">La salida se descuenta al entregar el sobre. Recepción ve el estado; el detalle de una discrepancia lo revisa quien corresponde.</p>
-              {puedeRetirar ? (
-                <p className="fila-acciones">
-                  <Link className="boton" href={`/sucursales/${codigo}/turno/retiro`} data-testid="ir-retiro">Entregar a Encargada de retiros</Link>
-                </p>
-              ) : null}
             </section>
           ) : null}
           <div className="lugares-turno">
