@@ -199,6 +199,16 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
    - **Destino:** único destino, **depósito bancario**, con importe, fecha y **referencia obligatoria del comprobante** (la foto queda para después). Depósitos parciales por folio hasta cubrir el saldo, nunca más del monto habilitado. Corregir un depósito deja un registro nuevo con motivo; el anterior se conserva.
    - **Quién ve qué:** Encargada de retiros, el saldo bajo su responsabilidad; Administración y Dirección, el saldo y los retiros de sus sucursales asignadas; Recepción, el estado de los retiros de su turno; Encargado, el detalle de las discrepancias que le toca revisar.
    - **Avisos:** «Por revisar desde hace…» y, desde 48 horas después de reportar la diferencia, «48 horas o más en revisión». El aviso de saldo sin destino empieza cuando se habilitan los depósitos y aparece desde 48 horas si queda saldo, aunque haya depósitos parciales.
+   - **Probado en el sitio el 16 nov 2026 en Tenango**, con datos y cuentas ficticias, retiro del cajón con folio automático **`TEN-20261116-02`**:
+     - 6:16 p.m.: Recepción Tenango (prueba) confirmó la entrega en persona: contado $2,300, deja $0 para cambio, **salida de $2,300**. Antes se canceló la preparación del folio `TEN-20261116-01` (bolsa): no hubo salida y ese folio no se reutilizó.
+     - 6:30 p.m.: Encargada de retiros (prueba) contó a ciegas **$2,250** (registrado $2,300; −$50). La plataforma le mostró la diferencia y pidió recuento.
+     - 6:34 p.m.: registró «No coincide» sin recuento, con motivo. El folio quedó «Por revisar», con $2,250 en pausa y −$50 por aclarar fuera de su saldo; el otro retiro (`TEN-1113-02`) siguió habilitado.
+     - 6:47 p.m.: Encargado Tenango (prueba), que no participó, registró **«Faltante confirmado»** con **$2,250 verificados**; los depósitos del folio se habilitaron por $2,250. **El faltante de $50 sigue pendiente para Dirección.**
+     - 6:51 p.m.: Encargada de retiros (prueba) registró un depósito bancario de **$2,000** (del 16 nov, 6:50 p.m.; referencia DEP-FICTICIO-0001). **Quedan $250 por depositar** bajo su responsabilidad.
+     - La salida original de $2,300 y los dos conteos se conservan en el historial del retiro.
+     - El rechazo de un depósito mayor que el saldo del folio queda **verificado en pruebas automáticas** (integración y e2e); las capturas de esta prueba solo muestran el depósito aceptado.
+     - Antes, el 13 nov, el retiro `TEN-1113-02` (folio escrito a mano) quedó confirmado al registrarse un conteo de $2,300; no se usó para la prueba de la diferencia y conserva $2,300 sin destino.
+   - **Ajuste del 16 nov 2026:** en la página del turno, la acción de retiros está justo debajo de «Turno abierto», con el botón **«Entregar efectivo»**, para no confundirla con «Entregar el turno».
    - **Para después:** resolución de Dirección de un faltante en un retiro (hoy queda visible como pendiente para Dirección); foto del comprobante; otros destinos.
 4. Cierre del día y custodia nocturna (regla 7), con la comparación en la siguiente apertura.
 5. **Reporte básico:** cierres con efectivo esperado, contado, diferencia y entregas; diferencias pendientes de revisión.
