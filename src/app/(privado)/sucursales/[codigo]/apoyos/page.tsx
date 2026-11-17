@@ -40,7 +40,12 @@ export default async function Apoyos({ params, searchParams }: PageProps<"/sucur
                 <p>
                   <strong>{a.declaradoPor}</strong> declaró que participaste en {ETAPA[a.etapa]} · {hora.format(a.declaradoEn)}
                 </p>
-                <p className="sub">Cambio de turno de {a.entregaPor} a {a.recibe}, entregado {conPunto(hora.format(a.entregadaEn))} Desde la declaración ya no puedes revisar las diferencias de esa entrega.</p>
+                <p className="sub">
+                  {a.tipo === "cierre"
+                    ? <>Cierre del día de {a.entregaPor}{a.recibe ? `, abierto por ${a.recibe}` : ""}, cerrado {conPunto(hora.format(a.entregadaEn))}</>
+                    : <>Cambio de turno de {a.entregaPor} a {a.recibe}, entregado {conPunto(hora.format(a.entregadaEn))}</>}{" "}
+                  Desde la declaración ya no puedes revisar las diferencias de {a.tipo === "cierre" ? "ese cierre" : "esa entrega"}.
+                </p>
                 <form action={accionConfirmarApoyo}>
                   <input type="hidden" name="codigo" value={codigo} />
                   <input type="hidden" name="apoyo" value={a.id} />

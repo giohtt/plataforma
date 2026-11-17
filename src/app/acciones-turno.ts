@@ -23,6 +23,7 @@ const MENSAJES = {
   sin_permiso: "Tu cuenta no tiene permiso para abrir turno en esta sucursal.",
   sucursal_inactiva: "Esta sucursal está desactivada: no se pueden abrir turnos.",
   ya_abierto: "Ya hay un turno de Recepción abierto en esta sucursal. Solo puede haber uno a la vez.",
+  cierre_pendiente: "Hay un cierre del día pendiente: abre el turno desde ese cierre, verificando los sobres.",
   bloqueado_produccion: "La apertura de turnos está desactivada fuera del entorno de pruebas.",
 } as const;
 

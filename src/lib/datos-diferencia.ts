@@ -2,9 +2,9 @@
 export type TipoDiferencia = "contra_esperado" | "entre_personas";
 
 /** «Faltante contra el esperado», «Sobrante en la entrega»… Negativo es faltante; positivo, sobrante. */
-export function etiquetaDiferencia(tipo: TipoDiferencia, importe: string): string {
+export function etiquetaDiferencia(tipo: TipoDiferencia, importe: string, cierre = false): string {
   const clase = Number(importe) < 0 ? "Faltante" : "Sobrante";
-  return `${clase} ${tipo === "contra_esperado" ? "contra el esperado" : "en la entrega"}`;
+  return `${clase} ${tipo === "contra_esperado" ? "contra el esperado" : cierre ? "entre cierre y apertura" : "en la entrega"}`;
 }
 
 export const NOMBRE_LUGAR = { bolsa_visitas: "Bolsa de visitas", cajon_mensualidades: "Cajón de mensualidades" } as const;

@@ -1,6 +1,7 @@
 import type postgres from "postgres";
 import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
+import { sobresDelCierre } from "@/lib/cierres";
 import type { TipoLugar } from "@/lib/turnos";
 import { ventasDelTurno, type VentasTurno } from "@/lib/ventas";
 import { cobrosDelTurno } from "@/lib/visitas";
@@ -47,6 +48,8 @@ export type Diferencia = {
 
 export type CasoLista = {
   entregaId: string;
+  /** «cierre»: diferencia entre el cierre del día y la apertura siguiente (entregaPor cerró, recibe abrió). */
+  tipo: "cambio_turno" | "cierre";
   entregadaEn: Date;
   confirmadaEn: Date;
   entregaPor: string;
@@ -104,8 +107,8 @@ const aDiferencia = (d: FilaDiferencia): Diferencia => {
 export async function listaDiferencias(sql: Sql, usuarioId: string, codigo: string): Promise<{ sucursal: string; casos: CasoLista[] } | null> {
   const s = await sucursalConsultable(sql, usuarioId, codigo);
   if (!s) return null;
-  const entregas = await sql<{ id: string; creada_en: Date; resuelta_en: Date; entrega_por: string; recibe: string }[]>`
-    select e.id, e.creada_en, e.resuelta_en, a.nombre as entrega_por, b.nombre as recibe
+  const entregas = await sql<{ id: string; tipo: CasoLista["tipo"]; creada_en: Date; resuelta_en: Date; entrega_por: string; recibe: string }[]>`
+    select e.id, e.tipo, e.creada_en, e.resuelta_en, a.nombre as entrega_por, b.nombre as recibe
     from entrega_turno e join turno t on t.id = e.turno_id
     join usuario a on a.id = e.entrega_por join usuario b on b.id = e.recibe
     where t.sucursal_id = ${s.id} and e.estado = 'confirmada'
@@ -116,7 +119,7 @@ export async function listaDiferencias(sql: Sql, usuarioId: string, codigo: stri
     const diferencias = difs.filter((d) => d.entrega_id === e.id).map(aDiferencia);
     const neto = diferencias.filter((d) => d.lugar === "bolsa_visitas").reduce((suma, d) => suma + Math.round(Number(d.importe) * 100), 0);
     return {
-      entregaId: e.id, entregadaEn: e.creada_en, confirmadaEn: e.resuelta_en, entregaPor: e.entrega_por, recibe: e.recibe,
+      entregaId: e.id, tipo: e.tipo, entregadaEn: e.creada_en, confirmadaEn: e.resuelta_en, entregaPor: e.entrega_por, recibe: e.recibe,
       diferencias, pendientes: diferencias.filter((d) => d.estado === "por_revisar").length,
       paraDireccion: diferencias.filter((d) => d.pendienteDireccionDesde).length,
       neto: (neto / 100).toFixed(2),
@@ -153,9 +156,23 @@ export type ApoyoEtapa = {
   personas: { nombre: string; confirmadoEn: Date | null }[];
 };
 
+export type VerificacionSobre = { estado: "correcto" | "falta" | "abierto" | "otro_folio"; folioVisto: string | null; motivo: string | null; por: string; en: Date };
+/** Lo propio de un cierre del día: custodio, configuración copiada al cerrar, custodia y verificación de cada sobre. */
+export type DatosCierre = {
+  custodio: string;
+  configuracion: { lugar: string; acceso: string[]; configuradaPor: string; en: Date };
+  custodia: { ubicacion: string; en: Date } | null;
+  sobres: { lugar: TipoLugar; folio: string; custodia: VerificacionSobre | null; apertura: VerificacionSobre | null }[];
+  /** Quien cerró también abrió. */
+  mismaPersona: boolean;
+  recontadoConCustodio: boolean;
+};
+
 export type DetalleDiferencias = {
   sucursal: string;
   entregaId: string;
+  tipo: "cambio_turno" | "cierre";
+  cierre: DatosCierre | null;
   entregaPor: string;
   recibe: string;
   entregadaEn: Date;
@@ -188,8 +205,9 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   const s = await sucursalConsultable(sql, usuarioId, codigo);
   if (!s) return null;
   const [e] = await sql<{ id: string; turno_id: string; creada_en: Date; resuelta_en: Date; nota: string | null; aclaracion: string | null;
-                          entrega_por: string; entrega_por_id: string; recibe: string; recibe_id: string }[]>`
-    select e.id, e.turno_id, e.creada_en, e.resuelta_en, e.nota, e.aclaracion,
+                          entrega_por: string; entrega_por_id: string; recibe: string; recibe_id: string; tipo: "cambio_turno" | "cierre";
+                          recontado_con: string | null }[]>`
+    select e.id, e.turno_id, e.creada_en, e.resuelta_en, e.nota, e.aclaracion, e.tipo, e.recontado_con,
            a.nombre as entrega_por, a.id as entrega_por_id, b.nombre as recibe, b.id as recibe_id
     from entrega_turno e join turno t on t.id = e.turno_id
     join usuario a on a.id = e.entrega_por join usuario b on b.id = e.recibe
@@ -244,7 +262,8 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     select a.etapa, u.nombre, a.declarado_en, a.confirmado_en, d.nombre as por
     from apoyo_conteo a join usuario u on u.id = a.usuario_id join usuario d on d.id = a.declarado_por
     where a.entrega_id = ${e.id} order by a.declarado_en, u.nombre`;
-  const etapas: EtapaApoyo[] = ["conteo_entrega", "conteo_recepcion", ...(recuento.length ? (["recuento"] as const) : [])];
+  // En un cierre, el recuento es con el custodio (queda en recontado_con); no lleva declaración de apoyo aparte.
+  const etapas: EtapaApoyo[] = ["conteo_entrega", "conteo_recepcion", ...(recuento.length && e.tipo !== "cierre" ? (["recuento"] as const) : [])];
   const apoyos: ApoyoEtapa[] = etapas.map((etapa) => {
     const d = declaraciones.find((x) => x.etapa === etapa);
     return {
@@ -252,23 +271,60 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
       personas: personasApoyo.filter((p) => p.etapa === etapa).map((p) => ({ nombre: p.nombre, confirmadoEn: p.confirmado_en })),
     };
   });
-  const ETAPA = { conteo_entrega: "conteo de quien entregó", conteo_recepcion: "conteo de quien recibió", recuento: "recuento" } as const;
+  let cierre: DatosCierre | null = null;
+  if (e.tipo === "cierre") {
+    const [c] = await sql<{ custodio: string; lugar: string; acceso: string[]; por: string; en: Date; ubicacion: string | null; confirmada_en: Date | null }[]>`
+      select u.nombre as custodio, k.lugar, array(select x.nombre from usuario x where x.id = any(k.acceso) order by x.nombre) as acceso,
+             d.nombre as por, k.en, cc.ubicacion, cc.confirmada_en
+      from entrega_turno e join usuario u on u.id = e.custodio_id join custodia_configuracion k on k.id = e.custodia_config_id
+      join usuario d on d.id = k.configurada_por left join custodia_cierre cc on cc.entrega_id = e.id where e.id = ${e.id}`;
+    cierre = {
+      custodio: c.custodio, configuracion: { lugar: c.lugar, acceso: c.acceso, configuradaPor: c.por, en: c.en },
+      custodia: c.ubicacion ? { ubicacion: c.ubicacion, en: c.confirmada_en! } : null,
+      sobres: (await sobresDelCierre(sql, e.id)).map((x) => ({ lugar: x.lugar, folio: x.folio, custodia: x.custodia, apertura: x.apertura })),
+      mismaPersona: e.entrega_por_id === e.recibe_id, recontadoConCustodio: e.recontado_con !== null,
+    };
+  }
+  const ETAPA = e.tipo === "cierre"
+    ? { conteo_entrega: "conteo de quien cerró", conteo_recepcion: "conteo de quien abrió", recuento: "recuento" } as const
+    : { conteo_entrega: "conteo de quien entregó", conteo_recepcion: "conteo de quien recibió", recuento: "recuento" } as const;
+  const VERIF = { correcto: "cerrado y con su folio", abierto: "abierto o con el sello roto", otro_folio: "con otro folio", falta: "no está" } as const;
+  const verif = (v: VerificacionSobre, folio: string) =>
+    `sobre ${folio} ${VERIF[v.estado]}${v.folioVisto ? ` (${v.folioVisto})` : ""}${v.motivo ? `. Motivo: «${v.motivo}»` : ""}`;
+  const eventosCierre: EventoCaso[] = !cierre ? [] : [
+    ...(cierre.custodia ? [{
+      en: cierre.custodia.en,
+      que: `Custodia confirmada: ${cierre.custodia.ubicacion} · ${cierre.sobres.map((x) => verif(x.custodia!, x.folio)).join(" · ")}`,
+      cuenta: cierre.custodio,
+    }] : []),
+    ...cierre.sobres.filter((x) => x.apertura).map((x) => ({ en: x.apertura!.en, que: `Al abrir: ${verif(x.apertura!, x.folio)}`, cuenta: x.apertura!.por })),
+  ];
   const LUGAR = { bolsa_visitas: "bolsa", cajon_mensualidades: "cajón" } as const;
-  const cual = (d: Diferencia) => `${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : "en la entrega"}`;
+  const cual = (d: Diferencia) => `${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : (cierre ? "entre cierre y apertura" : "en la entrega")}`;
   const DECISION = { absorbe_sucursal: "Lo absorbe la sucursal", queda_en_bolsa: "Se queda en la bolsa", origen_identificado: "Origen identificado" } as const;
   const RESULTADO = { aclarada: "Aclarada", faltante_confirmado: "Faltante confirmado", sobrante_confirmado: "Sobrante confirmado" } as const;
   const dinero = (v: string) => (Number(v) < 0 ? "−" : "+") + "$" + Math.abs(Number(v)).toLocaleString("es-MX", { minimumFractionDigits: 2 });
-  const historial: EventoCaso[] = [
+  const historial: EventoCaso[] = (cierre ? [
+    { en: e.creada_en, que: `Cierre del día (conteo de quien cerró) · sobres ${cierre.sobres.map((x) => x.folio).join(" y ")} · custodio ${cierre.custodio} · custodia: ${cierre.configuracion.lugar}`, cuenta: e.entrega_por },
+    ...eventosCierre,
+    ...recuento.map((r) => ({ en: r.en, que: "El conteo de quien abre no coincidió con el cierre", cuenta: e.recibe })),
+    {
+      en: e.resuelta_en,
+      que: `Turno abierto desde el cierre${cierre.mismaPersona ? " por la misma persona que cerró" : ""}${recuento.length ? (cierre.recontadoConCustodio ? ` tras recontar con ${cierre.custodio}` : " sin recuento con el custodio") : ""}${e.aclaracion ? `. Motivo: «${e.aclaracion}»` : ""}`,
+      cuenta: e.recibe,
+    },
+  ] : [
     { en: e.creada_en, que: "Entrega registrada (conteo de quien entrega)", cuenta: e.entrega_por },
     ...recuento.map((r) => ({ en: r.en, que: "El primer conteo de quien recibe no coincidió: recuento", cuenta: e.recibe })),
     { en: e.resuelta_en, que: "Recepción confirmada desde su propia cuenta", cuenta: e.recibe },
+  ]).concat([
     ...declaraciones.filter((d) => !d.hubo).map((d) => ({ en: d.en, que: `Apoyo en el ${ETAPA[d.etapa]}: nadie más participó`, cuenta: d.por })),
     ...personasApoyo.map((p) => ({ en: p.declarado_en, que: `Apoyo declarado en el ${ETAPA[p.etapa]}: ${p.nombre}`, cuenta: p.por })),
     ...personasApoyo.filter((p) => p.confirmado_en).map((p) => ({ en: p.confirmado_en!, que: `Apoyo confirmado en el ${ETAPA[p.etapa]}`, cuenta: p.nombre })),
-    ...difs.map((d) => ({ en: d.registradaEn, que: `Diferencia registrada (${LUGAR[d.lugar]}): ${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : "en la entrega"}`, cuenta: "La plataforma, al confirmar" })),
+    ...difs.map((d) => ({ en: d.registradaEn, que: `Diferencia registrada (${LUGAR[d.lugar]}): ${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : (cierre ? "entre cierre y apertura" : "en la entrega")}`, cuenta: "La plataforma, al confirmar" })),
     ...difs.filter((d) => d.revision).map((d) => ({
       en: d.revision!.en,
-      que: `Revisión (${LUGAR[d.lugar]}, ${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : "en la entrega"}): ${RESULTADO[d.revision!.resultado]}. Motivo: «${d.revision!.motivo}»`,
+      que: `Revisión (${LUGAR[d.lugar]}, ${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : (cierre ? "entre cierre y apertura" : "en la entrega")}): ${RESULTADO[d.revision!.resultado]}. Motivo: «${d.revision!.motivo}»`,
       cuenta: d.revision!.revisadaPor,
     })),
     ...difs.filter((d) => d.resolucion).map((d) => ({
@@ -286,9 +342,9 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
       que: `Seguimiento cerrado (${LUGAR[d.lugar]}, ${cual(d)})`,
       cuenta: "La plataforma",
     })),
-  ].sort((a, b) => a.en.getTime() - b.en.getTime());
+  ]).sort((a, b) => a.en.getTime() - b.en.getTime());
   return {
-    sucursal: s.nombre, entregaId: e.id, entregaPor: e.entrega_por, recibe: e.recibe, entregadaEn: e.creada_en, confirmadaEn: e.resuelta_en,
+    sucursal: s.nombre, entregaId: e.id, tipo: e.tipo, cierre, entregaPor: e.entrega_por, recibe: e.recibe, entregadaEn: e.creada_en, confirmadaEn: e.resuelta_en,
     nota: e.nota, aclaracion: e.aclaracion, participaste, nivel: n.nivel, puedeRevisar: n.puede && !participaste, puedeResolver: n.resuelve && !participaste, historial, apoyos,
     lugares: { bolsa_visitas: cifras("bolsa_visitas"), cajon_mensualidades: cifras("cajon_mensualidades") },
     diferencias: difs,

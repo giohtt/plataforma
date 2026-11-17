@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { Fragment } from "react";
 import { conPunto } from "@/lib/formato";
 import { notFound } from "next/navigation";
 import { FormularioCancelarEntrega } from "@/components/Entrega";
+import { cierrePendiente } from "@/lib/cierres";
 import { FormularioApertura } from "@/components/FormularioApertura";
 import { obtenerBaseDatos } from "@/lib/db";
 import { ESTADO_DIFERENCIA } from "@/lib/datos-diferencia";
@@ -36,6 +38,10 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   const enCurso = t ? await entregaEnCurso(sql, t.id) : null;
   const recibida = t ? await entregaRecibida(sql, t.id) : null;
   const retiros = t ? await retirosDelTurno(sql, t.id) : [];
+  const cierre = t ? null : await cierrePendiente(sql, e.sucursal.id);
+  const puedeCerrar = t && !enCurso && leerEntorno() !== "produccion" && !e.sucursal.inactiva
+    && t.lugares.every((l) => l.responsableId === sesion.usuarioId)
+    && (await tienePermiso(sql, sesion.usuarioId, "turno.cerrar", e.sucursal.id));
   const puedeRetirar = t && !enCurso && leerEntorno() !== "produccion" && !e.sucursal.inactiva
     && t.lugares.some((l) => l.responsableId === sesion.usuarioId)
     && (await tienePermiso(sql, sesion.usuarioId, "caja.retirar", e.sucursal.id));
@@ -79,6 +85,10 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
           {typeof difRetiro === "string" && /^-?\d+\.\d{2}$/.test(difRetiro) ? ` Se registró una diferencia de ${(Number(difRetiro) < 0 ? "−" : "+") + pesos.format(Math.abs(Number(difRetiro)))} contra el esperado al retirar; se vincula al cambio de turno si sigue presente.` : ""}
         </p>
       ) : null}
+      {aviso === "cerrado" && cierre ? (
+        <p className="aviso aviso-ok" role="status">Turno cerrado. Los sobres quedan con {cierre.custodio}, que confirma la custodia desde su cuenta.</p>
+      ) : null}
+      {aviso === "abierto-cierre" && recibida ? <p className="aviso aviso-ok" role="status">Turno abierto desde el cierre. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
       {aviso === "recibido" && recibida ? <p className="aviso aviso-ok" role="status">Turno recibido. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
 
       {t ? (
@@ -86,7 +96,6 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
           <section className="tarjeta" data-testid="turno-abierto">
             <h2 className="titulo-seccion">Turno abierto</h2>
             <p>Abierto por <strong>{t.abiertoPor}</strong> · {hora.format(t.abiertoEn)}</p>
-            <p className="sub">El cierre del día llega en un paso siguiente del bloque 5.</p>
             {puedeCobrar ? (
               <p className="fila-acciones">
                 <Link className="boton boton-principal" href={`/sucursales/${codigo}/turno/visita`}>Registrar visita</Link>
@@ -152,18 +161,35 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
               </p>
             </section>
           ) : null}
+          {puedeCerrar ? (
+            <section className="tarjeta" aria-labelledby="t-cierre" data-testid="cierre-del-dia">
+              <h2 id="t-cierre" className="titulo-seccion">Cierre del día</h2>
+              <p className="sub">Cuenta y cierra los dos lugares, cada uno en su sobre con folio. Los sobres quedan con el custodio nocturno.</p>
+              <p className="fila-acciones">
+                <Link className="boton" href={`/sucursales/${codigo}/turno/cierre`} data-testid="ir-cierre">Cerrar el día</Link>
+              </p>
+            </section>
+          ) : null}
           {recibida ? (
             <section className="tarjeta" aria-labelledby="t-recibida" data-testid="entrega-recibida">
-              <h2 id="t-recibida" className="titulo-seccion">Entrega recibida</h2>
-              <p className="sub">
-                De <strong>{recibida.entregaPor}</strong> a <strong>{recibida.recibe}</strong> · entregó {hora.format(recibida.creadaEn)} ·
-                confirmó {hora.format(recibida.confirmadaEn)}
-              </p>
+              <h2 id="t-recibida" className="titulo-seccion">{recibida.tipo === "cierre" ? "Apertura desde el cierre" : "Entrega recibida"}</h2>
+              {recibida.tipo === "cierre" ? (
+                <p className="sub">
+                  Cerró <strong>{recibida.entregaPor}</strong> · {hora.format(recibida.creadaEn)} · custodio <strong>{recibida.custodio}</strong> ·
+                  abrió <strong>{recibida.recibe}</strong> · {hora.format(recibida.confirmadaEn)}
+                </p>
+              ) : (
+                <p className="sub">
+                  De <strong>{recibida.entregaPor}</strong> a <strong>{recibida.recibe}</strong> · entregó {hora.format(recibida.creadaEn)} ·
+                  confirmó {hora.format(recibida.confirmadaEn)}
+                </p>
+              )}
               <p className="sub">En pantallas angostas, desliza la tabla a los lados para ver todas las columnas; el lugar queda fijo.</p>
               <div className="tabla-desplazable" tabIndex={0} aria-label="Entrega recibida: desliza para ver todas las columnas">
                 <table className="tabla tabla-ancha">
                   <thead>
-                    <tr><th>Lugar</th><th>Esperado</th><th>Entregó</th><th>Primer conteo de quien recibe</th><th>Confirmó</th>
+                    <tr><th>Lugar</th><th>Esperado</th><th>{recibida.tipo === "cierre" ? "Cerró" : "Entregó"}</th>
+                      <th>{recibida.tipo === "cierre" ? "Primer conteo al abrir" : "Primer conteo de quien recibe"}</th><th>Confirmó</th>
                       <th>Dif. contra el esperado</th><th>Dif. entre ambas personas</th></tr>
                   </thead>
                   <tbody>
@@ -187,7 +213,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                 </table>
               </div>
               {recibida.nota ? <p className="sub">Nota de quien entregó: {recibida.nota}</p> : null}
-              {recibida.aclaracion ? <p className="sub" data-testid="aclaracion">Aclaración del recuento: {recibida.aclaracion}</p> : null}
+              {recibida.aclaracion ? <p className="sub" data-testid="aclaracion">{recibida.tipo === "cierre" ? "Motivo o aclaración al abrir" : "Aclaración del recuento"}: {recibida.aclaracion}</p> : null}
               <p className="sub">Las diferencias no se corrigen: quedan registradas y se revisan aparte, sin cambiar los importes. Este turno empieza con lo que se confirmó.</p>
             </section>
           ) : null}
@@ -343,6 +369,36 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
             ) : <p className="sub">Todavía no hay cobros de visitas.</p>}
           </section>
         </>
+      ) : cierre ? (
+        <section className="tarjeta" aria-labelledby="t-cerrado" data-testid="turno-cerrado">
+          <h2 id="t-cerrado" className="titulo-seccion">Turno cerrado · sobres en custodia</h2>
+          <p>Cerró <strong>{cierre.cerradoPor}</strong> · {hora.format(cierre.cerradoEn)}</p>
+          <dl className="cuentas-lugar">
+            <dt>Custodio nocturno</dt>
+            <dd>{cierre.custodio}</dd>
+            <dt>Custodia</dt>
+            <dd className="dd-largo" data-testid="estado-custodia">
+              {cierre.custodia ? <>Confirmada · {cierre.custodia.ubicacion} · {hora.format(cierre.custodia.confirmadaEn)}</> : <strong>Pendiente de confirmar por el custodio</strong>}
+            </dd>
+            {cierre.sobres.map((s) => (
+              <Fragment key={s.id}>
+                <dt>Sobre {NOMBRE[s.lugar].toLowerCase()}</dt>
+                <dd className="mono" data-testid={`sobre-${s.lugar}`}>{s.folio}{s.custodia && s.custodia.estado !== "correcto" ? " · incidencia del custodio" : ""}</dd>
+              </Fragment>
+            ))}
+          </dl>
+          {cierre.estado === "recuento" ? (
+            <p className="aviso aviso-info">{cierre.abre} empezó a abrir: su conteo no coincidió y falta el recuento.</p>
+          ) : null}
+          <p className="sub">Sin turno abierto no se registran cobros ni retiros. Lo pendiente (retiros y diferencias) sigue visible en sus pantallas.</p>
+          {e.puedeAbrir && leerEntorno() !== "produccion" && !e.sucursal.inactiva && (cierre.estado === "pendiente" || cierre.abreId === sesion.usuarioId) ? (
+            <p className="fila-acciones">
+              <Link className="boton boton-principal" href={`/sucursales/${codigo}/turno/apertura`} data-testid="ir-apertura">
+                {cierre.estado === "recuento" ? "Continuar la apertura" : "Abrir turno desde el cierre"}
+              </Link>
+            </p>
+          ) : null}
+        </section>
       ) : e.sucursal.inactiva ? (
         <p className="aviso aviso-info">Esta sucursal está desactivada: no se pueden abrir turnos.</p>
       ) : e.puedeAbrir && leerEntorno() !== "produccion" ? (

@@ -63,7 +63,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente]] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -84,6 +84,11 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     historialSucursal(sql, sesion.usuarioId, sucursal.id),
     retirosPorRevisar(sql, sesion.usuarioId, sucursal.id),
     retirosPorConfirmar(sql, sesion.usuarioId, sucursal.id),
+    tienePermiso(sql, sesion.usuarioId, "custodia.configurar", sucursal.id),
+    sql<{ n: number }[]>`select count(*)::int as n from entrega_turno e join turno t on t.id = e.turno_id
+      where e.tipo = 'cierre' and e.estado = 'pendiente' and e.recibe is null and e.custodio_id = ${sesion.usuarioId} and t.sucursal_id = ${sucursal.id}
+        and not exists (select 1 from custodia_cierre c where c.entrega_id = e.id)
+        and tiene_permiso(${sesion.usuarioId}, 'custodia.confirmar', ${sucursal.id})`,
   ]);
 
   const permisos = await sql<{ clave: string; descripcion: string }[]>`
@@ -105,7 +110,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
       {sucursal.estadoOperativo === "inactiva" ? (
         <p className="aviso aviso-info" data-testid="sucursal-inactiva">Esta sucursal está desactivada.</p>
       ) : null}
-      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno || puedeVerReporteTurnos || puedeVerReporteVisitas || puedeVerificarAbonos || puedeAutorizarCancel || puedeAutorizarAcceso || puedeRevisarAccesos || puedeCobertura || retirosRevisar !== null || retirosConfirmar !== null ? (
+      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno || puedeVerReporteTurnos || puedeVerReporteVisitas || puedeVerificarAbonos || puedeAutorizarCancel || puedeAutorizarAcceso || puedeRevisarAccesos || puedeCobertura || retirosRevisar !== null || retirosConfirmar !== null || puedeConfigurarCustodia || custodiaPendiente.n > 0 ? (
         <p className="fila-acciones">
           {puedeAbrirTurno || puedeVerTurno ? (
             <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/turno`} data-testid="turno">
@@ -130,6 +135,16 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
           {apoyosPendientes.n ? (
             <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/apoyos`} data-testid="apoyos-pendientes">
               Confirmar tu apoyo en un conteo ({apoyosPendientes.n})
+            </Link>
+          ) : null}
+          {custodiaPendiente.n ? (
+            <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/custodia`} data-testid="custodia-por-confirmar">
+              Confirmar custodia nocturna
+            </Link>
+          ) : null}
+          {puedeConfigurarCustodia ? (
+            <Link className="boton" href={`/sucursales/${sucursal.codigo}/custodia/configurar`} data-testid="configurar-custodia">
+              Custodia de sobres
             </Link>
           ) : null}
           {retirosConfirmar !== null ? (

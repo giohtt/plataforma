@@ -119,7 +119,7 @@ export async function estadoTurno(sql: Sql, usuarioId: string, codigo: string): 
 
 export type ResultadoApertura =
   | { ok: true; turnoId: string }
-  | { ok: false; error: "no_encontrada" | "sin_permiso" | "sucursal_inactiva" | "ya_abierto" | "bloqueado_produccion" };
+  | { ok: false; error: "no_encontrada" | "sin_permiso" | "sucursal_inactiva" | "ya_abierto" | "cierre_pendiente" | "bloqueado_produccion" };
 
 /** `bolsa` y `cajon` llegan ya validados como importes con dos decimales (ver leerImporte). */
 export async function abrirTurno(
@@ -139,6 +139,11 @@ export async function abrirTurno(
       const [fila] = await tx<{ estado: string }[]>`select estado_operativo as estado from sucursal where id = ${s.id} for update`;
       if (fila.estado === "inactiva") return { ok: false, error: "sucursal_inactiva" };
       if ((await tx`select 1 from turno where sucursal_id = ${s.id} and cerrado_en is null`).length) return { ok: false, error: "ya_abierto" };
+      // Después de un cierre del día, el turno se abre desde ese cierre (verificando sobres y conteo), no desde cero.
+      if ((await tx`select 1 from entrega_turno e join turno t on t.id = e.turno_id
+                    where t.sucursal_id = ${s.id} and e.tipo = 'cierre' and e.estado in ('pendiente', 'recuento')`).length) {
+        return { ok: false, error: "cierre_pendiente" };
+      }
 
       const [t] = await tx<{ id: string }[]>`insert into turno (sucursal_id, abierto_por) values (${s.id}, ${usuarioId}) returning id`;
       const lugares = await tx<{ id: string; tipo: TipoLugar }[]>`select id, tipo from lugar_efectivo where sucursal_id = ${s.id}`;
