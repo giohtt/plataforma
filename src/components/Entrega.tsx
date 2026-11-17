@@ -10,7 +10,7 @@ const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN
 const firmado = (centavos: number) => (centavos < 0 ? "−" : centavos > 0 ? "+" : "") + pesos.format(Math.abs(centavos) / 100);
 const cent = (v: string) => Math.round(Number(v) * 100);
 
-function Importe({ estado, campo, etiqueta, ayuda, alCambiar }: {
+export function Importe({ estado, campo, etiqueta, ayuda, alCambiar }: {
   estado: EstadoFormularioEntrega; campo: "bolsa" | "cajon"; etiqueta: string; ayuda?: string; alCambiar?: (v: string) => void;
 }) {
   const error = estado?.errores?.[campo];
@@ -33,7 +33,7 @@ function Importe({ estado, campo, etiqueta, ayuda, alCambiar }: {
  * «¿Alguien te ayudó a contar?» Obligatorio: «No, nadie más participó» o «Sí» con las personas de la sucursal que
  * participaron. Cada una confirma después desde su propia cuenta.
  */
-function Apoyo({ estado, candidatos, etapa }: { estado: EstadoFormularioEntrega; candidatos: { id: string; nombre: string }[]; etapa: string }) {
+export function Apoyo({ estado, candidatos, etapa }: { estado: EstadoFormularioEntrega; candidatos: { id: string; nombre: string }[]; etapa: string }) {
   const [hubo, setHubo] = useState(estado?.valores?.apoyo ?? "");
   const error = estado?.errores?.apoyo;
   return (

@@ -96,7 +96,7 @@ async function receptores(tx: Tx | Sql, sucursalId: string, usuarioId: string): 
  * Personas de la sucursal que pueden declararse como apoyo en un conteo: cuentas activas con algún perfil en la
  * sucursal, sin quien entrega ni quien recibe (ellas ya participan).
  */
-async function candidatosApoyo(tx: Tx | Sql, sucursalId: string, excluir: string[]): Promise<Receptor[]> {
+export async function candidatosApoyo(tx: Tx | Sql, sucursalId: string, excluir: string[]): Promise<Receptor[]> {
   return [...(await tx<Receptor[]>`
     select id, nombre from usuario u
     where activo and not (id = any(${excluir}::uuid[]))
@@ -105,7 +105,7 @@ async function candidatosApoyo(tx: Tx | Sql, sucursalId: string, excluir: string
 }
 
 /** Valida y guarda la declaración de apoyo de una etapa. La base respalda que cada apoyo sea de la sucursal. */
-async function declararApoyo(
+export async function declararApoyo(
   tx: Tx, sucursalId: string, entregaId: string, etapa: EtapaApoyo, declaradoPor: string, excluir: string[], apoyo: DeclaracionApoyo,
 ): Promise<boolean> {
   const personas = apoyo.hubo ? [...new Set(apoyo.personas)] : [];
@@ -125,7 +125,7 @@ async function declararApoyo(
            values ('entrega_turno', ${entregaId}, 'declarar_apoyo', ${tx.json({ etapa, hubo_apoyo: apoyo.hubo, personas })}, ${declaradoPor})`;
   return true;
 }
-const apoyoValido = (a: DeclaracionApoyo | undefined): a is DeclaracionApoyo =>
+export const apoyoValido = (a: DeclaracionApoyo | undefined): a is DeclaracionApoyo =>
   !!a && (a.hubo === false || (a.hubo === true && Array.isArray(a.personas)));
 
 /** Turno abierto y comprobación de que quien entrega es la responsable vigente de ambos lugares (variante A). */
@@ -233,8 +233,8 @@ export async function registrarEntrega(
 }
 
 /** Una declaración de apoyo inválida deshace toda la operación (no queda la entrega ni el conteo a medias). */
-class ApoyoInvalido extends Error {}
-async function conApoyo<T>(f: () => Promise<T>): Promise<T | { ok: false; error: "apoyo" }> {
+export class ApoyoInvalido extends Error {}
+export async function conApoyo<T>(f: () => Promise<T>): Promise<T | { ok: false; error: "apoyo" }> {
   try {
     return await f();
   } catch (error) {
@@ -270,9 +270,9 @@ export async function cancelarEntrega(
   });
 }
 
-type FilaConteo = { lugar: TipoLugar; tipo: "entregado" | "recibido_inicial" | "recibido_final"; importe: string; esperado: string | null };
+export type FilaConteo = { lugar: TipoLugar; tipo: "entregado" | "recibido_inicial" | "recibido_final"; importe: string; esperado: string | null };
 
-const CONTEOS = (tx: Tx | Sql, entregaId: string) => tx<FilaConteo[]>`
+export const CONTEOS = (tx: Tx | Sql, entregaId: string) => tx<FilaConteo[]>`
   select l.tipo as lugar, c.tipo, c.importe::text as importe, c.esperado::text as esperado
   from entrega_conteo c join lugar_efectivo l on l.id = c.lugar_id where c.entrega_id = ${entregaId}`;
 
@@ -288,7 +288,7 @@ export type PantallaRecepcion =
     }
   | { ok: false; error: ErrorEntrega | "sin_entrega" };
 
-const porLugar = (filas: FilaConteo[], tipo: FilaConteo["tipo"]): ConteoLugares => ({
+export const porLugar = (filas: FilaConteo[], tipo: FilaConteo["tipo"]): ConteoLugares => ({
   bolsa: filas.find((f) => f.tipo === tipo && f.lugar === "bolsa_visitas")!.importe,
   cajon: filas.find((f) => f.tipo === tipo && f.lugar === "cajon_mensualidades")!.importe,
 });
@@ -373,53 +373,74 @@ export async function recibirTurno(
       }
     }
 
-    // Confirmación: conteo final, diferencias, cierre del turno de origen y apertura del de la entrante.
-    for (const l of lugares) {
-      await tx`insert into entrega_conteo (entrega_id, lugar_id, tipo, importe, contado_por)
-               values (${c.e.id}, ${l.id}, 'recibido_final', ${importe(l.tipo)}, ${usuarioId})`;
-    }
-    const cent = (v: string) => Math.round(Number(v) * 100);
-    const bolsaEntregada = filas.find((f) => f.tipo === "entregado" && f.lugar === "bolsa_visitas")!;
-    for (const l of lugares) {
-      const dEsperado = l.tipo === "bolsa_visitas" ? cent(bolsaEntregada.importe) - cent(bolsaEntregada.esperado!) : 0;
-      const dPersonas = cent(importe(l.tipo)) - cent(l.tipo === "bolsa_visitas" ? entregado.bolsa : entregado.cajon);
-      let difEsperadoId: string | null = null;
-      if (dEsperado) {
-        [{ id: difEsperadoId }] = await tx<{ id: string }[]>`insert into diferencia_efectivo (entrega_id, turno_id, lugar_id, tipo, importe)
-                 values (${c.e.id}, ${c.turnoId}, ${l.id}, 'contra_esperado', ${(dEsperado / 100).toFixed(2)}) returning id`;
-      }
-      // Diferencias registradas al retirar en este turno: se vinculan a esta entrega con la parte que sigue presente en
-      // la diferencia contra el esperado (mismo caso; no se duplica ni se suma otra vez).
-      let resto = dEsperado;
-      for (const dr of await tx<{ id: string; importe: string }[]>`
-        select id, importe::text from diferencia_retiro where turno_id = ${c.turnoId} and lugar_id = ${l.id} order by registrada_en, id`) {
-        const r = cent(dr.importe);
-        const presente = resto !== 0 && Math.sign(resto) === Math.sign(r) ? Math.sign(r) * Math.min(Math.abs(resto), Math.abs(r)) : 0;
-        resto -= presente;
-        await tx`insert into diferencia_retiro_entrega (diferencia_retiro_id, entrega_id, diferencia_id, presente)
-                 values (${dr.id}, ${c.e.id}, ${presente ? difEsperadoId : null}, ${(presente / 100).toFixed(2)})`;
-      }
-      if (dPersonas) {
-        await tx`insert into diferencia_efectivo (entrega_id, turno_id, lugar_id, tipo, importe)
-                 values (${c.e.id}, ${c.turnoId}, ${l.id}, 'entre_personas', ${(dPersonas / 100).toFixed(2)})`;
-      }
-    }
-    await tx`update responsable_lugar set hasta = now() where turno_id = ${c.turnoId} and hasta is null`;
-    await tx`update turno set cerrado_en = now() where id = ${c.turnoId}`;
-    const [nuevo] = await tx<{ id: string }[]>`
-      insert into turno (sucursal_id, abierto_por, recibido_de) values (${c.s.id}, ${usuarioId}, ${c.e.id}) returning id`;
-    for (const l of lugares) {
-      await tx`insert into responsable_lugar (lugar_id, turno_id, usuario_id) values (${l.id}, ${nuevo.id}, ${usuarioId})`;
-      await tx`insert into conteo_efectivo (turno_id, lugar_id, momento, importe, contado_por)
-               values (${nuevo.id}, ${l.id}, 'apertura', ${importe(l.tipo)}, ${usuarioId})`;
-    }
-    await tx`update entrega_turno set estado = 'confirmada', turno_nuevo_id = ${nuevo.id}, resuelta_en = now(),
-             aclaracion = ${c.e.estado === "recuento" ? aclaracion : null}, version = version + 1 where id = ${c.e.id}`;
-    await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
-             values ('entrega_turno', ${c.e.id}, 'confirmar',
-                     ${tx.json({ turno_nuevo: nuevo.id, bolsa_visitas: datos.conteo.bolsa, cajon_mensualidades: datos.conteo.cajon })}, ${usuarioId})`;
-    return { ok: true, resultado: "confirmada", turnoId: nuevo.id };
+    const nuevoId = await confirmarEntregaTx(tx, {
+      entregaId: c.e.id, turnoId: c.turnoId, sucursalId: c.s.id, usuarioId, final: datos.conteo,
+      aclaracion: c.e.estado === "recuento" ? aclaracion : null, cerrarTurno: true,
+    });
+    return { ok: true, resultado: "confirmada", turnoId: nuevoId };
   }));
+}
+
+/**
+ * Confirmación común del cambio de turno y de la apertura tras un cierre: conteo final, diferencias (contra el
+ * esperado al entregar o cerrar y entre ambas personas), vínculo con las diferencias registradas al retirar, cierre
+ * del turno de origen (si sigue abierto) y apertura del turno nuevo con lo confirmado. Devuelve el turno nuevo.
+ */
+export async function confirmarEntregaTx(tx: Tx, d: {
+  entregaId: string; turnoId: string; sucursalId: string; usuarioId: string; final: ConteoLugares; aclaracion: string | null;
+  cerrarTurno: boolean; recontadoCon?: string | null;
+}): Promise<string> {
+  const lugares = await tx<{ id: string; tipo: TipoLugar }[]>`select id, tipo from lugar_efectivo where sucursal_id = ${d.sucursalId}`;
+  const importe = (tipo: TipoLugar) => (tipo === "bolsa_visitas" ? d.final.bolsa : d.final.cajon);
+  const filas = await CONTEOS(tx, d.entregaId);
+  const entregado = porLugar(filas, "entregado");
+  for (const l of lugares) {
+    await tx`insert into entrega_conteo (entrega_id, lugar_id, tipo, importe, contado_por)
+             values (${d.entregaId}, ${l.id}, 'recibido_final', ${importe(l.tipo)}, ${d.usuarioId})`;
+  }
+  const cent = (v: string) => Math.round(Number(v) * 100);
+  const bolsaEntregada = filas.find((f) => f.tipo === "entregado" && f.lugar === "bolsa_visitas")!;
+  for (const l of lugares) {
+    const dEsperado = l.tipo === "bolsa_visitas" ? cent(bolsaEntregada.importe) - cent(bolsaEntregada.esperado!) : 0;
+    const dPersonas = cent(importe(l.tipo)) - cent(l.tipo === "bolsa_visitas" ? entregado.bolsa : entregado.cajon);
+    let difEsperadoId: string | null = null;
+    if (dEsperado) {
+      [{ id: difEsperadoId }] = await tx<{ id: string }[]>`insert into diferencia_efectivo (entrega_id, turno_id, lugar_id, tipo, importe)
+               values (${d.entregaId}, ${d.turnoId}, ${l.id}, 'contra_esperado', ${(dEsperado / 100).toFixed(2)}) returning id`;
+    }
+    // Diferencias registradas al retirar en este turno: se vinculan a esta entrega con la parte que sigue presente en
+    // la diferencia contra el esperado (mismo caso; no se duplica ni se suma otra vez).
+    let resto = dEsperado;
+    for (const dr of await tx<{ id: string; importe: string }[]>`
+      select id, importe::text from diferencia_retiro where turno_id = ${d.turnoId} and lugar_id = ${l.id} order by registrada_en, id`) {
+      const r = cent(dr.importe);
+      const presente = resto !== 0 && Math.sign(resto) === Math.sign(r) ? Math.sign(r) * Math.min(Math.abs(resto), Math.abs(r)) : 0;
+      resto -= presente;
+      await tx`insert into diferencia_retiro_entrega (diferencia_retiro_id, entrega_id, diferencia_id, presente)
+               values (${dr.id}, ${d.entregaId}, ${presente ? difEsperadoId : null}, ${(presente / 100).toFixed(2)})`;
+    }
+    if (dPersonas) {
+      await tx`insert into diferencia_efectivo (entrega_id, turno_id, lugar_id, tipo, importe)
+               values (${d.entregaId}, ${d.turnoId}, ${l.id}, 'entre_personas', ${(dPersonas / 100).toFixed(2)})`;
+    }
+  }
+  if (d.cerrarTurno) {
+    await tx`update responsable_lugar set hasta = now() where turno_id = ${d.turnoId} and hasta is null`;
+    await tx`update turno set cerrado_en = now() where id = ${d.turnoId}`;
+  }
+  const [nuevo] = await tx<{ id: string }[]>`
+    insert into turno (sucursal_id, abierto_por, recibido_de) values (${d.sucursalId}, ${d.usuarioId}, ${d.entregaId}) returning id`;
+  for (const l of lugares) {
+    await tx`insert into responsable_lugar (lugar_id, turno_id, usuario_id) values (${l.id}, ${nuevo.id}, ${d.usuarioId})`;
+    await tx`insert into conteo_efectivo (turno_id, lugar_id, momento, importe, contado_por)
+             values (${nuevo.id}, ${l.id}, 'apertura', ${importe(l.tipo)}, ${d.usuarioId})`;
+  }
+  await tx`update entrega_turno set estado = 'confirmada', turno_nuevo_id = ${nuevo.id}, resuelta_en = now(),
+           aclaracion = ${d.aclaracion}, recontado_con = ${d.recontadoCon ?? null}, version = version + 1 where id = ${d.entregaId}`;
+  await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
+           values ('entrega_turno', ${d.entregaId}, 'confirmar',
+                   ${tx.json({ turno_nuevo: nuevo.id, bolsa_visitas: d.final.bolsa, cajon_mensualidades: d.final.cajon })}, ${d.usuarioId})`;
+  return nuevo.id;
 }
 
 export type DiferenciaEntrega = {
@@ -429,6 +450,9 @@ export type DiferenciaEntrega = {
 };
 
 export type EntregaRecibida = {
+  /** «cierre»: el turno abrió desde el cierre del día; entregaPor es quien cerró y recibe quien abrió. */
+  tipo: "cambio_turno" | "cierre";
+  custodio: string | null;
   entregaPor: string;
   recibe: string;
   creadaEn: Date;
@@ -444,10 +468,11 @@ export type EntregaRecibida = {
 
 /** Cómo quedó registrada la entrega de la que salió un turno (para mostrarla en el turno de la entrante). */
 export async function entregaRecibida(sql: Sql, turnoId: string): Promise<EntregaRecibida | null> {
-  const [e] = await sql<{ id: string; entrega_por: string; recibe: string; creada_en: Date; resuelta_en: Date; nota: string | null; aclaracion: string | null }[]>`
-    select e.id, a.nombre as entrega_por, b.nombre as recibe, e.creada_en, e.resuelta_en, e.nota, e.aclaracion
+  const [e] = await sql<{ id: string; tipo: "cambio_turno" | "cierre"; custodio: string | null; entrega_por: string; recibe: string; creada_en: Date;
+                          resuelta_en: Date; nota: string | null; aclaracion: string | null }[]>`
+    select e.id, e.tipo, c.nombre as custodio, a.nombre as entrega_por, b.nombre as recibe, e.creada_en, e.resuelta_en, e.nota, e.aclaracion
     from turno t join entrega_turno e on e.id = t.recibido_de
-    join usuario a on a.id = e.entrega_por join usuario b on b.id = e.recibe
+    join usuario a on a.id = e.entrega_por join usuario b on b.id = e.recibe left join usuario c on c.id = e.custodio_id
     where t.id = ${turnoId}`;
   if (!e) return null;
   const filas = await CONTEOS(sql, e.id);
@@ -461,6 +486,7 @@ export async function entregaRecibida(sql: Sql, turnoId: string): Promise<Entreg
     left join resolucion_diferencia x on x.diferencia_id = d.id where d.entrega_id = ${e.id}
     order by case l.tipo when 'bolsa_visitas' then 0 else 1 end, d.tipo`;
   return {
+    tipo: e.tipo, custodio: e.custodio,
     entregaPor: e.entrega_por, recibe: e.recibe, creadaEn: e.creada_en, confirmadaEn: e.resuelta_en, nota: e.nota,
     aclaracion: e.aclaracion,
     esperadoBolsa: filas.find((f) => f.tipo === "entregado" && f.lugar === "bolsa_visitas")!.esperado!,
@@ -470,7 +496,8 @@ export async function entregaRecibida(sql: Sql, turnoId: string): Promise<Entreg
 }
 
 export type ApoyoPendiente = {
-  id: string; etapa: EtapaApoyo; declaradoPor: string; declaradoEn: Date; entregaPor: string; recibe: string; entregadaEn: Date;
+  id: string; etapa: EtapaApoyo; declaradoPor: string; declaradoEn: Date; entregaPor: string; recibe: string | null; entregadaEn: Date;
+  tipo: "cambio_turno" | "cierre";
 };
 
 /** Apoyos en los que la cuenta fue declarada en esta sucursal y que todavía no confirma. */
@@ -481,9 +508,9 @@ export async function apoyosPorConfirmar(sql: Sql, usuarioId: string, codigo: st
   if (!s) return null;
   const pendientes = await sql<ApoyoPendiente[]>`
     select a.id, a.etapa, d.nombre as "declaradoPor", a.declarado_en as "declaradoEn", x.nombre as "entregaPor", y.nombre as recibe,
-           e.creada_en as "entregadaEn"
+           e.creada_en as "entregadaEn", e.tipo
     from apoyo_conteo a join entrega_turno e on e.id = a.entrega_id join turno t on t.id = e.turno_id
-    join usuario d on d.id = a.declarado_por join usuario x on x.id = e.entrega_por join usuario y on y.id = e.recibe
+    join usuario d on d.id = a.declarado_por join usuario x on x.id = e.entrega_por left join usuario y on y.id = e.recibe
     where a.usuario_id = ${usuarioId} and a.confirmado_en is null and t.sucursal_id = ${s.id}
     order by a.declarado_en`;
   return { sucursal: s.nombre, pendientes: [...pendientes] };

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
-import { FormularioCorreccion, FormularioResolucion, FormularioRevision } from "@/components/RevisionDiferencia";
+import { FormularioCorreccion, FormularioResolucion, FormularioRevision, FormularioRevisionIncidencia } from "@/components/RevisionDiferencia";
 import { ESTADO_DIFERENCIA, etiquetaDiferencia, NOMBRE_DECISION, NOMBRE_LUGAR, NOMBRE_NIVEL, tiempoPendiente } from "@/lib/datos-diferencia";
 import { detalleDiferencias, TIPOS_REFERENCIA_CORRECCION } from "@/lib/diferencias";
 import { requerirSesion } from "@/lib/sesion-servidor";
@@ -24,13 +24,23 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
     c.diferencias.find((d) => d.lugar === lugar && d.tipo === tipo);
   const f = c.fueraDeLaBolsa;
   const coincide = c.desglose.calculado === Number(c.lugares.bolsa_visitas.esperado).toFixed(2);
+  const k = c.cierre;
+  const VERIF = { correcto: "Cerrado y con su folio", abierto: "Abierto o sello roto", otro_folio: "Otro folio", falta: "No está" } as const;
   return (
     <main className="contenedor contenedor-amplio">
       <p className="sub"><Link href={`/sucursales/${codigo}/diferencias`}>← Diferencias de {c.sucursal}</Link></p>
-      <h1 className="cabecera-titulo">Cambio de turno · {c.sucursal}</h1>
-      <p className="sub">
-        De <strong>{c.entregaPor}</strong> a <strong>{c.recibe}</strong> · entregó {hora.format(c.entregadaEn)} · confirmó {hora.format(c.confirmadaEn)} desde su propia cuenta
-      </p>
+      <h1 className="cabecera-titulo">{k ? "Cierre del día y apertura" : "Cambio de turno"} · {c.sucursal}</h1>
+      {k ? (
+        <p className="sub" data-testid="encabezado-cierre">
+          Cerró <strong>{c.entregaPor}</strong> {hora.format(c.entregadaEn)} · custodio <strong>{k.custodio}</strong> · abrió <strong>{c.recibe}</strong> {hora.format(c.confirmadaEn)}
+          {k.mismaPersona ? " · la misma persona cerró y abrió" : ""}
+        </p>
+      ) : (
+        <p className="sub">
+          De <strong>{c.entregaPor}</strong> a <strong>{c.recibe}</strong> · entregó {hora.format(c.entregadaEn)} · confirmó {hora.format(c.confirmadaEn)} desde su propia cuenta
+        </p>
+      )}
+      {aviso === "incidencia-revisada" ? <p className="aviso aviso-ok" role="status">Revisión de la incidencia registrada.</p> : null}
       {aviso === "revisada" ? <p className="aviso aviso-ok" role="status">Revisión registrada. Los importes no cambiaron.</p> : null}
       {aviso === "resuelta" ? <p className="aviso aviso-ok" role="status">Decisión de Dirección registrada. Los importes no cambiaron.</p> : null}
       {aviso === "corregida" ? <p className="aviso aviso-ok" role="status">Corrección registrada. El caso quedó cerrado.</p> : null}
@@ -52,17 +62,17 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
               <div className="cifra-caso"><span className="sub">Saldo esperado</span>
                 <strong data-testid="cifra-esperado">{x.esperado !== null ? pesos.format(Number(x.esperado)) : "No calculado"}</strong>
                 {x.esperado === null ? <span className="sub">Faltan datos de Open Desk</span> : null}</div>
-              <div className="cifra-caso"><span className="sub">Entregó {c.entregaPor}</span><strong data-testid="cifra-entregado">{pesos.format(Number(x.entregado))}</strong></div>
-              <div className="cifra-caso"><span className="sub">Recibió {c.recibe}</span><strong data-testid="cifra-recibido">{pesos.format(Number(x.confirmado))}</strong>
+              <div className="cifra-caso"><span className="sub">{k ? "Cerró" : "Entregó"} {c.entregaPor}</span><strong data-testid="cifra-entregado">{pesos.format(Number(x.entregado))}</strong></div>
+              <div className="cifra-caso"><span className="sub">{k ? "Abrió" : "Recibió"} {c.recibe}</span><strong data-testid="cifra-recibido">{pesos.format(Number(x.confirmado))}</strong>
                 <span className="sub">Primer conteo {pesos.format(Number(x.inicial))}</span></div>
-              <div className={`cifra-caso ${!dp ? "cifra-bien" : dp.estado === "aclarada" || dp.estado === "resuelta" ? "cifra-aclarada" : "cifra-mal"}`} data-testid="tarjeta-entre-personas"><span className="sub">Diferencia entre entrega y recepción</span>
+              <div className={`cifra-caso ${!dp ? "cifra-bien" : dp.estado === "aclarada" || dp.estado === "resuelta" ? "cifra-aclarada" : "cifra-mal"}`} data-testid="tarjeta-entre-personas"><span className="sub">{k ? "Diferencia entre cierre y apertura" : "Diferencia entre entrega y recepción"}</span>
                 <strong data-testid="cifra-entre-personas">{dp ? firmado(dp.importe) : pesos.format(0)}</strong>
-                {dp ? <span className="sub">{etiquetaDiferencia(dp.tipo, dp.importe)} · {ESTADO_DIFERENCIA[dp.estado]}</span> : null}</div>
+                {dp ? <span className="sub">{etiquetaDiferencia(dp.tipo, dp.importe, !!k)} · {ESTADO_DIFERENCIA[dp.estado]}</span> : null}</div>
             </div>
             <div className={`cifra-caso ${!de ? "" : de.estado === "aclarada" || de.estado === "resuelta" ? "cifra-aclarada" : "cifra-mal"}`} data-testid="cifra-contra-esperado">
               <span className="sub">Diferencia contra el esperado (lo entregado − el esperado)</span>
               <strong>{x.esperado === null ? "No se puede calcular" : de ? firmado(de.importe) : pesos.format(0)}</strong>
-              {de ? <span className="sub">{etiquetaDiferencia(de.tipo, de.importe)} · {ESTADO_DIFERENCIA[de.estado]}</span> : null}
+              {de ? <span className="sub">{etiquetaDiferencia(de.tipo, de.importe, !!k)} · {ESTADO_DIFERENCIA[de.estado]}</span> : null}
               {l === "bolsa_visitas" ? c.deRetiros.map((r) => (
                 <span key={r.retiroId} className="sub" data-testid="de-retiro">
                   {Number(r.presente)
@@ -75,16 +85,43 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
         );
       })}
       {c.nota ? <p className="sub">Nota de quien entregó: {c.nota}</p> : null}
-      {c.aclaracion ? <p className="sub">Aclaración del recuento: {c.aclaracion}</p> : null}
+      {c.aclaracion ? <p className="sub" data-testid="aclaracion-caso">{k ? "Motivo o aclaración al abrir" : "Aclaración del recuento"}: {c.aclaracion}</p> : null}
+      {k ? (
+        <section className="tarjeta" aria-labelledby="t-custodia" data-testid="custodia-caso">
+          <h2 id="t-custodia" className="titulo-seccion">Custodia nocturna</h2>
+          <dl className="cuentas-lugar">
+            <dt>Configuración vigente al cerrar</dt>
+            <dd className="dd-largo">{k.configuracion.lugar} · acceso: {k.configuracion.acceso.join(", ")} · definida por {k.configuracion.configuradaPor}</dd>
+            <dt>Custodia</dt>
+            <dd className="dd-largo">{k.custodia ? `Confirmada por ${k.custodio}: ${k.custodia.ubicacion} · ${hora.format(k.custodia.en)}` : `${k.custodio} no la confirmó antes de abrir`}</dd>
+            <dt>Recuento al abrir</dt>
+            <dd className="dd-largo">{k.recontadoConCustodio ? `Sí, con ${k.custodio}` : "No"}</dd>
+          </dl>
+          <table className="tabla">
+            <thead><tr><th>Sobre</th><th>Custodio</th><th>Al abrir</th></tr></thead>
+            <tbody>
+              {k.sobres.map((x) => (
+                <tr key={x.folio} data-testid="sobre-caso">
+                  <td className="mono" data-etiqueta="Sobre">{x.folio}</td>
+                  {[x.custodia, x.apertura].map((v, i) => (
+                    <td key={i} data-etiqueta={i ? "Al abrir" : "Custodio"}>{v ? `${VERIF[v.estado]}${v.folioVisto ? ` (${v.folioVisto})` : ""}${v.motivo ? ` · ${v.motivo}` : ""}` : "—"}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ) : null}
 
       <section className="tarjeta" aria-labelledby="t-participacion" data-testid="participacion">
         <h2 id="t-participacion" className="titulo-seccion">Quién participó en el conteo</h2>
         <ul className="lista-simple">
-          <li>Contó y entregó: <strong>{c.entregaPor}</strong></li>
-          <li>Contó y recibió: <strong>{c.recibe}</strong></li>
+          <li>{k ? "Contó y cerró" : "Contó y entregó"}: <strong>{c.entregaPor}</strong></li>
+          {k ? <li>Custodio nocturno: <strong>{k.custodio}</strong></li> : null}
+          <li>{k ? "Contó y abrió" : "Contó y recibió"}: <strong>{c.recibe}</strong></li>
           {c.apoyos.map((a) => (
             <li key={a.etapa} data-testid={`apoyo-${a.etapa}`}>
-              Apoyo en {a.etapa === "conteo_entrega" ? "el conteo de quien entregó" : a.etapa === "conteo_recepcion" ? "el conteo de quien recibió" : "el recuento"}:{" "}
+              Apoyo en {a.etapa === "conteo_entrega" ? (k ? "el conteo de quien cerró" : "el conteo de quien entregó") : a.etapa === "conteo_recepcion" ? (k ? "el conteo de quien abrió" : "el conteo de quien recibió") : "el recuento"}:{" "}
               {a.estado === "sin_registro" ? <em>sin registro de apoyo (entrega anterior a este registro)</em>
                 : a.estado === "nadie" ? <>nadie más participó (lo declaró {a.declaradoPor})</>
                 : <>
@@ -98,17 +135,39 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
         <p className="sub">Quien participó, aunque su apoyo esté pendiente de confirmar, no revisa estas diferencias; su perfil cuenta para decidir quién revisa.</p>
       </section>
 
+      {c.incidencias.length ? (
+        <section className="tarjeta" aria-labelledby="t-incidencias" data-testid="incidencias">
+          <h2 id="t-incidencias" className="titulo-seccion">Incidencias del cierre</h2>
+          <p className="sub">Quedan por revisar aunque el efectivo cuadre. Revisar deja constancia; no cambia ningún importe.</p>
+          {c.incidencias.map((i) => (
+            <div key={i.id} className="tarjeta" data-testid="incidencia">
+              <p>
+                <strong>{i.tipo === "custodia_sin_confirmar" ? "Custodia sin confirmar" : "Sello o folio"}</strong>{" "}
+                <span className={`chip-estado ${i.revision ? "" : "chip-vencida"}`} data-testid="estado-incidencia">{i.revision ? "Revisada" : "Por revisar"}</span>
+              </p>
+              <p className="sub">{i.detalle}</p>
+              {i.revision ? (
+                <p className="sub">Revisó {i.revision.revisadaPor} ({NOMBRE_NIVEL[i.revision.nivel]}) · {hora.format(i.revision.en)} · «{i.revision.motivo}»</p>
+              ) : c.puedeRevisar ? (
+                <FormularioRevisionIncidencia codigo={codigo} incidenciaId={i.id} />
+              ) : (
+                <p className="sub">La revisa {NOMBRE_NIVEL[c.nivel]}.</p>
+              )}
+            </div>
+          ))}
+        </section>
+      ) : null}
       <section className="tarjeta" aria-labelledby="t-revision" data-testid="revisiones">
         <h2 id="t-revision" className="titulo-seccion">Revisión de cada diferencia</h2>
         {c.diferencias.length ? c.diferencias.map((d) => {
           const lo = c.lugares[d.lugar];
           const comparado = d.tipo === "contra_esperado"
             ? `${pesos.format(Number(lo.entregado))} entregados − ${pesos.format(Number(lo.esperado))} esperados`
-            : `${pesos.format(Number(lo.confirmado))} confirmados − ${pesos.format(Number(lo.entregado))} entregados`;
+            : `${pesos.format(Number(lo.confirmado))} ${k ? "al abrir" : "confirmados"} − ${pesos.format(Number(lo.entregado))} ${k ? "al cerrar" : "entregados"}`;
           return (
             <div key={d.id} className="tarjeta" data-testid="diferencia" data-tipo={d.tipo}>
               <p>
-                <strong>{NOMBRE_LUGAR[d.lugar]} · {etiquetaDiferencia(d.tipo, d.importe)}: {firmado(d.importe)}</strong>{" "}
+                <strong>{NOMBRE_LUGAR[d.lugar]} · {etiquetaDiferencia(d.tipo, d.importe, !!k)}: {firmado(d.importe)}</strong>{" "}
                 <span className={`chip-estado ${d.estado === "aclarada" || d.estado === "resuelta" ? "chip-aclarada" : "chip-vencida"}`} data-testid="estado-diferencia">{ESTADO_DIFERENCIA[d.estado]}</span>
               </p>
               <p className="sub">Se compara: {comparado}.</p>

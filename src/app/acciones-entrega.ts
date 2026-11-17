@@ -5,15 +5,15 @@
  * quién recibe, el bloqueo de cobros y el de producción se comprueban en src/lib/entregas.ts.
  */
 import { redirect } from "next/navigation";
-import { leerImporte, MENSAJES_IMPORTE } from "@/lib/datos-turno";
+import { importes, leerApoyo } from "@/lib/formulario-conteo";
 import { obtenerBaseDatos } from "@/lib/db";
-import { cancelarEntrega, confirmarApoyo, recibirTurno, registrarEntrega, type DeclaracionApoyo, type ErrorEntrega } from "@/lib/entregas";
+import { cancelarEntrega, confirmarApoyo, recibirTurno, registrarEntrega, type ErrorEntrega } from "@/lib/entregas";
 import { leerEntorno } from "@/lib/entorno";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
 
 export type EstadoFormularioEntrega = {
   error?: string;
-  errores?: { bolsa?: string; cajon?: string; recibe?: string; nota?: string; aclaracion?: string; motivo?: string; apoyo?: string };
+  errores?: { bolsa?: string; cajon?: string; recibe?: string; nota?: string; aclaracion?: string; motivo?: string; apoyo?: string; [campo: string]: string | undefined };
   valores?: Record<string, string>;
   personas?: string[];
   intento: number;
@@ -48,25 +48,6 @@ const lector = (datos: FormData) => (campo: string, max = 30) => {
   const v = datos.get(campo);
   return typeof v === "string" ? v.slice(0, max) : "";
 };
-/** «¿Alguien te ayudó a contar?»: «no», o «si» con al menos una persona elegida. */
-function leerApoyo(datos: FormData): { ok: true; apoyo: DeclaracionApoyo; personas: string[] } | { ok: false; personas: string[] } {
-  const hubo = datos.get("apoyo");
-  const personas = datos.getAll("personas").filter((p): p is string => typeof p === "string").slice(0, 10).map((p) => p.slice(0, 40));
-  if (hubo === "no") return { ok: true, apoyo: { hubo: false }, personas: [] };
-  if (hubo === "si" && personas.length) return { ok: true, apoyo: { hubo: true, personas }, personas };
-  return { ok: false, personas };
-}
-
-function importes(valores: { bolsa: string; cajon: string }) {
-  const bolsa = leerImporte(valores.bolsa);
-  const cajon = leerImporte(valores.cajon);
-  if (bolsa.ok && cajon.ok) return { ok: true as const, conteo: { bolsa: bolsa.valor, cajon: cajon.valor } };
-  return {
-    ok: false as const,
-    errores: { bolsa: bolsa.ok ? undefined : MENSAJES_IMPORTE[bolsa.motivo], cajon: cajon.ok ? undefined : MENSAJES_IMPORTE[cajon.motivo] },
-  };
-}
-
 export async function accionEntregarTurno(previo: EstadoFormularioEntrega, datos: FormData): Promise<EstadoFormularioEntrega> {
   const { sesion, sql } = await inicio();
   const leer = lector(datos);

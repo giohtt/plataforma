@@ -30,16 +30,23 @@ export default async function Diferencias({ params }: PageProps<"/sucursales/[co
               <tbody>
                 {r.casos.map((c) => (
                   <tr key={c.entregaId} data-testid="caso-diferencia">
-                    <td data-etiqueta="Confirmado">{hora.format(c.confirmadaEn)}</td>
-                    <td data-etiqueta="Personas">{c.entregaPor} → {c.recibe}</td>
+                    <td data-etiqueta="Confirmado">{hora.format(c.confirmadaEn)}{c.tipo === "cierre" ? <><br /><span className="sub">Cierre y apertura</span></> : null}</td>
+                    <td data-etiqueta="Personas">{c.tipo === "cierre" ? `Cerró ${c.entregaPor} → abrió ${c.recibe}` : `${c.entregaPor} → ${c.recibe}`}</td>
                     <td data-etiqueta="Diferencias">
                       {c.diferencias.length ? (
                         <ul className="lista-simple">
                           {c.diferencias.map((d) => (
-                            <li key={d.id}>{NOMBRE_LUGAR[d.lugar]}: <strong style={{ whiteSpace: "nowrap" }}>{firmado(d.importe)}</strong> · {etiquetaDiferencia(d.tipo, d.importe)} · {ESTADO_DIFERENCIA[d.estado]}</li>
+                            <li key={d.id}>{NOMBRE_LUGAR[d.lugar]}: <strong style={{ whiteSpace: "nowrap" }}>{firmado(d.importe)}</strong> · {etiquetaDiferencia(d.tipo, d.importe, c.tipo === "cierre")} · {ESTADO_DIFERENCIA[d.estado]}</li>
                           ))}
                         </ul>
                       ) : "Sin diferencias"}
+                      {c.incidencias.length ? (
+                        <ul className="lista-simple" data-testid="incidencias-caso">
+                          {c.incidencias.map((i) => (
+                            <li key={i.id}>Incidencia: {i.tipo === "custodia_sin_confirmar" ? "custodia sin confirmar" : "sello o folio"} · {i.revision ? "Revisada" : "Por revisar"}</li>
+                          ))}
+                        </ul>
+                      ) : null}
                       {c.diferencias.length > 1 ? <p className="sub" data-testid="neto">Total neto en la bolsa: {Number(c.neto) ? firmado(c.neto) : pesos.format(0)} (solo referencia; cada diferencia se revisa aparte)</p> : null}
                     </td>
                     <td data-etiqueta="Estado" data-testid="estado-caso">
