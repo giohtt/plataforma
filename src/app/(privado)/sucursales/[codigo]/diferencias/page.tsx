@@ -40,6 +40,13 @@ export default async function Diferencias({ params }: PageProps<"/sucursales/[co
                           ))}
                         </ul>
                       ) : "Sin diferencias"}
+                      {c.incidencias.length ? (
+                        <ul className="lista-simple" data-testid="incidencias-caso">
+                          {c.incidencias.map((i) => (
+                            <li key={i.id}>Incidencia: {i.tipo === "custodia_sin_confirmar" ? "custodia sin confirmar" : "sello o folio"} · {i.revision ? "Revisada" : "Por revisar"}</li>
+                          ))}
+                        </ul>
+                      ) : null}
                       {c.diferencias.length > 1 ? <p className="sub" data-testid="neto">Total neto en la bolsa: {Number(c.neto) ? firmado(c.neto) : pesos.format(0)} (solo referencia; cada diferencia se revisa aparte)</p> : null}
                     </td>
                     <td data-etiqueta="Estado" data-testid="estado-caso">

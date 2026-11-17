@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
-import { FormularioCorreccion, FormularioResolucion, FormularioRevision } from "@/components/RevisionDiferencia";
+import { FormularioCorreccion, FormularioResolucion, FormularioRevision, FormularioRevisionIncidencia } from "@/components/RevisionDiferencia";
 import { ESTADO_DIFERENCIA, etiquetaDiferencia, NOMBRE_DECISION, NOMBRE_LUGAR, NOMBRE_NIVEL, tiempoPendiente } from "@/lib/datos-diferencia";
 import { detalleDiferencias, TIPOS_REFERENCIA_CORRECCION } from "@/lib/diferencias";
 import { requerirSesion } from "@/lib/sesion-servidor";
@@ -40,6 +40,7 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
           De <strong>{c.entregaPor}</strong> a <strong>{c.recibe}</strong> · entregó {hora.format(c.entregadaEn)} · confirmó {hora.format(c.confirmadaEn)} desde su propia cuenta
         </p>
       )}
+      {aviso === "incidencia-revisada" ? <p className="aviso aviso-ok" role="status">Revisión de la incidencia registrada.</p> : null}
       {aviso === "revisada" ? <p className="aviso aviso-ok" role="status">Revisión registrada. Los importes no cambiaron.</p> : null}
       {aviso === "resuelta" ? <p className="aviso aviso-ok" role="status">Decisión de Dirección registrada. Los importes no cambiaron.</p> : null}
       {aviso === "corregida" ? <p className="aviso aviso-ok" role="status">Corrección registrada. El caso quedó cerrado.</p> : null}
@@ -101,9 +102,9 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
             <tbody>
               {k.sobres.map((x) => (
                 <tr key={x.folio} data-testid="sobre-caso">
-                  <td className="mono">{x.folio}</td>
+                  <td className="mono" data-etiqueta="Sobre">{x.folio}</td>
                   {[x.custodia, x.apertura].map((v, i) => (
-                    <td key={i}>{v ? `${VERIF[v.estado]}${v.folioVisto ? ` (${v.folioVisto})` : ""}${v.motivo ? ` · ${v.motivo}` : ""}` : "—"}</td>
+                    <td key={i} data-etiqueta={i ? "Al abrir" : "Custodio"}>{v ? `${VERIF[v.estado]}${v.folioVisto ? ` (${v.folioVisto})` : ""}${v.motivo ? ` · ${v.motivo}` : ""}` : "—"}</td>
                   ))}
                 </tr>
               ))}
@@ -134,6 +135,28 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
         <p className="sub">Quien participó, aunque su apoyo esté pendiente de confirmar, no revisa estas diferencias; su perfil cuenta para decidir quién revisa.</p>
       </section>
 
+      {c.incidencias.length ? (
+        <section className="tarjeta" aria-labelledby="t-incidencias" data-testid="incidencias">
+          <h2 id="t-incidencias" className="titulo-seccion">Incidencias del cierre</h2>
+          <p className="sub">Quedan por revisar aunque el efectivo cuadre. Revisar deja constancia; no cambia ningún importe.</p>
+          {c.incidencias.map((i) => (
+            <div key={i.id} className="tarjeta" data-testid="incidencia">
+              <p>
+                <strong>{i.tipo === "custodia_sin_confirmar" ? "Custodia sin confirmar" : "Sello o folio"}</strong>{" "}
+                <span className={`chip-estado ${i.revision ? "" : "chip-vencida"}`} data-testid="estado-incidencia">{i.revision ? "Revisada" : "Por revisar"}</span>
+              </p>
+              <p className="sub">{i.detalle}</p>
+              {i.revision ? (
+                <p className="sub">Revisó {i.revision.revisadaPor} ({NOMBRE_NIVEL[i.revision.nivel]}) · {hora.format(i.revision.en)} · «{i.revision.motivo}»</p>
+              ) : c.puedeRevisar ? (
+                <FormularioRevisionIncidencia codigo={codigo} incidenciaId={i.id} />
+              ) : (
+                <p className="sub">La revisa {NOMBRE_NIVEL[c.nivel]}.</p>
+              )}
+            </div>
+          ))}
+        </section>
+      ) : null}
       <section className="tarjeta" aria-labelledby="t-revision" data-testid="revisiones">
         <h2 id="t-revision" className="titulo-seccion">Revisión de cada diferencia</h2>
         {c.diferencias.length ? c.diferencias.map((d) => {

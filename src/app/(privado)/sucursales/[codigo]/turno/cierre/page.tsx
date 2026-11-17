@@ -60,7 +60,7 @@ export default async function CierreDelDia({ params, searchParams }: PageProps<"
               <dd>{p.bloqueos.cancelaciones ? <strong>{p.bloqueos.cancelaciones}</strong> : "Ninguna"}</dd>
               <dt>Retiros pendientes de confirmar o en revisión</dt>
               <dd data-testid="pendiente-retiros">{p.pendientesVisibles.retirosPorConfirmar}</dd>
-              <dt>Diferencias de efectivo por revisar</dt>
+              <dt>Diferencias e incidencias de efectivo por revisar</dt>
               <dd data-testid="pendiente-diferencias">{p.pendientesVisibles.diferenciasPorRevisar}</dd>
             </dl>
             <p className="sub">Las confirmaciones y diferencias pendientes no impiden cerrar y siguen visibles después del cierre.</p>

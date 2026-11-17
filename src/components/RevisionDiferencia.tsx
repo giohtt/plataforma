@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { accionRegistrarCorreccion, accionResolverDiferencia, accionRevisarDiferencia } from "@/app/acciones-diferencias";
+import { accionRegistrarCorreccion, accionResolverDiferencia, accionRevisarDiferencia, accionRevisarIncidencia } from "@/app/acciones-diferencias";
 import { opcionesRevision } from "@/lib/datos-diferencia";
 
 /** Resultado de UNA diferencia: dos opciones según su signo y motivo obligatorio. No cambia ningún importe. */
@@ -133,6 +133,27 @@ export function FormularioCorreccion({ codigo, diferenciaId, tipos }: { codigo: 
         {estado?.errores?.referencia ? <span className="campo-error">{estado.errores.referencia}</span> : null}
       </div>
       <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Registrando…" : "Registrar corrección y cerrar"}</button>
+    </form>
+  );
+}
+
+/** Revisión de UNA incidencia del cierre: deja constancia de lo revisado, con motivo. No cambia importes. */
+export function FormularioRevisionIncidencia({ codigo, incidenciaId }: { codigo: string; incidenciaId: string }) {
+  const [estado, accion, enviando] = useActionState(accionRevisarIncidencia, null);
+  const id = `motivo-inc-${incidenciaId}`;
+  return (
+    <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate data-testid="formulario-revision-incidencia">
+      {estado?.error ? <p className="aviso aviso-error" role="alert">{estado.error}</p> : null}
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="incidencia" value={incidenciaId} />
+      <div className="campo">
+        <label htmlFor={id}>Qué se revisó (obligatorio)</label>
+        <textarea id={id} name="motivo" rows={2} maxLength={300} defaultValue={estado?.valores?.motivo ?? ""}
+          aria-invalid={estado?.errores?.motivo ? true : undefined} />
+        <span className="sub">De 5 a 300 caracteres. Queda en el historial con tu cuenta, la fecha y la hora.</span>
+        {estado?.errores?.motivo ? <span className="campo-error">{estado.errores.motivo}</span> : null}
+      </div>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Registrando…" : "Registrar revisión de la incidencia"}</button>
     </form>
   );
 }

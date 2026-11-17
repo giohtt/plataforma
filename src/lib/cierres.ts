@@ -188,7 +188,9 @@ export async function pantallaCierre(sql: Sql, usuarioId: string, codigo: string
     const [p] = await tx<{ retiros: number; diferencias: number }[]>`
       select (select count(*)::int from retiro where sucursal_id = ${c.s.id} and estado in ('pendiente', 'recuento', 'por_revisar')) as retiros,
              (select count(*)::int from diferencia_efectivo d join turno x on x.id = d.turno_id
-              left join revision_diferencia r on r.diferencia_id = d.id where x.sucursal_id = ${c.s.id} and r.id is null) as diferencias`;
+              left join revision_diferencia r on r.diferencia_id = d.id where x.sucursal_id = ${c.s.id} and r.id is null)
+             + (select count(*)::int from incidencia_cierre i join entrega_turno e on e.id = i.entrega_id join turno x on x.id = e.turno_id
+                where x.sucursal_id = ${c.s.id} and not exists (select 1 from revision_incidencia r where r.incidencia_id = i.id)) as diferencias`;
     return {
       ok: true, sucursal: c.s.nombre, turnoId: c.turnoId,
       lugares: t.lugares.map((l) => ({
@@ -339,6 +341,8 @@ export type CierrePendiente = {
   sobres: (Sobre & { custodia: Verificacion | null })[];
   /** Quien empezó a abrir (en recuento). */
   abre: string | null; abreId: string | null;
+  /** Motivo de abrir sin la confirmación del custodio, si así se abrió. */
+  sinCustodia: string | null;
 };
 export type Verificacion = { estado: "correcto" | "falta" | "abierto" | "otro_folio"; folioVisto: string | null; motivo: string | null; por: string; en: Date };
 
@@ -346,9 +350,10 @@ export type Verificacion = { estado: "correcto" | "falta" | "abierto" | "otro_fo
 export async function cierrePendiente(tx: Tx | Sql, sucursalId: string): Promise<CierrePendiente | null> {
   const [e] = await tx<{ id: string; version: number; estado: "pendiente" | "recuento"; cerro: string; cerro_id: string; en: Date;
                           custodio: string; custodio_id: string; lugar: string; acceso: string[]; abre: string | null; abre_id: string | null;
-                          ubicacion: string | null; confirmada_en: Date | null }[]>`
+                          ubicacion: string | null; confirmada_en: Date | null; sin_custodia: string | null }[]>`
     select e.id, e.version, e.estado, a.nombre as cerro, a.id as cerro_id, e.creada_en as en, c.nombre as custodio, c.id as custodio_id,
-           k.lugar, k.acceso::text[] as acceso, b.nombre as abre, b.id as abre_id, x.ubicacion, x.confirmada_en
+           k.lugar, k.acceso::text[] as acceso, b.nombre as abre, b.id as abre_id, x.ubicacion, x.confirmada_en,
+           (select a.motivo from apertura_sin_custodia a where a.entrega_id = e.id) as sin_custodia
     from entrega_turno e join turno t on t.id = e.turno_id
     join usuario a on a.id = e.entrega_por join usuario c on c.id = e.custodio_id
     join custodia_configuracion k on k.id = e.custodia_config_id
@@ -362,7 +367,7 @@ export async function cierrePendiente(tx: Tx | Sql, sucursalId: string): Promise
     custodia: e.ubicacion ? { ubicacion: e.ubicacion, confirmadaEn: e.confirmada_en! } : null,
     configuracion: { lugar: e.lugar, acceso: await nombres(tx, e.acceso) },
     sobres: await sobresDe(tx, e.id, "custodia"),
-    abre: e.abre, abreId: e.abre_id,
+    abre: e.abre, abreId: e.abre_id, sinCustodia: e.sin_custodia,
   };
 }
 
@@ -454,7 +459,7 @@ export async function confirmarCustodia(
 
 export type ErrorApertura =
   | "no_encontrada" | "sin_permiso" | "sucursal_inactiva" | "sin_cierre" | "otra_persona" | "cambio" | "motivo" | "apoyo"
-  | ErrorVerificacion | "bloqueado_produccion";
+  | "custodia_pendiente" | "motivo_custodia" | ErrorVerificacion | "bloqueado_produccion";
 
 async function sucursalApertura(tx: Tx | Sql, usuarioId: string, codigo: string) {
   if (!valido(codigo)) return null;
@@ -503,7 +508,11 @@ export async function pantallaApertura(sql: Sql, usuarioId: string, codigo: stri
  */
 export async function abrirDesdeCierre(
   sql: Sql, usuarioId: string, codigo: string,
-  datos: { entregaId: string; version: number; sobres: VerificacionDatos[]; conteo: ConteoLugares; apoyo: DeclaracionApoyo },
+  datos: {
+    entregaId: string; version: number; sobres: VerificacionDatos[]; conteo: ConteoLugares; apoyo: DeclaracionApoyo;
+    /** Solo si el custodio no confirmó y no está disponible: por qué se abre sin su confirmación. */
+    sinCustodia?: { motivo: string } | null;
+  },
   { entorno }: { entorno: Entorno },
 ): Promise<{ ok: true; resultado: "abierto"; turnoId: string } | { ok: true; resultado: "recuento" } | { ok: false; error: ErrorApertura; sobreId?: string }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
@@ -516,8 +525,19 @@ export async function abrirDesdeCierre(
     const sobres = c.cierre.sobres.map((s) => ({ id: s.id, lugar: s.lugar, folio: s.folio }));
     const v = leerVerificaciones(sobres, datos.sobres);
     if (!v.ok) return v;
+    // Custodia sin confirmar: si el custodio está disponible, confirma primero; si no, se abre con motivo obligatorio.
+    const motivoSinCustodia = limpiar(datos.sinCustodia?.motivo ?? "");
+    if (!c.cierre.custodia) {
+      if (!datos.sinCustodia) return { ok: false as const, error: "custodia_pendiente" as const };
+      if (motivoSinCustodia.length < 5 || motivoSinCustodia.length > 300) return { ok: false as const, error: "motivo_custodia" as const };
+    }
     // Quien abre queda registrada como quien recibe el cierre (puede ser la misma persona que cerró).
     await tx`update entrega_turno set recibe = ${usuarioId}, version = version + 1 where id = ${c.cierre.entregaId}`;
+    if (!c.cierre.custodia) {
+      await tx`insert into apertura_sin_custodia (entrega_id, motivo, registrada_por) values (${c.cierre.entregaId}, ${motivoSinCustodia}, ${usuarioId})`;
+      await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, motivo, usuario_id)
+               values ('entrega_turno', ${c.cierre.entregaId}, 'abrir_sin_custodia', ${tx.json({ custodio: c.cierre.custodioId })}, ${motivoSinCustodia}, ${usuarioId})`;
+    }
     for (const f of v.filas) {
       await tx`insert into verificacion_sobre (sobre_id, momento, estado, folio_visto, motivo, verificado_por)
                values (${f.sobreId}, 'apertura', ${f.estado}, ${f.folioVisto}, ${f.motivo}, ${usuarioId})`;
@@ -540,6 +560,7 @@ export async function abrirDesdeCierre(
         entregaId: c.cierre.entregaId, turnoId: c.turnoCerrado, sucursalId: c.sucursalId, usuarioId, final: datos.conteo,
         aclaracion: null, cerrarTurno: false,
       });
+      await registrarIncidencias(tx, c.cierre.entregaId);
       return { ok: true as const, resultado: "abierto" as const, turnoId };
     }
     await tx`update entrega_turno set estado = 'recuento', version = version + 1 where id = ${c.cierre.entregaId}`;
@@ -578,8 +599,22 @@ export async function terminarApertura(
       entregaId: c.cierre.entregaId, turnoId: c.turnoCerrado, sucursalId: c.sucursalId, usuarioId, final,
       aclaracion: motivo || null, cerrarTurno: false, recontadoCon: datos.recontaron ? c.cierre.custodioId : null,
     });
+    await registrarIncidencias(tx, c.cierre.entregaId);
     return { ok: true as const, turnoId };
   });
+}
+
+/**
+ * Al confirmarse la apertura, cada incidencia queda por revisar aunque el efectivo cuadre: la apertura sin custodia
+ * confirmada y cada sobre que el custodio o quien abre no encontró cerrado y con su folio.
+ */
+async function registrarIncidencias(tx: Tx, entregaId: string) {
+  await tx`insert into incidencia_cierre (entrega_id, tipo)
+           select entrega_id, 'custodia_sin_confirmar' from apertura_sin_custodia where entrega_id = ${entregaId}`;
+  await tx`insert into incidencia_cierre (entrega_id, tipo, verificacion_id)
+           select ${entregaId}, case v.momento when 'custodia' then 'sobre_en_custodia' else 'sobre_al_abrir' end, v.id
+           from verificacion_sobre v join sobre_cierre s on s.id = v.sobre_id
+           where s.entrega_id = ${entregaId} and v.estado <> 'correcto' order by v.id`;
 }
 
 /** Bloquea el cierre (primero la fila de la entrega) y comprueba quién abre. */

@@ -44,6 +44,8 @@ const MENSAJES_APERTURA: Record<ErrorApertura, string> = {
   sobres: "Verifica cada sobre.",
   estado: "Indica cómo llegó cada sobre.",
   folio_visto: "Escribe el folio que trae el sobre.",
+  custodia_pendiente: "El custodio todavía no confirma la custodia. Si está disponible, que confirme primero desde su cuenta; si no, marca que no está disponible y escribe el motivo.",
+  motivo_custodia: "Escribe por qué abres sin la confirmación del custodio (de 5 a 300 caracteres).",
   bloqueado_produccion: "La apertura está desactivada fuera del entorno de pruebas.",
 };
 
@@ -147,7 +149,7 @@ export async function accionAbrirDesdeCierre(previo: EstadoFormularioEntrega, da
   const leer = lector(datos);
   const codigo = leer("codigo");
   const { sobres, valores: vs } = leerSobres(datos);
-  const valores = { ...vs, bolsa: leer("bolsa"), cajon: leer("cajon"), apoyo: leer("apoyo") };
+  const valores = { ...vs, bolsa: leer("bolsa"), cajon: leer("cajon"), apoyo: leer("apoyo"), sinCustodia: leer("sin_custodia"), motivoSinCustodia: leer("motivo_sin_custodia", 400) };
   const intento = (previo?.intento ?? 0) + 1;
   const i = importes(valores);
   const a = leerApoyo(datos);
@@ -155,7 +157,8 @@ export async function accionAbrirDesdeCierre(previo: EstadoFormularioEntrega, da
     return { error: "Revisa los campos marcados.", errores: { ...(i.ok ? {} : i.errores), apoyo: a.ok ? undefined : MENSAJES_APERTURA.apoyo }, valores, personas: a.personas, intento };
   }
   const r = await abrirDesdeCierre(sql, sesion.usuarioId, codigo,
-    { entregaId: leer("entrega", 40), version: Number(leer("version")), sobres, conteo: i.conteo, apoyo: a.apoyo }, { entorno: leerEntorno() });
+    { entregaId: leer("entrega", 40), version: Number(leer("version")), sobres, conteo: i.conteo, apoyo: a.apoyo,
+      sinCustodia: valores.sinCustodia === "si" ? { motivo: valores.motivoSinCustodia } : null }, { entorno: leerEntorno() });
   if (r.ok && r.resultado === "abierto") redirect(`/sucursales/${codigo}/turno?aviso=abierto-cierre`);
   if (r.ok) redirect(`/sucursales/${codigo}/turno/apertura?aviso=recuento`);
   if (r.error in MENSAJE_SOBRE) {
@@ -163,6 +166,9 @@ export async function accionAbrirDesdeCierre(previo: EstadoFormularioEntrega, da
     return { error: "Revisa los campos marcados.", errores: { [campo]: MENSAJE_SOBRE[r.error as keyof typeof MENSAJE_SOBRE] }, valores, personas: a.personas, intento };
   }
   if (r.error === "apoyo") return { error: "Revisa los campos marcados.", errores: { apoyo: MENSAJES_APERTURA.apoyo }, valores, personas: a.personas, intento };
+  if (r.error === "custodia_pendiente" || r.error === "motivo_custodia") {
+    return { error: "Revisa los campos marcados.", errores: { sinCustodia: MENSAJES_APERTURA[r.error] }, valores, personas: a.personas, intento };
+  }
   return { error: MENSAJES_APERTURA[r.error], valores, personas: a.personas, intento };
 }
 

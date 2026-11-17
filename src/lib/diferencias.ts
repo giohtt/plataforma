@@ -46,6 +46,41 @@ export type Diferencia = {
   pendienteDireccionDesde: Date | null;
 };
 
+/** Incidencia de un cierre (custodia sin confirmar o sobre con problema): queda por revisar aunque el efectivo cuadre. */
+export type IncidenciaCierre = {
+  id: string;
+  tipo: "custodia_sin_confirmar" | "sobre_en_custodia" | "sobre_al_abrir";
+  /** Texto de la incidencia: el motivo de abrir sin custodia, o el sobre, cómo llegó y el motivo. */
+  detalle: string;
+  registradaEn: Date;
+  revision: { motivo: string; revisadaPor: string; nivel: NivelRevision; en: Date } | null;
+};
+
+const INCIDENCIAS = (sql: Sql | Tx, entregaIds: string[]) => sql<{
+  id: string; entrega_id: string; tipo: IncidenciaCierre["tipo"]; registrada_en: Date; motivo_sin_custodia: string | null;
+  folio: string | null; estado: string | null; folio_visto: string | null; motivo_sobre: string | null; por: string | null;
+  r_motivo: string | null; r_por: string | null; r_nivel: NivelRevision | null; r_en: Date | null }[]>`
+  select i.id, i.entrega_id, i.tipo, i.registrada_en, a.motivo as motivo_sin_custodia,
+         s.folio, v.estado, v.folio_visto, v.motivo as motivo_sobre, u.nombre as por,
+         r.motivo as r_motivo, ru.nombre as r_por, r.nivel as r_nivel, r.en as r_en
+  from incidencia_cierre i
+  left join apertura_sin_custodia a on a.entrega_id = i.entrega_id and i.tipo = 'custodia_sin_confirmar'
+  left join verificacion_sobre v on v.id = i.verificacion_id left join sobre_cierre s on s.id = v.sobre_id
+  left join usuario u on u.id = v.verificado_por
+  left join revision_incidencia r on r.incidencia_id = i.id left join usuario ru on ru.id = r.revisada_por
+  where i.entrega_id in ${sql(entregaIds)}
+  order by i.registrada_en, case i.tipo when 'custodia_sin_confirmar' then 0 when 'sobre_en_custodia' then 1 else 2 end, s.folio`;
+const COMO = { falta: "no está", abierto: "abierto o con el sello roto", otro_folio: "con otro folio" } as Record<string, string>;
+function aIncidencia(f: Awaited<ReturnType<typeof INCIDENCIAS>>[number]): IncidenciaCierre {
+  const detalle = f.tipo === "custodia_sin_confirmar"
+    ? `Se abrió sin la confirmación del custodio. Motivo: «${f.motivo_sin_custodia}»`
+    : `${f.tipo === "sobre_en_custodia" ? "Custodia" : "Al abrir"} (${f.por}): sobre ${f.folio} ${COMO[f.estado!]}${f.folio_visto ? ` (${f.folio_visto})` : ""}. Motivo: «${f.motivo_sobre}»`;
+  return {
+    id: f.id, tipo: f.tipo, detalle, registradaEn: f.registrada_en,
+    revision: f.r_motivo ? { motivo: f.r_motivo, revisadaPor: f.r_por!, nivel: f.r_nivel!, en: f.r_en! } : null,
+  };
+}
+
 export type CasoLista = {
   entregaId: string;
   /** «cierre»: diferencia entre el cierre del día y la apertura siguiente (entregaPor cerró, recibe abrió). */
@@ -55,7 +90,9 @@ export type CasoLista = {
   entregaPor: string;
   recibe: string;
   diferencias: Diferencia[];
-  /** Diferencias de esta entrega que siguen por revisar. */
+  /** Incidencias del cierre (vacío en un cambio de turno). */
+  incidencias: IncidenciaCierre[];
+  /** Diferencias e incidencias de esta entrega que siguen por revisar. */
   pendientes: number;
   /** Faltantes o sobrantes confirmados, pendientes para Dirección. */
   paraDireccion: number;
@@ -115,12 +152,14 @@ export async function listaDiferencias(sql: Sql, usuarioId: string, codigo: stri
     order by e.resuelta_en desc
     limit 200`;
   const difs = entregas.length ? await DIFERENCIAS(sql, entregas.map((e) => e.id)) : [];
+  const incs = entregas.length ? await INCIDENCIAS(sql, entregas.map((e) => e.id)) : [];
   const casos = entregas.map((e): CasoLista => {
     const diferencias = difs.filter((d) => d.entrega_id === e.id).map(aDiferencia);
     const neto = diferencias.filter((d) => d.lugar === "bolsa_visitas").reduce((suma, d) => suma + Math.round(Number(d.importe) * 100), 0);
     return {
       entregaId: e.id, tipo: e.tipo, entregadaEn: e.creada_en, confirmadaEn: e.resuelta_en, entregaPor: e.entrega_por, recibe: e.recibe,
-      diferencias, pendientes: diferencias.filter((d) => d.estado === "por_revisar").length,
+      diferencias, incidencias: incs.filter((i) => i.entrega_id === e.id).map(aIncidencia),
+      pendientes: diferencias.filter((d) => d.estado === "por_revisar").length + incs.filter((i) => i.entrega_id === e.id && !i.r_motivo).length,
       paraDireccion: diferencias.filter((d) => d.pendienteDireccionDesde).length,
       neto: (neto / 100).toFixed(2),
     };
@@ -191,6 +230,7 @@ export type DetalleDiferencias = {
   historial: EventoCaso[];
   lugares: Record<TipoLugar, Cifras>;
   diferencias: Diferencia[];
+  incidencias: IncidenciaCierre[];
   desglose: Desglose;
   fueraDeLaBolsa: VentasTurno;
   /**
@@ -245,6 +285,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   const calculado = ((centavos(d.contado) + centavos(d.importe_cobros) + centavos(d.importe_cancelaciones) + centavos(d.importe_retiros)) / 100).toFixed(2);
 
   const difs = (await DIFERENCIAS(sql, [e.id])).map(aDiferencia);
+  const incidencias = (await INCIDENCIAS(sql, [e.id])).map(aIncidencia);
   const [n] = await sql<{ nivel: NivelRevision; puede: boolean; resuelve: boolean }[]>`
     select nivel_revision_entrega(${e.id}) as nivel,
            tiene_permiso(${usuarioId}, 'diferencia.revisar', ${s.id})
@@ -322,6 +363,10 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     ...personasApoyo.map((p) => ({ en: p.declarado_en, que: `Apoyo declarado en el ${ETAPA[p.etapa]}: ${p.nombre}`, cuenta: p.por })),
     ...personasApoyo.filter((p) => p.confirmado_en).map((p) => ({ en: p.confirmado_en!, que: `Apoyo confirmado en el ${ETAPA[p.etapa]}`, cuenta: p.nombre })),
     ...difs.map((d) => ({ en: d.registradaEn, que: `Diferencia registrada (${LUGAR[d.lugar]}): ${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : (cierre ? "entre cierre y apertura" : "en la entrega")}`, cuenta: "La plataforma, al confirmar" })),
+    ...incidencias.map((i) => ({ en: i.registradaEn, que: `Incidencia por revisar: ${i.detalle}`, cuenta: "La plataforma, al abrir" })),
+    ...incidencias.filter((i) => i.revision).map((i) => ({
+      en: i.revision!.en, que: `Revisión de la incidencia (${i.detalle}). Motivo: «${i.revision!.motivo}»`, cuenta: i.revision!.revisadaPor,
+    })),
     ...difs.filter((d) => d.revision).map((d) => ({
       en: d.revision!.en,
       que: `Revisión (${LUGAR[d.lugar]}, ${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : (cierre ? "entre cierre y apertura" : "en la entrega")}): ${RESULTADO[d.revision!.resultado]}. Motivo: «${d.revision!.motivo}»`,
@@ -348,6 +393,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     nota: e.nota, aclaracion: e.aclaracion, participaste, nivel: n.nivel, puedeRevisar: n.puede && !participaste, puedeResolver: n.resuelve && !participaste, historial, apoyos,
     lugares: { bolsa_visitas: cifras("bolsa_visitas"), cajon_mensualidades: cifras("cajon_mensualidades") },
     diferencias: difs,
+    incidencias,
     desglose: {
       abiertoEn: d.abierto_en, abiertoPor: d.abierto_por, contadoAlAbrir: d.contado,
       cobros: { cuantos: d.cobros, visitas: d.visitas, importe: d.importe_cobros },
@@ -373,8 +419,51 @@ export async function pendientesDeRevision(sql: Sql, usuarioId: string, sucursal
               and (rv.id is null
                    or (tiene_permiso(${usuarioId}, 'diferencia.resolver', ${sucursalId})
                        and rv.resultado in ('faltante_confirmado', 'sobrante_confirmado')
-                       and (x.id is null or (x.requiere_correccion and x.correccion is null))))) as n`;
+                       and (x.id is null or (x.requiere_correccion and x.correccion is null)))))
+           + (select count(*)::int from incidencia_cierre i join entrega_turno e on e.id = i.entrega_id join turno t on t.id = e.turno_id
+              where t.sucursal_id = ${sucursalId} and not exists (select 1 from revision_incidencia r where r.incidencia_id = i.id)) as n`;
   return r.puede ? r.n : null;
+}
+
+/**
+ * Revisión de UNA incidencia del cierre: quien revisa (el perfil que toca según la participación, sin haber
+ * participado) deja constancia con motivo. No cambia importes. La base lo respalda.
+ */
+export async function revisarIncidencia(
+  sql: Sql, usuarioId: string, codigo: string, datos: { incidenciaId: string; motivo: string }, { entorno }: { entorno: Entorno },
+): Promise<{ ok: true; entregaId: string } | { ok: false; error: ErrorRevision }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!/^[A-Z0-9]{2,5}$/.test(codigo) || !esIdentificadorValido(datos.incidenciaId)) return { ok: false, error: "no_encontrada" };
+  const motivo = datos.motivo.trim().replace(/\s+/g, " ");
+  if (motivo.length < 5 || motivo.length > 300) return { ok: false, error: "motivo" };
+  try {
+    return await sql.begin(async (tx) => {
+      const [d] = await tx<{ entrega_id: string; consulta: boolean; revisa: boolean; nivel: NivelRevision; tiene_nivel: boolean; revisada: boolean; participo: boolean }[]>`
+        select i.entrega_id,
+               tiene_permiso(${usuarioId}, 'diferencia.consultar', t.sucursal_id) as consulta,
+               tiene_permiso(${usuarioId}, 'diferencia.revisar', t.sucursal_id) as revisa,
+               nivel_revision_entrega(e.id) as nivel,
+               exists (select 1 from perfiles_en_sucursal(${usuarioId}, t.sucursal_id) r where r = nivel_revision_entrega(e.id)) as tiene_nivel,
+               exists (select 1 from revision_incidencia r where r.incidencia_id = i.id) as revisada,
+               ${usuarioId}::uuid in (select participantes_entrega(e.id)) as participo
+        from incidencia_cierre i join entrega_turno e on e.id = i.entrega_id join turno t on t.id = e.turno_id
+        join sucursal s on s.id = t.sucursal_id
+        where i.id = ${datos.incidenciaId} and s.codigo = ${codigo}
+        for update of i`;
+      if (!d || !d.consulta) return { ok: false as const, error: "no_encontrada" as const };
+      if (!d.revisa) return { ok: false as const, error: "sin_permiso" as const };
+      if (d.participo) return { ok: false as const, error: "participaste" as const };
+      if (!d.tiene_nivel) return { ok: false as const, error: "otro_nivel" as const };
+      if (d.revisada) return { ok: false as const, error: "ya_revisada" as const };
+      await tx`insert into revision_incidencia (incidencia_id, motivo, nivel, revisada_por) values (${datos.incidenciaId}, ${motivo}, ${d.nivel}, ${usuarioId})`;
+      await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, motivo, usuario_id)
+               values ('incidencia_cierre', ${datos.incidenciaId}, 'revisar', ${tx.json({ entrega: d.entrega_id, nivel: d.nivel })}, ${motivo}, ${usuarioId})`;
+      return { ok: true as const, entregaId: d.entrega_id };
+    });
+  } catch (error) {
+    if ((error as { code?: string })?.code === "23505") return { ok: false, error: "ya_revisada" };
+    throw error;
+  }
 }
 
 export type ErrorRevision =

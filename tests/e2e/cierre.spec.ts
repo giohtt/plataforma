@@ -136,3 +136,59 @@ test("Tenango: cierre con $3,400 en el cajón, custodia del Encargado y apertura
   await expect(page.getByTestId("aclaracion-caso")).toContainText("El Encargado no estaba para recontar");
   await capturar(page, "cierre-caso");
 });
+
+test("custodia sin confirmar y sello roto: se abre con motivo y ambas incidencias quedan por revisar aunque el efectivo cuadre", async ({ page }) => {
+  const e = await escenario();
+  await entrar(page, e.dir.correo);
+  await page.goto(`/sucursales/${e.codigo}/custodia/configurar`);
+  await page.getByLabel("Dónde se guardan los sobres").fill("Caja con llave · oficina");
+  await page.getByLabel(e.encargado.nombre).check();
+  await page.getByRole("button", { name: "Guardar la custodia" }).click();
+  await expect(page.getByTestId("historial-custodia")).toBeVisible();
+
+  await entrar(page, e.laura.correo);
+  await page.goto(`/sucursales/${e.codigo}/turno/cierre`);
+  await page.getByTestId("generar-folios").click();
+  await page.getByTestId("cierre-bolsa").getByLabel("Total contado al cerrar").fill("900");
+  await page.getByTestId("cierre-cajon").getByLabel("Total contado al cerrar").fill("3400");
+  await page.getByLabel("No, nadie más participó").check();
+  await page.getByRole("button", { name: "Cerrar el turno y entregar los sobres al custodio" }).click();
+  await expect(page.getByTestId("turno-cerrado")).toBeVisible();
+
+  // El Encargado no confirma. Sofía abre: primero se le pide que confirme el custodio.
+  await entrar(page, e.sofia.correo);
+  await page.goto(`/sucursales/${e.codigo}/turno/apertura`);
+  await expect(page.getByTestId("custodia-sin-confirmar")).toContainText(`${e.encargado.nombre} todavía no confirma`);
+  await sobresCorrectos(page);
+  await page.getByTestId("verificar-bolsa_visitas").getByLabel("Llegó abierto o con el sello roto").check();
+  await page.getByTestId("verificar-bolsa_visitas").getByLabel("Motivo de la incidencia").fill("La cinta del sello está despegada");
+  await page.getByTestId("apertura-bolsa").getByLabel("Total que cuentas").fill("900");
+  await page.getByTestId("apertura-cajon").getByLabel("Total que cuentas").fill("3400");
+  await page.getByLabel("No, nadie más participó").check();
+  await page.getByRole("button", { name: "Abrir el turno" }).click();
+  await expect(page.getByTestId("custodia-sin-confirmar")).toContainText("Si está disponible, que confirme primero");
+  await page.getByLabel(`${e.encargado.nombre} no está disponible: abro sin su confirmación`).check();
+  await page.getByLabel("Motivo (obligatorio)").fill("El Encargado no llegó; no contesta el teléfono");
+  await capturar(page, "cierre-sin-custodia");
+  await page.getByRole("button", { name: "Abrir el turno" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toHaveText("Turno abierto desde el cierre. Desde ahora eres la responsable de la bolsa y del cajón.");
+
+  // Administración ve dos incidencias por revisar, sin diferencias de efectivo, y las revisa.
+  await entrar(page, e.admin.correo);
+  await page.goto(`/sucursales/${e.codigo}/diferencias`);
+  const caso = page.getByTestId("caso-diferencia").filter({ hasText: e.sofia.nombre });
+  await expect(caso.getByTestId("estado-caso")).toContainText("2 por revisar");
+  await expect(caso).toContainText("Sin diferencias");
+  await caso.getByTestId("ver-caso").click();
+  await expect(page.getByTestId("incidencia")).toHaveCount(2);
+  await expect(page.getByTestId("incidencias")).toContainText("Se abrió sin la confirmación del custodio. Motivo: «El Encargado no llegó; no contesta el teléfono»");
+  await expect(page.getByTestId("incidencias")).toContainText("abierto o con el sello roto. Motivo: «La cinta del sello está despegada»");
+  await capturar(page, "cierre-incidencias");
+  for (let i = 0; i < 2; i++) {
+    const f = page.getByTestId("formulario-revision-incidencia").first();
+    await f.getByLabel("Qué se revisó (obligatorio)").fill("Se habló con el Encargado y se revisó el sobre");
+    await f.getByRole("button", { name: "Registrar revisión de la incidencia" }).click();
+    await expect(page.locator("p.aviso[role=status]")).toHaveText("Revisión de la incidencia registrada.");
+  }
+  await expect(page.getByTestId("estado-incidencia")).toHaveText(["Revisada", "Revisada"]);
+});

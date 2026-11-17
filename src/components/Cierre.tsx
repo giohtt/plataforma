@@ -166,10 +166,13 @@ export function FormularioCustodia({ codigo, entregaId, sobres, lugar }: { codig
 }
 
 /** Quien abre verifica los sobres y cuenta a ciegas cada lugar. */
-export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, apoyos }: {
+export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, apoyos, custodioSinConfirmar }: {
   codigo: string; entregaId: string; version: number; sobres: Sobre[]; apoyos: Persona[];
+  /** Nombre del custodio si todavía no confirma la custodia. */
+  custodioSinConfirmar: string | null;
 }) {
   const [estado, accion, enviando] = useActionState(accionAbrirDesdeCierre, null);
+  const [sinCustodia, setSinCustodia] = useState(estado?.valores?.sinCustodia === "si");
   const folio = (l: Sobre["lugar"]) => sobres.find((s) => s.lugar === l)!.folio;
   return (
     <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate data-testid="formulario-apertura-cierre">
@@ -177,7 +180,29 @@ export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, a
       <input type="hidden" name="codigo" value={codigo} />
       <input type="hidden" name="entrega" value={entregaId} />
       <input type="hidden" name="version" value={version} />
+      {custodioSinConfirmar ? (
+        <fieldset className="campo campo-grupo" data-testid="custodia-sin-confirmar" aria-invalid={estado?.errores?.sinCustodia ? true : undefined}>
+          <legend>Custodia sin confirmar</legend>
+          <span className="sub">
+            {custodioSinConfirmar} todavía no confirma dónde guardó los sobres. Si está disponible, que confirme primero desde su cuenta y
+            después recarga esta pantalla.
+          </span>
+          <label className="opcion-revision">
+            <input type="checkbox" name="sin_custodia" value="si" checked={sinCustodia} onChange={(e) => setSinCustodia(e.target.checked)} />
+            <span>{custodioSinConfirmar} no está disponible: abro sin su confirmación</span>
+          </label>
+          {sinCustodia ? (
+            <div className="campo">
+              <label htmlFor="motivo_sin_custodia">Motivo (obligatorio)</label>
+              <textarea id="motivo_sin_custodia" name="motivo_sin_custodia" rows={2} maxLength={300} defaultValue={estado?.valores?.motivoSinCustodia ?? ""} />
+              <span className="sub">La falta de confirmación queda por revisar en «Diferencias de efectivo».</span>
+            </div>
+          ) : null}
+          {estado?.errores?.sinCustodia ? <span className="campo-error">{estado.errores.sinCustodia}</span> : null}
+        </fieldset>
+      ) : null}
       <VerificarSobres estado={estado} sobres={sobres} pregunta="¿El sobre está cerrado, con el sello intacto y con este folio?" />
+      <p className="sub">Si un sobre no llega cerrado y con su folio, queda por revisar aunque el efectivo cuadre.</p>
       <div className="lugares-turno">
         <fieldset className="campo campo-grupo" data-testid="apertura-bolsa">
           <legend>Bolsa de visitas (sobre <span className="mono">{folio("bolsa_visitas")}</span>)</legend>

@@ -45,6 +45,9 @@ export default async function AperturaDesdeCierre({ params, searchParams }: Page
           {p.cierre.cerradoPorId === sesion.usuarioId ? (
             <p className="aviso aviso-info" data-testid="misma-persona">Tú cerraste este turno. Puedes abrirlo; el historial lo muestra y la revisión la hace alguien que no participó.</p>
           ) : null}
+          {p.cierre.sinCustodia ? (
+            <p className="aviso aviso-info" data-testid="abierto-sin-custodia">Se abre sin la confirmación del custodio. Motivo: «{p.cierre.sinCustodia}». Queda por revisar.</p>
+          ) : null}
           {p.recuento ? (
             <>
               <p className="aviso aviso-error" role="status" data-testid="aviso-recuento">
@@ -74,7 +77,8 @@ export default async function AperturaDesdeCierre({ params, searchParams }: Page
             </>
           ) : (
             <section className="tarjeta">
-              <FormularioAperturaCierre codigo={codigo} entregaId={p.cierre.entregaId} version={p.cierre.version} sobres={p.cierre.sobres} apoyos={p.apoyos} />
+              <FormularioAperturaCierre codigo={codigo} entregaId={p.cierre.entregaId} version={p.cierre.version} sobres={p.cierre.sobres} apoyos={p.apoyos}
+                custodioSinConfirmar={p.cierre.custodia ? null : p.cierre.custodio} />
             </section>
           )}
         </>

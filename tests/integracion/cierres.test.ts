@@ -4,7 +4,7 @@ import {
   abrirDesdeCierre, cancelarPreparacionCierre, cerrarDia, cierrePendiente, configurarCustodia, confirmarCustodia, custodiasPorConfirmar,
   pantallaApertura, pantallaCierre, pantallaConfiguracionCustodia, prepararCierre, sobresDelCierre, terminarApertura,
 } from "@/lib/cierres";
-import { detalleDiferencias, listaDiferencias, revisarDiferencia } from "@/lib/diferencias";
+import { detalleDiferencias, listaDiferencias, pendientesDeRevision, revisarDiferencia, revisarIncidencia } from "@/lib/diferencias";
 import { registrarEntrega } from "@/lib/entregas";
 import { generarFolio, registrarRetiro } from "@/lib/retiros";
 import { abrirTurno, estadoTurno } from "@/lib/turnos";
@@ -74,10 +74,17 @@ async function custodiar(e: Esc) {
   const r = await confirmarCustodia(sql, e.encargado, e.codigo, { entregaId: c.entregaId, ubicacion: "Caja fuerte de la oficina", sobres: correctos(c.sobres) }, PRUEBAS);
   if (!r.ok) throw new Error(r.error);
 }
-async function abrir(e: Esc, quien: string, bolsa: string, cajon: string) {
+async function abrir(e: Esc, quien: string, bolsa: string, cajon: string,
+  extra: { sinCustodia?: { motivo: string } | null; sobres?: { sobreId: string; estado: string; folioVisto: string; motivo: string }[] } = {}) {
   const c = (await cierrePendiente(sql, e.sucursalId))!;
-  return abrirDesdeCierre(sql, quien, e.codigo, { entregaId: c.entregaId, version: c.version, sobres: correctos(c.sobres), conteo: { bolsa, cajon }, apoyo: NADIE }, PRUEBAS);
+  return abrirDesdeCierre(sql, quien, e.codigo, {
+    entregaId: c.entregaId, version: c.version, sobres: extra.sobres ?? correctos(c.sobres), conteo: { bolsa, cajon }, apoyo: NADIE,
+    sinCustodia: extra.sinCustodia ?? null,
+  }, PRUEBAS);
 }
+const incidencias = (entregaId: string) => sql<{ tipo: string; revisada: boolean }[]>`
+  select i.tipo, exists (select 1 from revision_incidencia r where r.incidencia_id = i.id) as revisada
+  from incidencia_cierre i where i.entrega_id = ${entregaId} order by i.tipo`;
 const hoyLocal = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City", year: "numeric", month: "2-digit", day: "2-digit" })
   .format(new Date()).replaceAll("-", "");
 const diferencias = (entregaId: string) => sql<{ tipo: string; lugar: string; importe: string }[]>`
@@ -278,12 +285,79 @@ describe.skipIf(!URL_ADMIN)("cierre del día y custodia nocturna", () => {
       .rejects.toThrow(/quien abre/);
   });
 
-  it("si nadie confirma la custodia antes de abrir, la apertura sigue y la custodia ya no se puede confirmar", async () => {
+  it("custodia sin confirmar: primero confirma el custodio; si no está disponible, se abre con motivo y queda por revisar", async () => {
     const e = await escenario();
     const c = await cerrarElDia(e);
-    expect(await abrir(e, e.vespertina, "200", "3400")).toMatchObject({ ok: true, resultado: "abierto" });
+    // Sin decir que el custodio no está disponible, no se abre: que confirme primero.
+    expect(await abrir(e, e.vespertina, "200", "3400")).toEqual({ ok: false, error: "custodia_pendiente" });
+    expect(await abrir(e, e.vespertina, "200", "3400", { sinCustodia: { motivo: "" } })).toEqual({ ok: false, error: "motivo_custodia" });
+    expect((await cierrePendiente(sql, e.sucursalId))!.abreId).toBeNull();
+    // No está disponible: abre con motivo, aunque el efectivo cuadre la falta de confirmación queda por revisar.
+    expect(await abrir(e, e.vespertina, "200", "3400", { sinCustodia: { motivo: "El Encargado no llegó; no contesta el teléfono" } }))
+      .toMatchObject({ ok: true, resultado: "abierto" });
+    expect(await diferencias(c.entregaId)).toEqual([]);
+    expect(await incidencias(c.entregaId)).toEqual([{ tipo: "custodia_sin_confirmar", revisada: false }]);
+    // Ya no se confirma la custodia, ni en el servidor ni en la base.
     expect(await confirmarCustodia(sql, e.encargado, e.codigo, { entregaId: c.entregaId, ubicacion: "Caja fuerte de la oficina", sobres: correctos(c.sobres) }, PRUEBAS))
       .toMatchObject({ ok: false, error: "ya_abierto" });
+    await expect(sql`insert into custodia_cierre (entrega_id, custodio_id, ubicacion) values (${c.entregaId}, ${e.encargado}, 'Caja fuerte de la oficina')`)
+      .rejects.toThrow(/antes de abrir/);
+    // Visible para revisión: cuenta como pendiente y la revisa Administración (el Encargado fue custodio).
+    expect(await pendientesDeRevision(sql, e.admin, e.sucursalId)).toBe(1);
+    const caso = (await listaDiferencias(sql, e.admin, e.codigo))!.casos.find((x) => x.entregaId === c.entregaId)!;
+    expect(caso).toMatchObject({ pendientes: 1, incidencias: [{ tipo: "custodia_sin_confirmar", revision: null }] });
+    const d = (await detalleDiferencias(sql, e.admin, e.codigo, c.entregaId))!;
+    expect(d.incidencias[0].detalle).toMatch(/sin la confirmación del custodio. Motivo: «El Encargado no llegó/);
+    expect(d.historial.map((h) => h.que)).toEqual(expect.arrayContaining([expect.stringMatching(/^Incidencia por revisar: Se abrió sin la confirmación/)]));
+    const id = d.incidencias[0].id;
+    expect(await revisarIncidencia(sql, e.encargado, e.codigo, { incidenciaId: id, motivo: "Revisión de prueba" }, PRUEBAS)).toEqual({ ok: false, error: "participaste" });
+    expect(await revisarIncidencia(sql, e.admin, e.codigo, { incidenciaId: id, motivo: "" }, PRUEBAS)).toEqual({ ok: false, error: "motivo" });
+    expect(await revisarIncidencia(sql, e.admin, e.codigo, { incidenciaId: id, motivo: "El Encargado confirmó por teléfono que no pudo llegar" }, PRUEBAS))
+      .toEqual({ ok: true, entregaId: c.entregaId });
+    expect(await incidencias(c.entregaId)).toEqual([{ tipo: "custodia_sin_confirmar", revisada: true }]);
+    expect(await pendientesDeRevision(sql, e.admin, e.sucursalId)).toBe(0);
+  });
+
+  it("si el custodio confirma antes de abrir, no se pide motivo ni queda incidencia", async () => {
+    const e = await escenario();
+    const c = await cerrarElDia(e);
+    await custodiar(e);
+    expect(await abrir(e, e.vespertina, "200", "3400")).toMatchObject({ ok: true, resultado: "abierto" });
+    expect(await incidencias(c.entregaId)).toEqual([]);
+    await expect(sql`insert into apertura_sin_custodia (entrega_id, motivo, registrada_por) values (${c.entregaId}, 'Motivo de prueba', ${e.vespertina})`)
+      .rejects.toThrow(/Solo quien abre/);
+  });
+
+  it("una incidencia de sello o folio queda por revisar aunque el efectivo cuadre", async () => {
+    const e = await escenario();
+    const c = await cerrarElDia(e);
+    const [bolsa, cajon] = c.sobres;
+    // El custodio ve otro folio en el sobre del cajón.
+    expect(await confirmarCustodia(sql, e.encargado, e.codigo, { entregaId: c.entregaId, ubicacion: "Caja fuerte de la oficina", sobres: [
+      { sobreId: bolsa.id, estado: "correcto", folioVisto: "", motivo: "" },
+      { sobreId: cajon.id, estado: "otro_folio", folioVisto: "TEN-20261116-C9", motivo: "El folio escrito no es el generado" },
+    ] }, PRUEBAS)).toEqual({ ok: true, incidencias: 1 });
+    // Quien abre encuentra la bolsa con el sello roto, pero el efectivo cuadra en ambos lugares.
+    expect(await abrir(e, e.vespertina, "200", "3400", { sobres: [
+      { sobreId: bolsa.id, estado: "abierto", folioVisto: "", motivo: "La cinta del sello está despegada" },
+      { sobreId: cajon.id, estado: "correcto", folioVisto: "", motivo: "" },
+    ] })).toMatchObject({ ok: true, resultado: "abierto" });
+    expect(await diferencias(c.entregaId)).toEqual([]);
+    expect(await incidencias(c.entregaId)).toEqual([{ tipo: "sobre_al_abrir", revisada: false }, { tipo: "sobre_en_custodia", revisada: false }]);
+    const d = (await detalleDiferencias(sql, e.admin, e.codigo, c.entregaId))!;
+    expect(d.incidencias.map((i) => i.detalle)).toEqual([
+      expect.stringMatching(/^Custodia \(.*\): sobre .*-C2 con otro folio \(TEN-20261116-C9\)\. Motivo: «El folio escrito no es el generado»$/),
+      expect.stringMatching(/^Al abrir \(.*\): sobre .*-C1 abierto o con el sello roto\. Motivo: «La cinta del sello está despegada»$/),
+    ]);
+    const caso = (await listaDiferencias(sql, e.admin, e.codigo))!.casos.find((x) => x.entregaId === c.entregaId)!;
+    expect(caso.pendientes).toBe(2);
+    // Quien abrió participó: no revisa. La base también lo impide.
+    await expect(sql`insert into revision_incidencia (incidencia_id, motivo, nivel, revisada_por) values (${d.incidencias[0].id}, 'Revisión de prueba', 'administracion', ${e.vespertina})`)
+      .rejects.toThrow(/participó/);
+    for (const i of d.incidencias) {
+      expect(await revisarIncidencia(sql, e.admin, e.codigo, { incidenciaId: i.id, motivo: "Se verificó el sobre con la cámara" }, PRUEBAS)).toMatchObject({ ok: true });
+    }
+    expect(await incidencias(c.entregaId)).toEqual([{ tipo: "sobre_al_abrir", revisada: true }, { tipo: "sobre_en_custodia", revisada: true }]);
   });
 
   it("el custodio no puede ser quien cierra y debe ser Encargado de la sucursal", async () => {

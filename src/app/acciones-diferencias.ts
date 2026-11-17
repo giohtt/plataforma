@@ -6,7 +6,7 @@
  */
 import { redirect } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
-import { registrarCorreccion, resolverDiferencia, revisarDiferencia, type ErrorResolucion, type ErrorRevision } from "@/lib/diferencias";
+import { registrarCorreccion, resolverDiferencia, revisarDiferencia, revisarIncidencia, type ErrorResolucion, type ErrorRevision } from "@/lib/diferencias";
 import { leerEntorno } from "@/lib/entorno";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
 
@@ -110,4 +110,23 @@ export async function accionRegistrarCorreccion(previo: EstadoRevision, datos: F
     return { error: "Revisa los campos marcados.", errores: { [r.error]: MENSAJES_RESOLUCION[r.error] }, valores, intento };
   }
   return { error: MENSAJES_RESOLUCION[r.error], valores, intento };
+}
+
+/** Revisión de UNA incidencia del cierre (custodia sin confirmar o sello/folio): motivo obligatorio. */
+export async function accionRevisarIncidencia(previo: EstadoRevision, datos: FormData): Promise<EstadoRevision> {
+  const sesion = await obtenerSesionActual();
+  if (!sesion) redirect("/iniciar-sesion");
+  const sql = obtenerBaseDatos();
+  if (!sql) throw new Error("Sin base de datos");
+  const leer = (campo: string, max = 40) => {
+    const v = datos.get(campo);
+    return typeof v === "string" ? v.slice(0, max) : "";
+  };
+  const codigo = leer("codigo");
+  const valores = { motivo: leer("motivo", 400) };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await revisarIncidencia(sql, sesion.usuarioId, codigo, { incidenciaId: leer("incidencia"), motivo: valores.motivo }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/diferencias/${r.entregaId}?aviso=incidencia-revisada`);
+  if (r.error === "motivo") return { error: "Revisa los campos marcados.", errores: { motivo: MENSAJES.motivo }, valores, intento };
+  return { error: MENSAJES[r.error], valores, intento };
 }
