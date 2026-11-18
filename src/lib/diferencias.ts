@@ -1,7 +1,7 @@
 import type postgres from "postgres";
 import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
-import { sobresDelCierre } from "@/lib/cierres";
+import { conteoSeparado, sobresDelCierre, type ConteoSeparado } from "@/lib/cierres";
 import type { TipoLugar } from "@/lib/turnos";
 import { ventasDelTurno, type VentasTurno } from "@/lib/ventas";
 import { cobrosDelTurno } from "@/lib/visitas";
@@ -49,7 +49,7 @@ export type Diferencia = {
 /** Incidencia de un cierre (custodia sin confirmar o sobre con problema): queda por revisar aunque el efectivo cuadre. */
 export type IncidenciaCierre = {
   id: string;
-  tipo: "custodia_sin_confirmar" | "sobre_en_custodia" | "sobre_al_abrir";
+  tipo: "custodia_sin_confirmar" | "sobre_en_custodia" | "sobre_al_abrir" | "fondo_incompleto" | "llave_custodia";
   /** Texto de la incidencia: el motivo de abrir sin custodia, o el sobre, cómo llegó y el motivo. */
   detalle: string;
   registradaEn: Date;
@@ -59,21 +59,33 @@ export type IncidenciaCierre = {
 const INCIDENCIAS = (sql: Sql | Tx, entregaIds: string[]) => sql<{
   id: string; entrega_id: string; tipo: IncidenciaCierre["tipo"]; registrada_en: Date; motivo_sin_custodia: string | null;
   folio: string | null; estado: string | null; folio_visto: string | null; motivo_sobre: string | null; por: string | null;
-  r_motivo: string | null; r_por: string | null; r_nivel: NivelRevision | null; r_en: Date | null }[]>`
+  r_motivo: string | null; r_por: string | null; r_nivel: NivelRevision | null; r_en: Date | null;
+  lugar: TipoLugar | null; fondo: string | null; fondo_monto: string | null; motivo_llave: string | null; custodio: string | null }[]>`
   select i.id, i.entrega_id, i.tipo, i.registrada_en, a.motivo as motivo_sin_custodia,
+         li.tipo as lugar, cf.fondo::text as fondo, cf.fondo_monto::text as fondo_monto, cc.motivo_llave, uc.nombre as custodio,
          s.folio, v.estado, v.folio_visto, v.motivo as motivo_sobre, u.nombre as por,
          r.motivo as r_motivo, ru.nombre as r_por, r.nivel as r_nivel, r.en as r_en
   from incidencia_cierre i
   left join apertura_sin_custodia a on a.entrega_id = i.entrega_id and i.tipo = 'custodia_sin_confirmar'
   left join verificacion_sobre v on v.id = i.verificacion_id left join sobre_cierre s on s.id = v.sobre_id
   left join usuario u on u.id = v.verificado_por
+  left join lugar_efectivo li on li.id = i.lugar_id
+  left join conteo_fondo cf on cf.entrega_id = i.entrega_id and cf.lugar_id = i.lugar_id and cf.momento = 'cierre'
+  left join custodia_cierre cc on cc.entrega_id = i.entrega_id and i.tipo = 'llave_custodia'
+  left join usuario uc on uc.id = cc.custodio_id
   left join revision_incidencia r on r.incidencia_id = i.id left join usuario ru on ru.id = r.revisada_por
   where i.entrega_id in ${sql(entregaIds)}
-  order by i.registrada_en, case i.tipo when 'custodia_sin_confirmar' then 0 when 'sobre_en_custodia' then 1 else 2 end, s.folio`;
+  order by i.registrada_en, case i.tipo when 'custodia_sin_confirmar' then 0 when 'llave_custodia' then 1 when 'sobre_en_custodia' then 2
+                                         when 'sobre_al_abrir' then 3 else 4 end, s.folio, li.tipo`;
+const pesosMx = (v: string) => "$" + Number(v).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const COMO = { falta: "no está", abierto: "abierto o con el sello roto", otro_folio: "con otro folio" } as Record<string, string>;
 function aIncidencia(f: Awaited<ReturnType<typeof INCIDENCIAS>>[number]): IncidenciaCierre {
   const detalle = f.tipo === "custodia_sin_confirmar"
     ? `Se abrió sin la confirmación del custodio. Motivo: «${f.motivo_sin_custodia}»`
+    : f.tipo === "fondo_incompleto"
+    ? `Fondo ${f.lugar === "bolsa_visitas" ? "de la bolsa de visitas" : "del cajón de mensualidades"} incompleto al cerrar: ${pesosMx(f.fondo!)} contados de ${pesosMx(f.fondo_monto!)}`
+    : f.tipo === "llave_custodia"
+    ? `Llave o cajón en la custodia (${f.custodio}). Motivo: «${f.motivo_llave}»`
     : `${f.tipo === "sobre_en_custodia" ? "Custodia" : "Al abrir"} (${f.por}): sobre ${f.folio} ${COMO[f.estado!]}${f.folio_visto ? ` (${f.folio_visto})` : ""}. Motivo: «${f.motivo_sobre}»`;
   return {
     id: f.id, tipo: f.tipo, detalle, registradaEn: f.registrada_en,
@@ -180,6 +192,8 @@ export type Desglose = {
   cancelaciones: { cuantas: number; importe: string };
   /** Salidas por retiros a Encargada de retiros (negativo). */
   retiros: { cuantos: number; importe: string };
+  /** Entradas al fondo fijo recibidas (aumentos y reposiciones). */
+  fondos: { cuantas: number; importe: string };
   /** Calculado aquí con los movimientos hasta la entrega. Debe coincidir con el esperado guardado al entregar. */
   calculado: string;
 };
@@ -204,7 +218,15 @@ export type DatosCierre = {
   sobres: { lugar: TipoLugar; folio: string; custodia: VerificacionSobre | null; apertura: VerificacionSobre | null }[];
   /** Quien cerró también abrió. */
   mismaPersona: boolean;
+  /** Quien cerró quedó como custodio (una sola cuenta con Recepción y Encargado). */
+  cerroYCustodio: boolean;
+  /** El custodio abrió. */
+  custodioAbrio: boolean;
   recontadoConCustodio: boolean;
+  /** Dónde quedaron los fondos, quién tenía acceso al cajón y cómo quedó la llave al confirmar la custodia. */
+  cajon: { lugarFondos: string | null; acceso: string[]; llave: "correcta" | "incidencia" | null; motivoLlave: string | null };
+  /** Fondo y sobre contados por separado (cierre, primer conteo y recuento al abrir). */
+  fondos: ConteoSeparado;
 };
 
 export type DetalleDiferencias = {
@@ -265,7 +287,8 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
 
   // Desglose de la bolsa: lo contado al abrir y los movimientos del turno registrados antes de la entrega.
   const [d] = await sql<{ abierto_en: Date; abierto_por: string; contado: string; cobros: number; visitas: number; importe_cobros: string;
-                          cancelaciones: number; importe_cancelaciones: string; retiros: number; importe_retiros: string }[]>`
+                          cancelaciones: number; importe_cancelaciones: string; retiros: number; importe_retiros: string;
+                          fondos: number; importe_fondos: string }[]>`
     select t.abierto_en, u.nombre as abierto_por, c.importe::text as contado,
            (count(m.id) filter (where m.tipo = 'entrada_cobro_visita'))::int as cobros,
            coalesce(sum((select count(*) from pase_visita p join cobro_visita cv on cv.operacion_id = p.operacion_id where cv.id = m.cobro_id))
@@ -274,7 +297,9 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
            (count(m.id) filter (where m.tipo = 'ajuste_cancelacion_cobro'))::int as cancelaciones,
            coalesce(sum(m.importe) filter (where m.tipo = 'ajuste_cancelacion_cobro'), 0)::numeric(12, 2)::text as importe_cancelaciones,
            (count(m.id) filter (where m.tipo = 'salida_retiro'))::int as retiros,
-           coalesce(sum(m.importe) filter (where m.tipo = 'salida_retiro'), 0)::numeric(12, 2)::text as importe_retiros
+           coalesce(sum(m.importe) filter (where m.tipo = 'salida_retiro'), 0)::numeric(12, 2)::text as importe_retiros,
+           (count(m.id) filter (where m.tipo = 'entrada_fondo'))::int as fondos,
+           coalesce(sum(m.importe) filter (where m.tipo = 'entrada_fondo'), 0)::numeric(12, 2)::text as importe_fondos
     from turno t join usuario u on u.id = t.abierto_por
     join lugar_efectivo l on l.sucursal_id = t.sucursal_id and l.tipo = 'bolsa_visitas'
     join conteo_efectivo c on c.turno_id = t.id and c.lugar_id = l.id and c.momento = 'apertura'
@@ -282,7 +307,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     where t.id = ${e.turno_id}
     group by t.abierto_en, u.nombre, c.importe`;
   const centavos = (v: string) => Math.round(Number(v) * 100);
-  const calculado = ((centavos(d.contado) + centavos(d.importe_cobros) + centavos(d.importe_cancelaciones) + centavos(d.importe_retiros)) / 100).toFixed(2);
+  const calculado = ((centavos(d.contado) + centavos(d.importe_cobros) + centavos(d.importe_cancelaciones) + centavos(d.importe_retiros) + centavos(d.importe_fondos)) / 100).toFixed(2);
 
   const difs = (await DIFERENCIAS(sql, [e.id])).map(aDiferencia);
   const incidencias = (await INCIDENCIAS(sql, [e.id])).map(aIncidencia);
@@ -314,16 +339,22 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   });
   let cierre: DatosCierre | null = null;
   if (e.tipo === "cierre") {
-    const [c] = await sql<{ custodio: string; lugar: string; acceso: string[]; por: string; en: Date; ubicacion: string | null; confirmada_en: Date | null }[]>`
-      select u.nombre as custodio, k.lugar, array(select x.nombre from usuario x where x.id = any(k.acceso) order by x.nombre) as acceso,
-             d.nombre as por, k.en, cc.ubicacion, cc.confirmada_en
+    const [c] = await sql<{ custodio: string; custodio_id: string; lugar: string; acceso: string[]; por: string; en: Date; ubicacion: string | null;
+                            confirmada_en: Date | null; lugar_fondos: string | null; acceso_cajon: string[]; llave: "correcta" | "incidencia" | null;
+                            motivo_llave: string | null }[]>`
+      select u.nombre as custodio, u.id as custodio_id, k.lugar, array(select x.nombre from usuario x where x.id = any(k.acceso) order by x.nombre) as acceso,
+             d.nombre as por, k.en, cc.ubicacion, cc.confirmada_en, k.lugar_fondos,
+             array(select x.nombre from usuario x where x.id = any(k.acceso_cajon) order by x.nombre) as acceso_cajon, cc.llave, cc.motivo_llave
       from entrega_turno e join usuario u on u.id = e.custodio_id join custodia_configuracion k on k.id = e.custodia_config_id
       join usuario d on d.id = k.configurada_por left join custodia_cierre cc on cc.entrega_id = e.id where e.id = ${e.id}`;
     cierre = {
       custodio: c.custodio, configuracion: { lugar: c.lugar, acceso: c.acceso, configuradaPor: c.por, en: c.en },
       custodia: c.ubicacion ? { ubicacion: c.ubicacion, en: c.confirmada_en! } : null,
       sobres: (await sobresDelCierre(sql, e.id)).map((x) => ({ lugar: x.lugar, folio: x.folio, custodia: x.custodia, apertura: x.apertura })),
-      mismaPersona: e.entrega_por_id === e.recibe_id, recontadoConCustodio: e.recontado_con !== null,
+      mismaPersona: e.entrega_por_id === e.recibe_id, cerroYCustodio: e.entrega_por_id === c.custodio_id, custodioAbrio: e.recibe_id === c.custodio_id,
+      recontadoConCustodio: e.recontado_con !== null,
+      cajon: { lugarFondos: c.lugar_fondos, acceso: c.acceso_cajon, llave: c.llave, motivoLlave: c.motivo_llave },
+      fondos: await conteoSeparado(sql, e.id),
     };
   }
   const ETAPA = e.tipo === "cierre"
@@ -346,12 +377,18 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   const RESULTADO = { aclarada: "Aclarada", faltante_confirmado: "Faltante confirmado", sobrante_confirmado: "Sobrante confirmado" } as const;
   const dinero = (v: string) => (Number(v) < 0 ? "−" : "+") + "$" + Math.abs(Number(v)).toLocaleString("es-MX", { minimumFractionDigits: 2 });
   const historial: EventoCaso[] = (cierre ? [
-    { en: e.creada_en, que: `Cierre del día (conteo de quien cerró) · sobres ${cierre.sobres.map((x) => x.folio).join(" y ")} · custodio ${cierre.custodio} · custodia: ${cierre.configuracion.lugar}`, cuenta: e.entrega_por },
+    {
+      en: e.creada_en,
+      que: `Cierre del día (conteo de quien cerró) · ${cierre.sobres.length ? `sobres ${cierre.sobres.map((x) => x.folio).join(" y ")}` : "sin sobres"}`
+        + `${cierre.fondos.some((f) => f.cerrado && Number(f.cerrado.fondo)) ? ` · fondos ${cierre.fondos.filter((f) => f.cerrado).map((f) => `${LUGAR[f.lugar]} ${pesosMx(f.cerrado!.fondo)} + sobre ${pesosMx(f.cerrado!.sobre)}`).join(", ")}` : ""}`
+        + ` · custodio ${cierre.custodio}${cierre.cerroYCustodio ? " (cerró y custodió la misma persona)" : ""} · custodia: ${cierre.configuracion.lugar}`,
+      cuenta: e.entrega_por,
+    },
     ...eventosCierre,
     ...recuento.map((r) => ({ en: r.en, que: "El conteo de quien abre no coincidió con el cierre", cuenta: e.recibe })),
     {
       en: e.resuelta_en,
-      que: `Turno abierto desde el cierre${cierre.mismaPersona ? " por la misma persona que cerró" : ""}${recuento.length ? (cierre.recontadoConCustodio ? ` tras recontar con ${cierre.custodio}` : " sin recuento con el custodio") : ""}${e.aclaracion ? `. Motivo: «${e.aclaracion}»` : ""}`,
+      que: `Turno abierto desde el cierre${cierre.mismaPersona && cierre.cerroYCustodio ? " · la misma persona cerró, custodió y abrió" : cierre.mismaPersona ? " por la misma persona que cerró" : cierre.custodioAbrio ? " por el custodio" : ""}${recuento.length ? (cierre.recontadoConCustodio ? ` tras recontar con ${cierre.custodio}` : " sin recuento con el custodio") : ""}${e.aclaracion ? `. Motivo: «${e.aclaracion}»` : ""}`,
       cuenta: e.recibe,
     },
   ] : [
@@ -398,7 +435,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
       abiertoEn: d.abierto_en, abiertoPor: d.abierto_por, contadoAlAbrir: d.contado,
       cobros: { cuantos: d.cobros, visitas: d.visitas, importe: d.importe_cobros },
       cancelaciones: { cuantas: d.cancelaciones, importe: d.importe_cancelaciones },
-      retiros: { cuantos: d.retiros, importe: d.importe_retiros }, calculado,
+      retiros: { cuantos: d.retiros, importe: d.importe_retiros }, fondos: { cuantas: d.fondos, importe: d.importe_fondos }, calculado,
     },
     fueraDeLaBolsa: ventasDelTurno(await cobrosDelTurno(sql, e.turno_id)),
     deRetiros: [...(await sql<DetalleDiferencias["deRetiros"]>`

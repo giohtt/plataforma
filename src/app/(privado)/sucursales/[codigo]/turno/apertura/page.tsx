@@ -67,17 +67,33 @@ export default async function AperturaDesdeCierre({ params, searchParams }: Page
                     ))}
                   </tbody>
                 </table>
+                {p.recuento.separado.some((x) => x.cerrado) ? (
+                  <table className="tabla" data-testid="tabla-recuento-separado">
+                    <thead><tr><th>Fondo y sobre</th><th>Cerró</th><th>Contaste al abrir</th><th>Diferencia</th></tr></thead>
+                    <tbody>
+                      {p.recuento.separado.filter((x) => x.cerrado && x.inicial).flatMap((x) => (["fondo", "sobre"] as const).map((k) => (
+                        <tr key={`${x.lugar}-${k}`}>
+                          <td data-etiqueta="Fondo y sobre">{k === "fondo" ? "Fondo" : "Sobre"} · {x.lugar === "bolsa_visitas" ? "bolsa" : "cajón"}</td>
+                          <td data-etiqueta="Cerró">{pesos.format(Number(x.cerrado![k]))}</td>
+                          <td data-etiqueta="Contaste al abrir">{pesos.format(Number(x.inicial![k]))}</td>
+                          <td data-etiqueta="Diferencia">{firmado(cent(x.inicial![k]) - cent(x.cerrado![k]))}</td>
+                        </tr>
+                      )))}
+                    </tbody>
+                  </table>
+                ) : null}
                 <ul className="lista-simple">
                   {p.recuento.verificacion.map((s) => (
                     <li key={s.id}>Sobre <span className="mono">{s.folio}</span>: {s.apertura ? VERIFICACION[s.apertura.estado] : "—"}{s.apertura?.motivo ? ` · ${s.apertura.motivo}` : ""}</li>
                   ))}
                 </ul>
-                <FormularioTerminarApertura codigo={codigo} entregaId={p.cierre.entregaId} version={p.cierre.version} custodio={p.cierre.custodio} />
+                <FormularioTerminarApertura codigo={codigo} entregaId={p.cierre.entregaId} version={p.cierre.version} custodio={p.cierre.custodio}
+                  sobres={p.cierre.sobres} fondos={p.cierre.fondos} />
               </section>
             </>
           ) : (
             <section className="tarjeta">
-              <FormularioAperturaCierre codigo={codigo} entregaId={p.cierre.entregaId} version={p.cierre.version} sobres={p.cierre.sobres} apoyos={p.apoyos}
+              <FormularioAperturaCierre codigo={codigo} entregaId={p.cierre.entregaId} version={p.cierre.version} sobres={p.cierre.sobres} fondos={p.cierre.fondos} apoyos={p.apoyos}
                 custodioSinConfirmar={p.cierre.custodia ? null : p.cierre.custodio} />
             </section>
           )}

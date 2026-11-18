@@ -96,7 +96,38 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
             <dd className="dd-largo">{k.custodia ? `Confirmada por ${k.custodio}: ${k.custodia.ubicacion} · ${hora.format(k.custodia.en)}` : `${k.custodio} no la confirmó antes de abrir`}</dd>
             <dt>Recuento al abrir</dt>
             <dd className="dd-largo">{k.recontadoConCustodio ? `Sí, con ${k.custodio}` : "No"}</dd>
+            {k.cajon.lugarFondos ? (
+              <>
+                <dt>Fondos fijos</dt>
+                <dd className="dd-largo" data-testid="caso-fondos">{k.cajon.lugarFondos} · acceso al cajón: {k.cajon.acceso.join(", ")}</dd>
+                <dt>Llave del cajón</dt>
+                <dd className="dd-largo">{k.custodio}{k.cajon.llave === "incidencia" ? ` · incidencia: «${k.cajon.motivoLlave}»` : k.cajon.llave === "correcta" ? " · cajón cerrado y llave recibida" : ""}</dd>
+              </>
+            ) : null}
+            {k.cerroYCustodio || k.mismaPersona || k.custodioAbrio ? (
+              <>
+                <dt>Misma persona</dt>
+                <dd className="dd-largo" data-testid="caso-misma-persona">
+                  {[k.cerroYCustodio ? "cerró y custodió" : null, k.mismaPersona ? "cerró y abrió" : null, k.custodioAbrio && !k.mismaPersona ? "custodió y abrió" : null].filter(Boolean).join(" · ")}
+                </dd>
+              </>
+            ) : null}
           </dl>
+          {k.fondos.some((f) => f.cerrado) ? (
+            <table className="tabla" data-testid="caso-fondo-sobre">
+              <thead><tr><th>Fondo y sobre</th><th>Al cerrar</th><th>Primer conteo al abrir</th><th>Recuento</th></tr></thead>
+              <tbody>
+                {k.fondos.filter((f) => f.cerrado).flatMap((f) => (["fondo", "sobre"] as const).map((x) => (
+                  <tr key={`${f.lugar}-${x}`}>
+                    <td data-etiqueta="Fondo y sobre">{x === "fondo" ? "Fondo" : "Sobre"} · {f.lugar === "bolsa_visitas" ? "bolsa" : "cajón"}</td>
+                    <td data-etiqueta="Al cerrar">{pesos.format(Number(f.cerrado![x]))}</td>
+                    <td data-etiqueta="Primer conteo al abrir">{f.inicial ? pesos.format(Number(f.inicial[x])) : "—"}</td>
+                    <td data-etiqueta="Recuento">{f.final ? pesos.format(Number(f.final[x])) : "—"}</td>
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+          ) : null}
           <table className="tabla">
             <thead><tr><th>Sobre</th><th>Custodio</th><th>Al abrir</th></tr></thead>
             <tbody>
@@ -142,7 +173,7 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
           {c.incidencias.map((i) => (
             <div key={i.id} className="tarjeta" data-testid="incidencia">
               <p>
-                <strong>{i.tipo === "custodia_sin_confirmar" ? "Custodia sin confirmar" : "Sello o folio"}</strong>{" "}
+                <strong>{i.tipo === "custodia_sin_confirmar" ? "Custodia sin confirmar" : i.tipo === "fondo_incompleto" ? "Fondo incompleto" : i.tipo === "llave_custodia" ? "Llave o cajón" : "Sello o folio"}</strong>{" "}
                 <span className={`chip-estado ${i.revision ? "" : "chip-vencida"}`} data-testid="estado-incidencia">{i.revision ? "Revisada" : "Por revisar"}</span>
               </p>
               <p className="sub">{i.detalle}</p>
@@ -231,6 +262,11 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
               <tr data-testid="desglose-retiros"><td>Retiros a Encargada de retiros</td>
                 <td>{c.desglose.retiros.cuantos ? `${c.desglose.retiros.cuantos} ${c.desglose.retiros.cuantos === 1 ? "retiro" : "retiros"}` : "Ninguno"}</td>
                 <td>{Number(c.desglose.retiros.importe) ? `− ${pesos.format(Math.abs(Number(c.desglose.retiros.importe)))}` : pesos.format(0)}</td></tr>
+              {c.desglose.fondos.cuantas ? (
+                <tr data-testid="desglose-fondos"><td>Entradas al fondo fijo</td>
+                  <td>{c.desglose.fondos.cuantas} {c.desglose.fondos.cuantas === 1 ? "entrada" : "entradas"}</td>
+                  <td>+ {pesos.format(Number(c.desglose.fondos.importe))}</td></tr>
+              ) : null}
               <tr><td><strong>Saldo esperado al entregar</strong></td><td></td><td data-testid="desglose-total"><strong>{pesos.format(Number(c.desglose.calculado))}</strong></td></tr>
             </tbody>
           </table>

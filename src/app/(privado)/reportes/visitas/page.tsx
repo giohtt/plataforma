@@ -48,6 +48,7 @@ function Saldos({ filas }: { filas: { sucursal: string; t: SaldoTurno | null }[]
                   Contado al abrir {$(t.contadoAlAbrir)} · {t.cantidadEntradas} {t.cantidadEntradas === 1 ? "entrada" : "entradas"} {$(t.entradas)}
                   {t.cantidadAjustes ? ` · ${t.cantidadAjustes} ${t.cantidadAjustes === 1 ? "cancelación" : "cancelaciones"} − ${pesos.format(-Number(t.ajustes))}` : ""}
                   {t.cantidadRetiros ? ` · ${t.cantidadRetiros} ${t.cantidadRetiros === 1 ? "retiro" : "retiros"} − ${pesos.format(-Number(t.retiros))}` : ""}
+                  {Number(t.fondos) ? ` · entradas al fondo + ${pesos.format(Number(t.fondos))}` : ""}
                 </td>
                 <td data-etiqueta="Efectivo esperado" data-testid="saldo-esperado">
                   <strong>{$(t.esperado)}</strong> <span className="sub">{t.cerradoEn ? "al cerrar" : "ahora"}</span>

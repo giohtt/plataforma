@@ -11,7 +11,7 @@ const firmado = (centavos: number) => (centavos < 0 ? "−" : centavos > 0 ? "+"
 const cent = (v: string) => Math.round(Number(v) * 100);
 
 export function Importe({ estado, campo, etiqueta, ayuda, alCambiar }: {
-  estado: EstadoFormularioEntrega; campo: "bolsa" | "cajon"; etiqueta: string; ayuda?: string; alCambiar?: (v: string) => void;
+  estado: EstadoFormularioEntrega; campo: string; etiqueta: string; ayuda?: string; alCambiar?: (v: string) => void;
 }) {
   const error = estado?.errores?.[campo];
   return (

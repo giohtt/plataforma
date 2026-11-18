@@ -18,6 +18,7 @@ let n = 0;
 let k = 0;
 const PRUEBAS = { entorno: "pruebas" as const };
 const NADIE = { hubo: false as const };
+const CAJON = "Cajón con llave de recepción";
 
 async function cuenta(asignaciones: [string, string][], nombre: string) {
   n++;
@@ -47,7 +48,7 @@ async function escenario({ configurar = true } = {}) {
   const t = await abrirTurno(sql, recepcion, codigo, { bolsa: "200.00", cajon: "3400.00" }, PRUEBAS);
   if (!t.ok) throw new Error(t.error);
   if (configurar) {
-    const c = await configurarCustodia(sql, dir, codigo, { lugar: "Caja fuerte de la oficina", acceso: [encargado] }, PRUEBAS);
+    const c = await configurarCustodia(sql, dir, codigo, { lugar: "Caja fuerte de la oficina", acceso: [encargado], lugarFondos: CAJON, accesoCajon: [encargado] }, PRUEBAS);
     if (!c.ok) throw new Error(c.error);
   }
   return { codigo, sucursalId: s.id, recepcion, vespertina, encargado, encargada, admin, dir, turnoId: t.turnoId };
@@ -102,26 +103,26 @@ describe.skipIf(!URL_ADMIN)("cierre del día y custodia nocturna", () => {
   it("Dirección define lugar y acceso de forma explícita; nadie más la configura y el historial se conserva", async () => {
     const e = await escenario({ configurar: false });
     expect(await pantallaConfiguracionCustodia(sql, e.encargado, e.codigo)).toBeNull();
-    expect(await configurarCustodia(sql, e.admin, e.codigo, { lugar: "Caja fuerte", acceso: [e.encargado] }, PRUEBAS))
+    expect(await configurarCustodia(sql, e.admin, e.codigo, { lugar: "Caja fuerte", acceso: [e.encargado], lugarFondos: CAJON, accesoCajon: [e.encargado] }, PRUEBAS))
       .toEqual({ ok: false, error: "sin_permiso" });
     // Sin acceso o con una persona de otra sucursal, no se guarda.
-    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja fuerte", acceso: [] }, PRUEBAS)).toEqual({ ok: false, error: "acceso" });
+    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja fuerte", acceso: [], lugarFondos: CAJON, accesoCajon: [e.encargado] }, PRUEBAS)).toEqual({ ok: false, error: "acceso" });
     const ajena = await cuenta([["encargado", "TEN"]], "Encargado ajeno");
-    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja fuerte", acceso: [ajena] }, PRUEBAS)).toEqual({ ok: false, error: "acceso" });
+    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja fuerte", acceso: [ajena], lugarFondos: CAJON, accesoCajon: [e.encargado] }, PRUEBAS)).toEqual({ ok: false, error: "acceso" });
     // Sin configuración no se puede cerrar.
     await preparar(e);
     expect(await cerrarCon(e, "200", "3400")).toEqual({ ok: false, error: "sin_configuracion" });
-    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja fuerte de la oficina", acceso: [e.encargado] }, PRUEBAS)).toEqual({ ok: true });
-    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Cajón con llave de Dirección", acceso: [e.encargado, e.admin] }, PRUEBAS)).toEqual({ ok: true });
+    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja fuerte de la oficina", acceso: [e.encargado], lugarFondos: CAJON, accesoCajon: [e.encargado] }, PRUEBAS)).toEqual({ ok: true });
+    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Cajón con llave de Dirección", acceso: [e.encargado, e.admin], lugarFondos: CAJON, accesoCajon: [e.encargado] }, PRUEBAS)).toEqual({ ok: true });
     const p = (await pantallaConfiguracionCustodia(sql, e.dir, e.codigo))!;
     expect(p.vigente).toMatchObject({ lugar: "Cajón con llave de Dirección" });
     expect(p.historial).toHaveLength(2);
     // El cierre guarda la configuración vigente; un cambio posterior no la altera.
     expect(await cerrarCon(e, "200", "3400")).toMatchObject({ ok: true });
-    await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Otra caja fuerte", acceso: [e.encargado] }, PRUEBAS);
+    await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Otra caja fuerte", acceso: [e.encargado], lugarFondos: CAJON, accesoCajon: [e.encargado] }, PRUEBAS);
     expect((await cierrePendiente(sql, e.sucursalId))!.configuracion.lugar).toBe("Cajón con llave de Dirección");
     // La base también lo exige.
-    await expect(sql`insert into custodia_configuracion (sucursal_id, lugar, acceso, configurada_por) values (${e.sucursalId}, 'Caja fuerte', ${[e.encargado]}::uuid[], ${e.encargado})`)
+    await expect(sql`insert into custodia_configuracion (sucursal_id, lugar, acceso, configurada_por, lugar_fondos, acceso_cajon) values (${e.sucursalId}, 'Caja fuerte', ${[e.encargado]}::uuid[], ${e.encargado}, ${CAJON}, ${[e.encargado]}::uuid[])`)
       .rejects.toThrow(/Dirección/);
   });
 
@@ -371,7 +372,7 @@ describe.skipIf(!URL_ADMIN)("cierre del día y custodia nocturna", () => {
     const e = await escenario();
     const PROD = { entorno: "produccion" as const };
     expect(await prepararCierre(sql, e.recepcion, e.codigo, { turnoId: e.turnoId }, PROD)).toEqual({ ok: false, error: "bloqueado_produccion" });
-    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja fuerte", acceso: [e.encargado] }, PROD)).toEqual({ ok: false, error: "bloqueado_produccion" });
+    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja fuerte", acceso: [e.encargado], lugarFondos: CAJON, accesoCajon: [e.encargado] }, PROD)).toEqual({ ok: false, error: "bloqueado_produccion" });
     expect(await pantallaCierre(sql, e.recepcion, e.codigo, "produccion")).toEqual({ ok: false, error: "bloqueado_produccion" });
   });
 });

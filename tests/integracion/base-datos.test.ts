@@ -164,6 +164,9 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(filas.filter((f) => f.permiso === "turno.cerrar").map((f) => f.rol)).toEqual(["recepcion"]);
       expect(filas.filter((f) => f.permiso === "custodia.confirmar").map((f) => f.rol)).toEqual(["encargado"]);
       expect(filas.filter((f) => f.permiso === "custodia.configurar").map((f) => f.rol)).toEqual(["direccion"]);
+      // Fondo fijo (17 nov): solo Dirección autoriza el monto; Dirección y Administración registran reposiciones.
+      expect(filas.filter((f) => f.permiso === "fondo.autorizar").map((f) => f.rol)).toEqual(["direccion"]);
+      expect(filas.filter((f) => f.permiso === "fondo.reponer").map((f) => f.rol).sort()).toEqual(["administracion", "direccion"]);
       // Corregir: Encargado y Dirección. Fusionar: solo Dirección. Historial general: nadie todavía.
       expect(filas.filter((f) => f.permiso === "visitante.corregir").map((f) => f.rol).sort()).toEqual(["direccion", "encargado"]);
       expect(filas.filter((f) => f.permiso === "visitante.fusionar").map((f) => f.rol)).toEqual(["direccion"]);
