@@ -1,0 +1,351 @@
+import type postgres from "postgres";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  abrirDesdeCierre, cerrarDia, cierrePendiente, configurarCustodia, confirmarCustodia, custodiasPorConfirmar, pantallaApertura,
+  pantallaCierre, prepararCierre, sobresEnCaja,
+} from "@/lib/cierres";
+import { recibirTurno, registrarEntrega } from "@/lib/entregas";
+import { cambiarMontoFondo, confirmarEntradaFondo } from "@/lib/fondos";
+import {
+  cancelarEntregaSobres, confirmarRecoleccion, pantallaRecoleccion, registrarDepositoRecoleccion, registrarEntregaSobres,
+  revisarDiferenciaSobre,
+} from "@/lib/recolecciones";
+import { abrirTurno, estadoTurno } from "@/lib/turnos";
+import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
+import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
+
+/**
+ * Bloque 5, regla 7 (18 nov 2026): las recepcionistas custodian la caja con llave y Dirección recoge una vez por semana.
+ * Solo datos ficticios.
+ */
+let sql: postgres.Sql;
+let cerrar: () => Promise<void>;
+const ids: Record<string, string> = {};
+let n = 0;
+let k = 0;
+const PRUEBAS = { entorno: "pruebas" as const };
+const NADIE = { hubo: false as const };
+const LLAVE = { estado: "correcta", motivo: "" };
+
+async function cuenta(asignaciones: [string, string][], nombre: string) {
+  n++;
+  const [u] = await sql<{ id: string }[]>`
+    insert into usuario (nombre, correo, es_prueba) values (${`${nombre} ${n}`}, ${`recoleccion${n}@prueba.fitnessland.invalid`}, true) returning id`;
+  for (const [rol, codigo] of asignaciones) {
+    await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${u.id}, ${rol}, ${ids[codigo]}, 'Prueba de recolección')`;
+  }
+  return u.id;
+}
+
+/**
+ * Sucursal como Tenango: dos recepcionistas nombradas custodias, fondos de $300 y $300 ya en el turno. La matutina abre
+ * con $420 en la bolsa y $3,050 en el cajón, más los fondos: $720 y $3,350.
+ */
+async function escenario({ fondos = true } = {}) {
+  k++;
+  const codigo = `R${k}`;
+  const [s] = await sql<{ id: string }[]>`insert into sucursal (nombre, codigo) values (${"Sucursal recolección " + k}, ${codigo}) returning id`;
+  ids[codigo] = s.id;
+  const matutina = await cuenta([["recepcion", codigo]], "Recepción matutina");
+  const vespertina = await cuenta([["recepcion", codigo]], "Recepción vespertina");
+  const encargado = await cuenta([["encargado", codigo]], "Encargado");
+  const admin = await cuenta([["administracion", codigo]], "Administración");
+  const dir = await cuenta([["direccion", codigo]], "Dirección");
+  // La vespertina tiene el turno abierto (cierra esta noche); la matutina abre mañana.
+  const t = await abrirTurno(sql, vespertina, codigo, fondos ? { bolsa: "420.00", cajon: "3050.00" } : { bolsa: "720.00", cajon: "3350.00" }, PRUEBAS);
+  if (!t.ok) throw new Error(t.error);
+  const c = await configurarCustodia(sql, dir, codigo, {
+    lugar: "Caja con llave de recepción", acceso: [matutina, vespertina], lugarFondos: "Cajón con llave de recepción",
+    accesoCajon: [matutina, vespertina], custodias: [matutina, vespertina],
+  }, PRUEBAS);
+  if (!c.ok) throw new Error(c.error);
+  if (fondos) {
+    for (const lugar of ["bolsa_visitas", "cajon_mensualidades"]) {
+      const r = await cambiarMontoFondo(sql, dir, codigo,
+        { lugar, monto: "300", origen: "entrega_persona", destino: "", detalleOrigen: "Efectivo ficticio de Dirección", motivo: "Fondo provisional" }, PRUEBAS);
+      if (!r.ok) throw new Error(r.error);
+      const x = await confirmarEntradaFondo(sql, vespertina, codigo, { entradaId: r.entradaId!, recibido: "300" }, PRUEBAS);
+      if (!x.ok) throw new Error(x.error);
+    }
+  }
+  return { codigo, sucursalId: s.id, matutina, vespertina, encargado, admin, dir, turnoId: t.turnoId };
+}
+type Esc = Awaited<ReturnType<typeof escenario>>;
+
+const correctos = (sobres: { id: string }[]) => sobres.map((s) => ({ sobreId: s.id, estado: "correcto", folioVisto: "", motivo: "" }));
+
+/** Cierra el turno abierto: quien cierra se queda con la llave («Yo») y verifica la caja. */
+async function cerrarYo(e: Esc, quien: string, conteo = { bolsa: "720", cajon: "3350" }, fondos = { bolsa: "300", cajon: "300" }) {
+  const p = await prepararCierre(sql, quien, e.codigo, { turnoId: e.turnoId }, PRUEBAS);
+  if (!p.ok) throw new Error(p.error);
+  const caja = await sobresEnCaja(sql, e.sucursalId);
+  const r = await cerrarDia(sql, quien, e.codigo, {
+    turnoId: e.turnoId, conteo, fondos, custodio: quien, nota: "", apoyo: NADIE,
+    custodia: { ubicacion: "Caja con llave de recepción", sobres: correctos([...p.sobres, ...caja]), llave: LLAVE },
+  }, PRUEBAS);
+  if (!r.ok) throw new Error(r.error);
+  return { ...r, sobres: p.sobres };
+}
+/** Abre desde el cierre contando solo los fondos y verificando toda la caja. */
+async function abrir(e: Esc, quien: string, conteo = { bolsa: "300", cajon: "300" }, extra: { sobres?: { sobreId: string; estado: string; folioVisto: string; motivo: string }[]; llave?: { estado: string; motivo: string } } = {}) {
+  const c = (await cierrePendiente(sql, e.sucursalId))!;
+  const r = await abrirDesdeCierre(sql, quien, e.codigo, {
+    entregaId: c.entregaId, version: c.version, sobres: extra.sobres ?? correctos(await sobresEnCaja(sql, e.sucursalId)), conteo, apoyo: NADIE,
+    llave: extra.llave,
+  }, PRUEBAS);
+  if (r.ok && r.resultado === "abierto") e.turnoId = r.turnoId;
+  return r;
+}
+/** Envejece los sobres guardados (para el aviso de ocho días), sin pasar por las reglas de la aplicación. */
+async function envejecer(folios: string[], dias: number) {
+  await sql.begin(async (tx) => {
+    await tx`set local session_replication_role = replica`;
+    await tx`update sobre_cierre set resuelto_en = resuelto_en - make_interval(days => ${dias}) where folio in ${tx(folios)}`;
+  });
+}
+
+describe.skipIf(!URL_ADMIN)("sobres guardados y recolección semanal por Dirección", () => {
+  beforeAll(async () => {
+    ({ sql, cerrar } = await crearBaseTemporal({ conexiones: 6 }));
+    await cargarDatosPrueba(sql, { entorno: "pruebas" });
+    for (const s of await sql<{ id: string; codigo: string }[]>`select id, codigo from sucursal`) ids[s.codigo] = s.id;
+  });
+  afterAll(async () => cerrar?.());
+
+  it("Dirección nombra a las custodias de forma explícita; el custodio es una de ellas (también en la base)", async () => {
+    const e = await escenario({ fondos: false });
+    const base = { lugar: "Caja con llave", acceso: [e.matutina], lugarFondos: "Cajón con llave", accesoCajon: [e.matutina] };
+    expect(await configurarCustodia(sql, e.dir, e.codigo, { ...base, custodias: [] }, PRUEBAS)).toEqual({ ok: false, error: "custodias" });
+    const ajena = await cuenta([["recepcion", "TEN"]], "Recepción ajena");
+    expect(await configurarCustodia(sql, e.dir, e.codigo, { ...base, custodias: [ajena] }, PRUEBAS)).toEqual({ ok: false, error: "custodias" });
+    // El Encargado ya no aparece como custodio si Dirección no lo nombró.
+    const p = await pantallaCierre(sql, e.vespertina, e.codigo, "pruebas");
+    if (!p.ok) throw new Error(p.error);
+    expect(p.custodios.map((c) => c.id).sort()).toEqual([e.matutina, e.vespertina].sort());
+    await prepararCierre(sql, e.vespertina, e.codigo, { turnoId: e.turnoId }, PRUEBAS);
+    expect(await cerrarDia(sql, e.vespertina, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "720", cajon: "3350" }, custodio: e.encargado, nota: "", apoyo: NADIE }, PRUEBAS))
+      .toEqual({ ok: false, error: "custodio" });
+    const [cfg] = await sql<{ id: string }[]>`select id from custodia_configuracion where sucursal_id = ${e.sucursalId} order by en desc limit 1`;
+    await expect(sql`insert into entrega_turno (turno_id, entrega_por, tipo, custodio_id, custodia_config_id, sobres_guardados)
+                     values (${e.turnoId}, ${e.vespertina}, 'cierre', ${e.encargado}, ${cfg.id}, true)`).rejects.toThrow(/custodias que nombró Dirección/);
+    await expect(sql`insert into custodia_configuracion (sucursal_id, lugar, acceso, configurada_por, lugar_fondos, acceso_cajon, custodias)
+                     values (${e.sucursalId}, 'Caja', ${[e.matutina]}::uuid[], ${e.dir}, 'Cajón', ${[e.matutina]}::uuid[], ${[ajena]}::uuid[])`)
+      .rejects.toThrow(/asignación en la sucursal/);
+  });
+
+  it("al cerrar, el excedente sale a su sobre y pasa solo el fondo; al abrir se cuenta solo el fondo y se verifica la caja", async () => {
+    const e = await escenario();
+    const c = await cerrarYo(e, e.vespertina);
+    expect(c.diferenciaEsperado).toBeNull();
+    const sobres = await sql<{ folio: string; importe: string; estado: string }[]>`
+      select folio, importe::text as importe, estado from sobre_cierre where entrega_id = ${c.entregaId} order by folio`;
+    expect(sobres.map((s) => [s.importe, s.estado])).toEqual([["420.00", "usado"], ["3050.00", "usado"]]);
+    const salidas = await sql<{ importe: string }[]>`
+      select importe::text as importe from movimiento_efectivo where turno_id = ${e.turnoId} and tipo = 'salida_sobre' order by importe`;
+    expect(salidas.map((s) => s.importe)).toEqual(["-3050.00", "-420.00"]);
+    const entregado = await sql<{ importe: string; esperado: string | null }[]>`
+      select c.importe::text as importe, c.esperado::text as esperado from entrega_conteo c join lugar_efectivo l on l.id = c.lugar_id
+      where c.entrega_id = ${c.entregaId} and c.tipo = 'entregado' order by l.tipo`;
+    expect(entregado).toEqual([{ importe: "300.00", esperado: "300.00" }, { importe: "300.00", esperado: null }]);
+    // Quien cerró se quedó con la llave: no tiene nada más que confirmar.
+    expect((await custodiasPorConfirmar(sql, e.vespertina, e.codigo))!.cierre).toBeNull();
+
+    // A la mañana siguiente: no ve importes al abrir, cuenta $300 y $300 y verifica los dos sobres de la caja.
+    const p = await pantallaApertura(sql, e.matutina, e.codigo, "pruebas");
+    if (!p.ok) throw new Error(p.error);
+    expect(p.cierre.sobresGuardados).toBe(true);
+    expect(p.caja.map((s) => s.folio)).toEqual(c.sobres.map((s) => s.folio));
+    // Sin verificar toda la caja no abre.
+    const cp = (await cierrePendiente(sql, e.sucursalId))!;
+    expect(await abrirDesdeCierre(sql, e.matutina, e.codigo, { entregaId: cp.entregaId, version: cp.version, sobres: correctos(p.caja.slice(0, 1)), conteo: { bolsa: "300", cajon: "300" }, apoyo: NADIE }, PRUEBAS))
+      .toEqual({ ok: false, error: "sobres" });
+    expect(await abrir(e, e.matutina)).toMatchObject({ ok: true, resultado: "abierto" });
+    const t = await estadoTurno(sql, e.matutina, e.codigo);
+    expect(t!.turno!.lugares.map((l) => l.contadoAlAbrir)).toEqual(["300.00", "300.00"]);
+    expect(await sql`select 1 from diferencia_efectivo where entrega_id = ${c.entregaId}`).toHaveLength(0);
+    const fondos = await sql<{ momento: string; fondo: string; sobre: string }[]>`
+      select momento, fondo::text as fondo, sobre::text as sobre from conteo_fondo where entrega_id = ${c.entregaId} order by momento, lugar_id`;
+    expect(fondos.filter((f) => f.momento === "apertura_inicial").every((f) => f.fondo === "300.00" && f.sobre === "0.00")).toBe(true);
+    // La cadena: la vespertina verificó la caja al cerrar (vacía) y la matutina al abrir; la llave la tiene la matutina.
+    const revisiones = await sql<{ momento: string; custodio_id: string; sobres: number }[]>`
+      select r.momento, r.custodio_id, (select count(*)::int from verificacion_sobre v where v.revision_id = r.id) as sobres
+      from revision_caja r where r.entrega_id = ${c.entregaId} order by r.en`;
+    expect(revisiones).toEqual([{ momento: "cierre", custodio_id: e.vespertina, sobres: 0 }, { momento: "apertura", custodio_id: e.matutina, sobres: 2 }]);
+    const r = await pantallaRecoleccion(sql, e.vespertina, e.codigo, "pruebas");
+    if (!r.ok) throw new Error(r.error);
+    expect(r.custodia).toMatchObject({ momento: "apertura" });
+    expect(r.caja.map((s) => s.importe)).toEqual(["420.00", "3050.00"]);
+  });
+
+  it("sin fondo definido todo va al sobre y al abrir se cuentan $0; un faltante al cerrar sigue contra el esperado", async () => {
+    const e = await escenario({ fondos: false });
+    const c = await cerrarYo(e, e.vespertina, { bolsa: "670", cajon: "3350" }, { bolsa: "0", cajon: "0" });
+    expect(c.diferenciaEsperado).toBe("-50.00");
+    expect(await abrir(e, e.matutina, { bolsa: "0", cajon: "0" })).toMatchObject({ ok: true, resultado: "abierto" });
+    const d = await sql<{ tipo: string; importe: string }[]>`select tipo, importe::text as importe from diferencia_efectivo where entrega_id = ${c.entregaId}`;
+    expect(d).toEqual([{ tipo: "contra_esperado", importe: "-50.00" }]);
+  });
+
+  it("un sobre de la caja abierto o la llave con problema quedan como incidencia de esa entrega", async () => {
+    const e = await escenario();
+    const c = await cerrarYo(e, e.vespertina);
+    const caja = await sobresEnCaja(sql, e.sucursalId);
+    const sobres = correctos(caja).map((s, i) => (i === 0 ? { ...s, estado: "abierto", motivo: "Sello despegado" } : s));
+    expect(await abrir(e, e.matutina, undefined, { sobres, llave: { estado: "incidencia", motivo: "" } })).toEqual({ ok: false, error: "motivo_llave" });
+    expect(await abrir(e, e.matutina, undefined, { sobres, llave: { estado: "incidencia", motivo: "La llave estaba fuera de su lugar" } }))
+      .toMatchObject({ ok: true, resultado: "abierto" });
+    const inc = await sql<{ tipo: string }[]>`select tipo from incidencia_cierre where entrega_id = ${c.entregaId} order by tipo`;
+    expect(inc.map((i) => i.tipo)).toEqual(["llave_caja", "sobre_caja"]);
+  });
+
+  it("en el cambio de turno quien recibe toma la llave y verifica cada sobre de la caja", async () => {
+    const e = await escenario();
+    await cerrarYo(e, e.vespertina);
+    await abrir(e, e.matutina);
+    const en = await registrarEntrega(sql, e.matutina, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "300", cajon: "300" }, recibe: e.vespertina, nota: "", apoyo: NADIE }, PRUEBAS);
+    if (!en.ok) throw new Error(en.error);
+    const [x] = await sql<{ version: number }[]>`select version from entrega_turno where id = ${en.entregaId}`;
+    const datos = { entregaId: en.entregaId, version: x.version, conteo: { bolsa: "300", cajon: "300" }, aclaracion: "", apoyo: NADIE };
+    expect(await recibirTurno(sql, e.vespertina, e.codigo, datos, PRUEBAS)).toEqual({ ok: false, error: "sobres" });
+    const caja = await sobresEnCaja(sql, e.sucursalId);
+    const r = await recibirTurno(sql, e.vespertina, e.codigo, { ...datos, caja: { sobres: correctos(caja), llave: LLAVE } }, PRUEBAS);
+    expect(r).toMatchObject({ ok: true, resultado: "confirmada" });
+    const [rev] = await sql<{ momento: string; custodio_id: string }[]>`select momento, custodio_id from revision_caja where entrega_id = ${en.entregaId}`;
+    expect(rev).toEqual({ momento: "cambio_turno", custodio_id: e.vespertina });
+  });
+
+  it("se eligen los sobres que se entregan, los demás siguen visibles; Dirección cuenta a ciegas y las diferencias quedan por sobre", async () => {
+    const e = await escenario();
+    const dia1 = await cerrarYo(e, e.vespertina);
+    await abrir(e, e.matutina);
+    const dia2 = await cerrarYo(e, e.matutina, { bolsa: "800", cajon: "3300" }, { bolsa: "300", cajon: "300" });
+    await abrir(e, e.vespertina);
+    await envejecer(dia1.sobres.map((s) => s.folio), 9);
+
+    const p = await pantallaRecoleccion(sql, e.vespertina, e.codigo, "pruebas");
+    if (!p.ok) throw new Error(p.error);
+    expect(p.caja.map((s) => [s.folio, s.aviso])).toEqual([...dia1.sobres.map((s) => [s.folio, true]), ...dia2.sobres.map((s) => [s.folio, false])]);
+    expect(p.puedeEntregar).toBe(true);
+    // Solo la responsable en turno entrega, y solo a Dirección.
+    expect(await registrarEntregaSobres(sql, e.matutina, e.codigo, { sobres: [dia1.sobres[0].id], recibe: e.dir }, PRUEBAS)).toEqual({ ok: false, error: "no_responsable" });
+    expect(await registrarEntregaSobres(sql, e.vespertina, e.codigo, { sobres: [dia1.sobres[0].id], recibe: e.admin }, PRUEBAS)).toEqual({ ok: false, error: "recibe" });
+    // Entrega los dos sobres del día 1 y la bolsa del día 2; el cajón del día 2 se queda en la caja.
+    const elegidos = [dia1.sobres[0].id, dia1.sobres[1].id, dia2.sobres[0].id];
+    const en = await registrarEntregaSobres(sql, e.vespertina, e.codigo, { sobres: elegidos, recibe: e.dir }, PRUEBAS);
+    if (!en.ok) throw new Error(en.error);
+    expect(await registrarEntregaSobres(sql, e.vespertina, e.codigo, { sobres: [dia2.sobres[1].id], recibe: e.dir }, PRUEBAS)).toEqual({ ok: false, error: "ya_pendiente" });
+
+    const d = await pantallaRecoleccion(sql, e.dir, e.codigo, "pruebas");
+    if (!d.ok) throw new Error(d.error);
+    expect(d.caja.every((s) => s.importe === null)).toBe(true);
+    expect(d.pendiente!.sobres.map((s) => s.id)).toEqual(elegidos);
+    expect(d.caja.filter((s) => !s.enEntrega).map((s) => s.folio)).toEqual([dia2.sobres[1].folio]);
+
+    // Solo quien recibe confirma. Bolsa del día 1: faltan $50. Cajón del día 1: cuadra pero llegó abierto. Bolsa del día 2: cuadra.
+    const conteo = [
+      { sobreId: dia1.sobres[0].id, estado: "correcto", folioVisto: "", motivo: "", contado: "370" },
+      { sobreId: dia1.sobres[1].id, estado: "abierto", folioVisto: "", motivo: "Sello despegado", contado: "3050" },
+      { sobreId: dia2.sobres[0].id, estado: "correcto", folioVisto: "", motivo: "", contado: "500" },
+    ];
+    expect(await confirmarRecoleccion(sql, e.admin, e.codigo, { recoleccionId: en.recoleccionId, version: d.pendiente!.version, sobres: conteo }, PRUEBAS))
+      .toEqual({ ok: false, error: "sin_pendiente" });
+    const ok = await confirmarRecoleccion(sql, e.dir, e.codigo, { recoleccionId: en.recoleccionId, version: d.pendiente!.version, sobres: conteo, llave: LLAVE }, PRUEBAS);
+    expect(ok).toEqual({ ok: true, recogido: "3920.00", diferencias: 2 });
+    expect((await sobresEnCaja(sql, e.sucursalId)).map((s) => s.folio)).toEqual([dia2.sobres[1].folio]);
+    const estados = await sql<{ estado: string }[]>`select estado from sobre_cierre where id in ${sql(elegidos)}`;
+    expect(estados.every((s) => s.estado === "recogido")).toBe(true);
+
+    const h = await pantallaRecoleccion(sql, e.admin, e.codigo, "pruebas");
+    if (!h.ok) throw new Error(h.error);
+    const rc = h.recolecciones[0];
+    expect(rc).toMatchObject({ recogido: "3920.00", depositado: "0.00", saldo: "3920.00" });
+    expect(rc.diferencias.map((x) => [x.folio, x.importe, x.verificacion?.estado ?? null, x.puedeRevisar])).toEqual([
+      [dia1.sobres[0].folio, "-50.00", null, true],
+      [dia1.sobres[1].folio, "0.00", "abierto", true],
+    ]);
+    // La cadena del sobre muestra a quien cerró, cada revisión de la caja, quien entregó y quien recogió.
+    expect(rc.diferencias[0].cadena.map((x) => x.nombre)).toEqual(expect.arrayContaining([expect.stringContaining("Recepción vespertina"), expect.stringContaining("Dirección")]));
+  });
+
+  it("Administración revisa la diferencia si no participó; Dirección registra depósitos parciales hasta lo recogido", async () => {
+    const e = await escenario();
+    const c = await cerrarYo(e, e.vespertina);
+    await abrir(e, e.matutina);
+    const en = await registrarEntregaSobres(sql, e.matutina, e.codigo, { sobres: c.sobres.map((s) => s.id), recibe: e.dir }, PRUEBAS);
+    if (!en.ok) throw new Error(en.error);
+    const conteo = [
+      { sobreId: c.sobres[0].id, estado: "correcto", folioVisto: "", motivo: "", contado: "370" },
+      { sobreId: c.sobres[1].id, estado: "correcto", folioVisto: "", motivo: "", contado: "3050" },
+    ];
+    const ok = await confirmarRecoleccion(sql, e.dir, e.codigo, { recoleccionId: en.recoleccionId, version: 1, sobres: conteo }, PRUEBAS);
+    expect(ok).toMatchObject({ ok: true, recogido: "3420.00", diferencias: 1 });
+    const [dif] = await sql<{ id: string }[]>`select id from diferencia_sobre where recoleccion_id = ${en.recoleccionId}`;
+
+    // Quien participó en la cadena no revisa, aunque sea Administración; Dirección tampoco (revisa Administración).
+    await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${e.vespertina}, 'administracion', ${e.sucursalId}, 'Prueba: también Administración')`;
+    expect(await revisarDiferenciaSobre(sql, e.vespertina, e.codigo, { diferenciaId: dif.id, resultado: "faltante_confirmado", motivo: "Faltan $50 en el sobre" }, PRUEBAS))
+      .toEqual({ ok: false, error: "participaste" });
+    expect(await revisarDiferenciaSobre(sql, e.dir, e.codigo, { diferenciaId: dif.id, resultado: "faltante_confirmado", motivo: "Faltan $50 en el sobre" }, PRUEBAS))
+      .toEqual({ ok: false, error: "sin_permiso" });
+    await expect(sql`insert into revision_diferencia_sobre (diferencia_id, resultado, motivo, revisada_por) values (${dif.id}, 'faltante_confirmado', 'Faltan $50', ${e.vespertina})`)
+      .rejects.toThrow(/participó/);
+    expect(await revisarDiferenciaSobre(sql, e.admin, e.codigo, { diferenciaId: dif.id, resultado: "sobrante_confirmado", motivo: "No corresponde" }, PRUEBAS))
+      .toEqual({ ok: false, error: "resultado" });
+    expect(await revisarDiferenciaSobre(sql, e.admin, e.codigo, { diferenciaId: dif.id, resultado: "faltante_confirmado", motivo: "Faltan $50 en el sobre de la bolsa" }, PRUEBAS))
+      .toEqual({ ok: true });
+
+    // Depósitos parciales: $3,000 y luego $400; no más que el saldo; solo quien recogió.
+    const hoy = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date());
+    const dep = (quien: string, importe: string) =>
+      registrarDepositoRecoleccion(sql, quien, e.codigo, { recoleccionId: en.recoleccionId, importe, fecha: hoy, referencia: "DEP-FICTICIO-1" }, PRUEBAS);
+    expect(await dep(e.admin, "100")).toEqual({ ok: false, error: "sin_pendiente" });
+    expect(await dep(e.dir, "3000")).toEqual({ ok: true, saldo: "420.00" });
+    expect(await dep(e.dir, "500")).toEqual({ ok: false, error: "saldo" });
+    expect(await dep(e.dir, "400")).toEqual({ ok: true, saldo: "20.00" });
+    await expect(sql`insert into deposito_recoleccion (recoleccion_id, importe, fecha, referencia, registrado_por) values (${en.recoleccionId}, 100, ${hoy}::date, 'DEP-X', ${e.dir})`)
+      .rejects.toThrow(/no pueden pasar/);
+    const p = await pantallaRecoleccion(sql, e.dir, e.codigo, "pruebas");
+    if (!p.ok) throw new Error(p.error);
+    expect(p.recolecciones[0]).toMatchObject({ recogido: "3420.00", depositado: "3400.00", saldo: "20.00" });
+    expect(p.recolecciones[0].diferencias[0]).toMatchObject({ estado: "faltante_confirmado" });
+  });
+
+  it("una entrega pendiente se puede cancelar con motivo; con un cambio de turno en curso no se entrega", async () => {
+    const e = await escenario();
+    const c = await cerrarYo(e, e.vespertina);
+    await abrir(e, e.matutina);
+    const en = await registrarEntregaSobres(sql, e.matutina, e.codigo, { sobres: [c.sobres[0].id], recibe: e.dir }, PRUEBAS);
+    if (!en.ok) throw new Error(en.error);
+    expect(await cancelarEntregaSobres(sql, e.matutina, e.codigo, { recoleccionId: en.recoleccionId, version: 1, motivo: "no" }, PRUEBAS)).toEqual({ ok: false, error: "motivo" });
+    expect(await cancelarEntregaSobres(sql, e.dir, e.codigo, { recoleccionId: en.recoleccionId, version: 1, motivo: "No pude pasar hoy" }, PRUEBAS)).toEqual({ ok: true });
+    expect(await sobresEnCaja(sql, e.sucursalId)).toHaveLength(2);
+    const ent = await registrarEntrega(sql, e.matutina, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "300", cajon: "300" }, recibe: e.vespertina, nota: "", apoyo: NADIE }, PRUEBAS);
+    if (!ent.ok) throw new Error(ent.error);
+    expect(await registrarEntregaSobres(sql, e.matutina, e.codigo, { sobres: [c.sobres[0].id], recibe: e.dir }, PRUEBAS)).toEqual({ ok: false, error: "entrega_en_curso" });
+    // La base tampoco deja recoger un sobre sin confirmar la recolección.
+    await expect(sql`update sobre_cierre set estado = 'recogido' where id = ${c.sobres[0].id}`).rejects.toThrow(/cambio no permitido/);
+  });
+
+  it("si la custodia es otra persona, confirma desde su cuenta y verifica también los sobres que ya estaban en la caja", async () => {
+    const e = await escenario();
+    await cerrarYo(e, e.vespertina);
+    await abrir(e, e.matutina);
+    const p = await prepararCierre(sql, e.matutina, e.codigo, { turnoId: e.turnoId }, PRUEBAS);
+    if (!p.ok) throw new Error(p.error);
+    const r = await cerrarDia(sql, e.matutina, e.codigo, {
+      turnoId: e.turnoId, conteo: { bolsa: "720", cajon: "3350" }, fondos: { bolsa: "300", cajon: "300" }, custodio: e.vespertina, nota: "", apoyo: NADIE,
+    }, PRUEBAS);
+    if (!r.ok) throw new Error(r.error);
+    const pend = (await custodiasPorConfirmar(sql, e.vespertina, e.codigo))!;
+    expect(pend.cierre?.entregaId).toBe(r.entregaId);
+    expect(pend.caja).toHaveLength(2);
+    expect(await confirmarCustodia(sql, e.vespertina, e.codigo, { entregaId: r.entregaId, ubicacion: "Caja con llave de recepción", sobres: correctos(pend.cierre!.sobres) }, PRUEBAS))
+      .toEqual({ ok: false, error: "sobres" });
+    expect(await confirmarCustodia(sql, e.vespertina, e.codigo, {
+      entregaId: r.entregaId, ubicacion: "Caja con llave de recepción", sobres: correctos([...pend.cierre!.sobres, ...pend.caja]), llave: LLAVE,
+    }, PRUEBAS)).toEqual({ ok: true, incidencias: 0 });
+    const [rev] = await sql<{ custodio_id: string; n: number }[]>`
+      select r.custodio_id, (select count(*)::int from verificacion_sobre v where v.revision_id = r.id) as n from revision_caja r where r.entrega_id = ${r.entregaId}`;
+    expect(rev).toEqual({ custodio_id: e.vespertina, n: 2 });
+  });
+});

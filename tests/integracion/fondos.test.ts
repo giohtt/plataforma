@@ -46,10 +46,9 @@ async function escenario({ fondos = true } = {}) {
   const dir = await cuenta([["direccion", codigo]], "Dirección");
   const t = await abrirTurno(sql, recepcion, codigo, { bolsa: "900.00", cajon: "3100.00" }, PRUEBAS);
   if (!t.ok) throw new Error(t.error);
-  const c = await configurarCustodia(sql, dir, codigo, {
-    lugar: "Caja con llave de la oficina", acceso: [encargado], lugarFondos: "Cajón con llave de recepción", accesoCajon: [recepcion, vespertina, encargado],
-  }, PRUEBAS);
-  if (!c.ok) throw new Error(c.error);
+  // Configuración anterior al 18 nov 2026 (sin custodias nombradas): el Encargado custodia y los sobres se abren al día siguiente.
+  await sql`insert into custodia_configuracion (sucursal_id, lugar, acceso, configurada_por, lugar_fondos, acceso_cajon)
+            values (${s.id}, 'Caja con llave de la oficina', ${[encargado]}::uuid[], ${dir}, 'Cajón con llave de recepción', ${[recepcion, vespertina, encargado]}::uuid[])`;
   const e = { codigo, sucursalId: s.id, recepcion, vespertina, encargado, admin, dir, turnoId: t.turnoId };
   if (fondos) {
     for (const lugar of ["bolsa_visitas", "cajon_mensualidades"]) {
@@ -348,9 +347,9 @@ describe.skipIf(!URL_ADMIN)("fondo fijo de caja", () => {
               values (${e.sucursalId}, 'Caja con llave de la oficina', ${[e.encargado]}::uuid[], ${e.dir}, 'Cajón con llave', ${[e.encargado]}::uuid[])`;
     await expect(sql`insert into custodia_configuracion (sucursal_id, lugar, acceso, configurada_por)
                      values (${e.sucursalId}, 'Caja con llave de la oficina', ${[e.encargado]}::uuid[], ${e.dir})`).rejects.toThrow(/acceso al cajón/);
-    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja con llave", acceso: [e.encargado], lugarFondos: "", accesoCajon: [e.encargado] }, PRUEBAS))
+    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja con llave", acceso: [e.encargado], lugarFondos: "", accesoCajon: [e.encargado], custodias: [e.encargado] }, PRUEBAS))
       .toEqual({ ok: false, error: "lugar_fondos" });
-    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja con llave", acceso: [e.encargado], lugarFondos: "Cajón con llave", accesoCajon: [] }, PRUEBAS))
+    expect(await configurarCustodia(sql, e.dir, e.codigo, { lugar: "Caja con llave", acceso: [e.encargado], lugarFondos: "Cajón con llave", accesoCajon: [], custodias: [e.encargado] }, PRUEBAS))
       .toEqual({ ok: false, error: "acceso_cajon" });
   });
 });

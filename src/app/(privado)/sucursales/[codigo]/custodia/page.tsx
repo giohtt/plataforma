@@ -20,7 +20,7 @@ export default async function Custodia({ params, searchParams }: PageProps<"/suc
   return (
     <main className="contenedor contenedor-medio">
       <p className="sub"><Link href={`/sucursales/${codigo}`}>← {c.sucursal}</Link></p>
-      <h1 className="cabecera-titulo">Confirmar custodia nocturna · {c.sucursal}</h1>
+      <h1 className="cabecera-titulo">Confirmar custodia · {c.sucursal}</h1>
       <p className="sub">Solo datos ficticios. Recibes los sobres cerrados y compruebas sus folios; no ves los importes.</p>
       {aviso === "confirmada" ? (
         <p className="aviso aviso-ok" role="status" data-testid="custodia-confirmada">
@@ -33,7 +33,8 @@ export default async function Custodia({ params, searchParams }: PageProps<"/suc
         <section className="tarjeta">
           <p className="sub">Cierre de {conPunto(hora.format(c.cierre.cerradoEn))} Cerró <strong>{c.cierre.cerradoPor}</strong>.</p>
           <p className="sub">Acceso definido por Dirección: {c.cierre.configuracion.acceso.map((p) => p.nombre).join(" · ")}.</p>
-          <FormularioCustodia codigo={codigo} entregaId={c.cierre.entregaId} sobres={c.cierre.sobres} lugar={c.cierre.configuracion.lugar} />
+          <FormularioCustodia codigo={codigo} entregaId={c.cierre.entregaId} sobres={c.cierre.sobres} lugar={c.cierre.configuracion.lugar}
+            caja={c.caja} guardados={c.cierre.sobresGuardados} />
         </section>
       )}
     </main>

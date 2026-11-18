@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { entradasPorConfirmar } from "@/lib/fondos";
+import { accesoRecoleccion } from "@/lib/recolecciones";
 import { notFound } from "next/navigation";
 import type { CSSProperties } from "react";
 import { pendientesDeRevision } from "@/lib/diferencias";
@@ -64,7 +65,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo, caja] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -88,10 +89,10 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     tienePermiso(sql, sesion.usuarioId, "custodia.configurar", sucursal.id),
     sql<{ n: number }[]>`select count(*)::int as n from entrega_turno e join turno t on t.id = e.turno_id
       where e.tipo = 'cierre' and e.estado = 'pendiente' and e.recibe is null and e.custodio_id = ${sesion.usuarioId} and t.sucursal_id = ${sucursal.id}
-        and not exists (select 1 from custodia_cierre c where c.entrega_id = e.id)
-        and tiene_permiso(${sesion.usuarioId}, 'custodia.confirmar', ${sucursal.id})`,
+        and not exists (select 1 from custodia_cierre c where c.entrega_id = e.id)`,
     tienePermiso(sql, sesion.usuarioId, "fondo.reponer", sucursal.id),
     entradasPorConfirmar(sql, sesion.usuarioId, sucursal.id),
+    accesoRecoleccion(sql, sesion.usuarioId, sucursal.id),
   ]);
 
   const permisos = await sql<{ clave: string; descripcion: string }[]>`
@@ -113,7 +114,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
       {sucursal.estadoOperativo === "inactiva" ? (
         <p className="aviso aviso-info" data-testid="sucursal-inactiva">Esta sucursal está desactivada.</p>
       ) : null}
-      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno || puedeVerReporteTurnos || puedeVerReporteVisitas || puedeVerificarAbonos || puedeAutorizarCancel || puedeAutorizarAcceso || puedeRevisarAccesos || puedeCobertura || retirosRevisar !== null || retirosConfirmar !== null || puedeConfigurarCustodia || custodiaPendiente.n > 0 || puedeVerTurno || puedeReponerFondo || entradasFondo > 0 ? (
+      {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno || puedeVerReporteTurnos || puedeVerReporteVisitas || puedeVerificarAbonos || puedeAutorizarCancel || puedeAutorizarAcceso || puedeRevisarAccesos || puedeCobertura || retirosRevisar !== null || retirosConfirmar !== null || puedeConfigurarCustodia || custodiaPendiente.n > 0 || puedeVerTurno || puedeReponerFondo || entradasFondo > 0 || caja !== null ? (
         <p className="fila-acciones">
           {puedeAbrirTurno || puedeVerTurno ? (
             <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/turno`} data-testid="turno">
@@ -142,7 +143,17 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
           ) : null}
           {custodiaPendiente.n ? (
             <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/custodia`} data-testid="custodia-por-confirmar">
-              Confirmar custodia nocturna
+              Confirmar custodia
+            </Link>
+          ) : null}
+          {caja?.porRecoger ? (
+            <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/recoleccion`} data-testid="sobres-por-recoger">
+              Recoger sobres ({caja.porRecoger})
+            </Link>
+          ) : null}
+          {caja ? (
+            <Link className="boton" href={`/sucursales/${sucursal.codigo}/recoleccion`} data-testid="ir-caja">
+              Caja de sobres{caja.sobres ? ` (${caja.sobres}${caja.conAviso ? ` · ${caja.conAviso} con aviso de 8 días` : ""})` : ""}
             </Link>
           ) : null}
           {entradasFondo ? (
