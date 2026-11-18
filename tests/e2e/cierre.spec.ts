@@ -50,11 +50,15 @@ async function entrar(page: Page, correo: string) {
 const capturar = async (page: Page, nombre: string) => {
   if (process.env.CAPTURAR) await page.screenshot({ path: `${process.env.CAPTURAR}/${nombre}-${test.info().project.name}.png`, fullPage: true });
 };
-async function configurarCustodia(page: Page, e: { encargado: { nombre: string }; laura: { nombre: string }; sofia: { nombre: string } }) {
-  await page.getByLabel("Dónde se guardan los sobres").fill("Caja con llave · oficina");
-  await page.getByRole("group", { name: "Quién tiene acceso", exact: true }).getByLabel(e.encargado.nombre).check();
-  await page.getByLabel("Dónde quedan los fondos fijos").fill("Cajón con llave de recepción");
-  for (const p of [e.laura, e.sofia, e.encargado]) await page.getByTestId("acceso-cajon").getByLabel(p.nombre).check();
+/**
+ * Configuración guardada antes del 18 nov 2026 (sin custodias nombradas): el Encargado custodia y los sobres se abren al
+ * día siguiente. Estas pruebas comprueban que esos cierres siguen funcionando como antes.
+ */
+async function configuracionAnterior(e: { codigo: string; dir: { id: string }; encargado: { id: string }; laura: { id: string }; sofia: { id: string } }) {
+  await sql`insert into custodia_configuracion (sucursal_id, lugar, acceso, configurada_por, lugar_fondos, acceso_cajon)
+            select id, 'Caja con llave · oficina', ${[e.encargado.id]}::uuid[], ${e.dir.id}, 'Cajón con llave de recepción',
+                   ${[e.laura.id, e.sofia.id, e.encargado.id]}::uuid[]
+            from sucursal where codigo = ${e.codigo}`;
 }
 async function sobresCorrectos(page: Page) {
   for (const l of ["bolsa_visitas", "cajon_mensualidades"]) {
@@ -65,15 +69,7 @@ async function sobresCorrectos(page: Page) {
 test("Tenango: cierre con $3,400 en el cajón, custodia del Encargado y apertura con $3,350 sin recuento", async ({ page }) => {
   const e = await escenario();
 
-  // Dirección define dónde se guardan los sobres y quién tiene acceso. Nada viene marcado.
-  await entrar(page, e.dir.correo);
-  await page.goto(`/sucursales/${e.codigo}`);
-  await page.getByTestId("configurar-custodia").click();
-  await expect(page.getByRole("group", { name: "Quién tiene acceso", exact: true }).getByLabel(e.encargado.nombre)).not.toBeChecked();
-  await configurarCustodia(page, e);
-  await capturar(page, "cierre-configurar");
-  await page.getByRole("button", { name: "Guardar la custodia" }).click();
-  await expect(page.getByTestId("historial-custodia")).toContainText("Caja con llave · oficina");
+  await configuracionAnterior(e);
 
   // Laura genera los folios, cuenta y cierra.
   await entrar(page, e.laura.correo);
@@ -145,11 +141,7 @@ test("Tenango: cierre con $3,400 en el cajón, custodia del Encargado y apertura
 
 test("custodia sin confirmar y sello roto: se abre con motivo y ambas incidencias quedan por revisar aunque el efectivo cuadre", async ({ page }) => {
   const e = await escenario();
-  await entrar(page, e.dir.correo);
-  await page.goto(`/sucursales/${e.codigo}/custodia/configurar`);
-  await configurarCustodia(page, e);
-  await page.getByRole("button", { name: "Guardar la custodia" }).click();
-  await expect(page.getByTestId("historial-custodia")).toBeVisible();
+  await configuracionAnterior(e);
 
   await entrar(page, e.laura.correo);
   await page.goto(`/sucursales/${e.codigo}/turno/cierre`);
@@ -201,10 +193,7 @@ test("custodia sin confirmar y sello roto: se abre con motivo y ambas incidencia
 test("fondo fijo de $300 y $300: se recibe, se aparta al cerrar, se cuenta aparte al abrir y la diferencia queda en el sobre", async ({ page }) => {
   const e = await escenario();
   await entrar(page, e.dir.correo);
-  await page.goto(`/sucursales/${e.codigo}/custodia/configurar`);
-  await configurarCustodia(page, e);
-  await page.getByRole("button", { name: "Guardar la custodia" }).click();
-  await expect(page.getByTestId("historial-custodia")).toContainText("Cajón con llave de recepción");
+  await configuracionAnterior(e);
   // Dirección autoriza los fondos y entrega el efectivo; queda pendiente de recibir.
   await page.goto(`/sucursales/${e.codigo}/fondos`);
   for (const lugar of ["Fondo de visitas (bolsa)", "Fondo de mensualidades (cajón)"]) {
@@ -281,11 +270,7 @@ test("misma persona con Recepción y Encargado: cierra, custodia y abre con una 
   await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) select ${e.encargado.id}, 'recepcion', id, 'Prueba de cierre' from sucursal where codigo = ${e.codigo}`;
   await sql`update responsable_lugar r set usuario_id = ${e.encargado.id} from turno t join sucursal s on s.id = t.sucursal_id
             where r.turno_id = t.id and s.codigo = ${e.codigo} and r.hasta is null`;
-  await entrar(page, e.dir.correo);
-  await page.goto(`/sucursales/${e.codigo}/custodia/configurar`);
-  await configurarCustodia(page, e);
-  await page.getByRole("button", { name: "Guardar la custodia" }).click();
-  await expect(page.getByTestId("historial-custodia")).toBeVisible();
+  await configuracionAnterior(e);
 
   await entrar(page, e.encargado.correo);
   await page.goto(`/sucursales/${e.codigo}/turno/cierre`);

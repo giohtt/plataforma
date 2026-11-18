@@ -2,6 +2,10 @@ import type postgres from "postgres";
 import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
 import { turnoAbiertoDe, type TipoLugar } from "@/lib/turnos";
+import {
+  configuracionVigente, leerCaja, leerLlaveRequerida, registrarIncidenciasCaja, registrarRevisionCaja, sobresEnCaja, sobresFueraDeCaja,
+  type ErrorVerificacion, type LlaveDatos, type SobreEnCaja, type SobreFueraDeCaja, type VerificacionDatos,
+} from "@/lib/cierres";
 
 /**
  * Bloque 5, primer paso: cambio de turno con confirmación de quien recibe (solo datos ficticios).
@@ -55,6 +59,9 @@ export type ErrorEntrega =
   | "aclaracion"
   | "apoyo"
   | "cambio"
+  | "motivo_llave"
+  | "motivo_llave_caja"
+  | ErrorVerificacion
   | "bloqueado_produccion";
 
 const valido = (codigo: string) => /^[A-Z0-9]{2,5}$/.test(codigo);
@@ -285,6 +292,12 @@ export type PantallaRecepcion =
       recuento: { entregado: ConteoLugares; inicial: ConteoLugares } | null;
       /** Personas de la sucursal que pueden declararse como apoyo (sin quien entrega ni quien recibe). */
       apoyos: Receptor[];
+      /** Caja con llave: si hay custodias nombradas o sobres guardados, quien recibe el turno recibe la llave y verifica
+       *  cada sobre (solo en el primer conteo). null si no aplica. */
+      caja: SobreEnCaja[] | null;
+      /** Sobres que no están en la caja (entregados a Dirección sin confirmar o por devolver): no se verifican; se ve
+       *  quién los entregó y quién debe confirmar. */
+      fuera: SobreFueraDeCaja[];
     }
   | { ok: false; error: ErrorEntrega | "sin_entrega" };
 
@@ -317,14 +330,25 @@ export async function pantallaRecepcion(sql: Sql, usuarioId: string, codigo: str
       const filas = await CONTEOS(tx, c.e.id);
       recuento = { entregado: porLugar(filas, "entregado"), inicial: porLugar(filas, "recibido_inicial") };
     }
-    return { ok: true, sucursal: c.s.nombre, entrega: c.e, recuento, apoyos: await candidatosApoyo(tx, c.s.id, [c.e.entregaPorId, c.e.recibeId]) };
+    return {
+      ok: true, sucursal: c.s.nombre, entrega: c.e, recuento, apoyos: await candidatosApoyo(tx, c.s.id, [c.e.entregaPorId, c.e.recibeId]),
+      caja: c.e.estado === "pendiente" ? await cajaAlRecibir(tx, c.s.id) : null,
+      fuera: await sobresFueraDeCaja(tx, c.s.id),
+    };
   });
+}
+
+/** La llave de la caja pasa con el turno cuando Dirección nombró custodias o hay sobres guardados. */
+async function cajaAlRecibir(tx: Tx | Sql, sucursalId: string): Promise<SobreEnCaja[] | null> {
+  const caja = await sobresEnCaja(tx, sucursalId);
+  if (caja.length || (await sobresFueraDeCaja(tx, sucursalId)).length) return caja;
+  return (await configuracionVigente(tx, sucursalId))?.custodias ? [] : null;
 }
 
 export type ResultadoRecepcion =
   | { ok: true; resultado: "confirmada"; turnoId: string }
   | { ok: true; resultado: "recuento" }
-  | { ok: false; error: ErrorEntrega | "sin_entrega" };
+  | { ok: false; error: ErrorEntrega | "sin_entrega"; sobreId?: string };
 
 /**
  * La entrante confirma lo que recibe. Primer envío (pendiente): su conteo inicial; si coincide en ambos lugares,
@@ -335,7 +359,11 @@ export async function recibirTurno(
   sql: Sql,
   usuarioId: string,
   codigo: string,
-  datos: { entregaId: string; version: number; conteo: ConteoLugares; aclaracion: string; apoyo: DeclaracionApoyo },
+  datos: {
+    entregaId: string; version: number; conteo: ConteoLugares; aclaracion: string; apoyo: DeclaracionApoyo;
+    /** Caja con llave (primer conteo): verificación de cada sobre guardado y de la llave. */
+    caja?: { sobres: VerificacionDatos[]; llaveCaja?: LlaveDatos; llaveCajon?: LlaveDatos };
+  },
   { entorno }: { entorno: Entorno },
 ): Promise<ResultadoRecepcion> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
@@ -354,8 +382,27 @@ export async function recibirTurno(
     // La declaración de apoyo de esta etapa: el primer conteo de la entrante o el recuento.
     const etapa: EtapaApoyo = c.e.estado === "pendiente" ? "conteo_recepcion" : "recuento";
     if (etapa === "recuento" && (aclaracion.length < 5 || aclaracion.length > 300)) return { ok: false, error: "aclaracion" };
+    // Caja con llave: quien recibe el turno recibe la llave y verifica cada sobre guardado (todo antes de escribir).
+    const caja = c.e.estado === "pendiente" ? await cajaAlRecibir(tx, c.s.id) : null;
+    let revision = null;
+    if (caja) {
+      const v = leerCaja(caja, datos.caja?.sobres);
+      if (!v.ok) return v;
+      // Las dos llaves pasan con el turno y se registran por separado.
+      const llaveCaja = leerLlaveRequerida(datos.caja?.llaveCaja);
+      if (!llaveCaja.ok) return { ok: false, error: "motivo_llave_caja" };
+      const llaveCajon = leerLlaveRequerida(datos.caja?.llaveCajon);
+      if (!llaveCajon.ok) return { ok: false, error: "motivo_llave" };
+      revision = { filas: v.filas, llaveCaja, llaveCajon };
+    }
     if (!(await declararApoyo(tx, c.s.id, c.e.id, etapa, usuarioId, [c.e.entregaPorId, c.e.recibeId], datos.apoyo))) {
       throw new ApoyoInvalido();
+    }
+    if (revision) {
+      await registrarRevisionCaja(tx, {
+        sucursalId: c.s.id, momento: "cambio_turno", entregaId: c.e.id, por: usuarioId, custodio: usuarioId,
+        llave: revision.llaveCaja, llaveCajon: revision.llaveCajon, filas: revision.filas,
+      });
     }
 
     if (c.e.estado === "pendiente") {
@@ -437,6 +484,8 @@ export async function confirmarEntregaTx(tx: Tx, d: {
   }
   await tx`update entrega_turno set estado = 'confirmada', turno_nuevo_id = ${nuevo.id}, resuelta_en = now(),
            aclaracion = ${d.aclaracion}, recontado_con = ${d.recontadoCon ?? null}, version = version + 1 where id = ${d.entregaId}`;
+  // Cadena de custodia de la caja: un sobre guardado con problema o la llave con incidencia quedan por revisar.
+  await registrarIncidenciasCaja(tx, d.entregaId);
   await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
            values ('entrega_turno', ${d.entregaId}, 'confirmar',
                    ${tx.json({ turno_nuevo: nuevo.id, bolsa_visitas: d.final.bolsa, cajon_mensualidades: d.final.cajon })}, ${d.usuarioId})`;

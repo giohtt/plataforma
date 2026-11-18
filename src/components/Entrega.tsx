@@ -4,6 +4,7 @@ import { useActionState, useState } from "react";
 import {
   accionCancelarEntrega, accionEntregarTurno, accionRecibirTurno, type EstadoFormularioEntrega,
 } from "@/app/acciones-entrega";
+import { Llaves, SobresFuera, VerificarSobres } from "@/components/Caja";
 import { leerImporte } from "@/lib/datos-turno";
 
 const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
@@ -129,10 +130,14 @@ export function FormularioEntrega({ codigo, turnoId, esperadoBolsa, contadoCajon
  * La entrante cuenta y confirma. En «pendiente» no recibe el conteo de la saliente; en «recuento» ve ambos,
  * recuentan juntas y confirma un importe con aclaración.
  */
-export function FormularioRecepcion({ codigo, entregaId, version, recuento, apoyos }: {
+export function FormularioRecepcion({ codigo, entregaId, version, recuento, apoyos, caja = null, fuera = [] }: {
   codigo: string; entregaId: string; version: number;
   recuento: { entregado: { bolsa: string; cajon: string }; inicial: { bolsa: string; cajon: string } } | null;
   apoyos: { id: string; nombre: string }[];
+  /** Caja con llave: con el turno recibes la llave y verificas cada sobre guardado. null si no aplica. */
+  caja?: { id: string; lugar: "bolsa_visitas" | "cajon_mensualidades"; folio: string }[] | null;
+  /** Sobres que no están en la caja (entregados a Dirección sin confirmar o por devolver). */
+  fuera?: { id: string; lugar: "bolsa_visitas" | "cajon_mensualidades"; folio: string; estado: "por_confirmar" | "por_devolver"; entrego: string; recibe: string }[];
 }) {
   const [estado, accion, enviando] = useActionState(accionRecibirTurno, null);
   return (
@@ -170,6 +175,18 @@ export function FormularioRecepcion({ codigo, entregaId, version, recuento, apoy
           <Importe estado={estado} campo="cajon" etiqueta={recuento ? "Total que confirmas tras recontar" : "Total que recibes"} />
         </fieldset>
       </div>
+      {caja ? (
+        <fieldset className="campo campo-grupo" data-testid="caja-recepcion">
+          <legend>Caja de sobres y llaves</legend>
+          <input type="hidden" name="caja" value="si" />
+          <span className="sub">Con el turno recibes la llave de la caja de sobres y la del cajón de los fondos. Los sobres se quedan sellados: no los abras, solo verifica cada uno.</span>
+          {caja.length ? (
+            <VerificarSobres estado={estado} sobres={caja} porFolio pregunta="¿Está en la caja, cerrado y con este folio?" />
+          ) : <p className="sub">La caja no tiene sobres guardados.</p>}
+          <SobresFuera fuera={fuera} />
+          <Llaves estado={estado} />
+        </fieldset>
+      ) : null}
       <Apoyo estado={estado} candidatos={apoyos} etapa={recuento ? "en el recuento" : "a contar lo que recibes"} />
       {recuento ? (
         <div className="campo">

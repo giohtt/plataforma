@@ -49,7 +49,7 @@ export type Diferencia = {
 /** Incidencia de un cierre (custodia sin confirmar o sobre con problema): queda por revisar aunque el efectivo cuadre. */
 export type IncidenciaCierre = {
   id: string;
-  tipo: "custodia_sin_confirmar" | "sobre_en_custodia" | "sobre_al_abrir" | "fondo_incompleto" | "llave_custodia";
+  tipo: "custodia_sin_confirmar" | "sobre_en_custodia" | "sobre_al_abrir" | "fondo_incompleto" | "llave_custodia" | "sobre_caja" | "llave_caja" | "llave_cajon";
   /** Texto de la incidencia: el motivo de abrir sin custodia, o el sobre, cómo llegó y el motivo. */
   detalle: string;
   registradaEn: Date;
@@ -60,12 +60,14 @@ const INCIDENCIAS = (sql: Sql | Tx, entregaIds: string[]) => sql<{
   id: string; entrega_id: string; tipo: IncidenciaCierre["tipo"]; registrada_en: Date; motivo_sin_custodia: string | null;
   folio: string | null; estado: string | null; folio_visto: string | null; motivo_sobre: string | null; por: string | null;
   r_motivo: string | null; r_por: string | null; r_nivel: NivelRevision | null; r_en: Date | null;
-  lugar: TipoLugar | null; fondo: string | null; fondo_monto: string | null; motivo_llave: string | null; custodio: string | null }[]>`
+  lugar: TipoLugar | null; fondo: string | null; fondo_monto: string | null; motivo_llave: string | null; custodio: string | null;
+  rc_motivo: string | null; rc_motivo_cajon: string | null; rc_por: string | null }[]>`
   select i.id, i.entrega_id, i.tipo, i.registrada_en, a.motivo as motivo_sin_custodia,
          li.tipo as lugar, cf.fondo::text as fondo, cf.fondo_monto::text as fondo_monto, cc.motivo_llave, uc.nombre as custodio,
          s.folio, v.estado, v.folio_visto, v.motivo as motivo_sobre, u.nombre as por,
-         r.motivo as r_motivo, ru.nombre as r_por, r.nivel as r_nivel, r.en as r_en
+         r.motivo as r_motivo, ru.nombre as r_por, r.nivel as r_nivel, r.en as r_en, rc.motivo_llave as rc_motivo, rc.motivo_llave_cajon as rc_motivo_cajon, rcu.nombre as rc_por
   from incidencia_cierre i
+  left join revision_caja rc on rc.id = i.revision_id left join usuario rcu on rcu.id = rc.por
   left join apertura_sin_custodia a on a.entrega_id = i.entrega_id and i.tipo = 'custodia_sin_confirmar'
   left join verificacion_sobre v on v.id = i.verificacion_id left join sobre_cierre s on s.id = v.sobre_id
   left join usuario u on u.id = v.verificado_por
@@ -86,7 +88,11 @@ function aIncidencia(f: Awaited<ReturnType<typeof INCIDENCIAS>>[number]): Incide
     ? `Fondo ${f.lugar === "bolsa_visitas" ? "de la bolsa de visitas" : "del cajón de mensualidades"} incompleto al cerrar: ${pesosMx(f.fondo!)} contados de ${pesosMx(f.fondo_monto!)}`
     : f.tipo === "llave_custodia"
     ? `Llave o cajón en la custodia (${f.custodio}). Motivo: «${f.motivo_llave}»`
-    : `${f.tipo === "sobre_en_custodia" ? "Custodia" : "Al abrir"} (${f.por}): sobre ${f.folio} ${COMO[f.estado!]}${f.folio_visto ? ` (${f.folio_visto})` : ""}. Motivo: «${f.motivo_sobre}»`;
+    : f.tipo === "llave_caja"
+    ? `Llave de la caja de sobres (${f.rc_por}). Motivo: «${f.rc_motivo}»`
+    : f.tipo === "llave_cajon"
+    ? `Llave del cajón de los fondos al recibir la custodia (${f.rc_por}). Motivo: «${f.rc_motivo_cajon}»`
+    : `${f.tipo === "sobre_en_custodia" ? "Custodia" : f.tipo === "sobre_caja" ? "Caja de sobres" : "Al abrir"} (${f.por}): sobre ${f.folio} ${COMO[f.estado!]}${f.folio_visto ? ` (${f.folio_visto})` : ""}. Motivo: «${f.motivo_sobre}»`;
   return {
     id: f.id, tipo: f.tipo, detalle, registradaEn: f.registrada_en,
     revision: f.r_motivo ? { motivo: f.r_motivo, revisadaPor: f.r_por!, nivel: f.r_nivel!, en: f.r_en! } : null,
@@ -194,6 +200,8 @@ export type Desglose = {
   retiros: { cuantos: number; importe: string };
   /** Entradas al fondo fijo recibidas (aumentos y reposiciones). */
   fondos: { cuantas: number; importe: string };
+  /** Salida al sobre guardado en la caja al cerrar (negativo; solo con sobres guardados). */
+  sobres: { cuantos: number; importe: string };
   /** Calculado aquí con los movimientos hasta la entrega. Debe coincidir con el esperado guardado al entregar. */
   calculado: string;
 };
@@ -288,7 +296,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   // Desglose de la bolsa: lo contado al abrir y los movimientos del turno registrados antes de la entrega.
   const [d] = await sql<{ abierto_en: Date; abierto_por: string; contado: string; cobros: number; visitas: number; importe_cobros: string;
                           cancelaciones: number; importe_cancelaciones: string; retiros: number; importe_retiros: string;
-                          fondos: number; importe_fondos: string }[]>`
+                          fondos: number; importe_fondos: string; sobres: number; importe_sobres: string }[]>`
     select t.abierto_en, u.nombre as abierto_por, c.importe::text as contado,
            (count(m.id) filter (where m.tipo = 'entrada_cobro_visita'))::int as cobros,
            coalesce(sum((select count(*) from pase_visita p join cobro_visita cv on cv.operacion_id = p.operacion_id where cv.id = m.cobro_id))
@@ -299,7 +307,9 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
            (count(m.id) filter (where m.tipo = 'salida_retiro'))::int as retiros,
            coalesce(sum(m.importe) filter (where m.tipo = 'salida_retiro'), 0)::numeric(12, 2)::text as importe_retiros,
            (count(m.id) filter (where m.tipo = 'entrada_fondo'))::int as fondos,
-           coalesce(sum(m.importe) filter (where m.tipo = 'entrada_fondo'), 0)::numeric(12, 2)::text as importe_fondos
+           coalesce(sum(m.importe) filter (where m.tipo = 'entrada_fondo'), 0)::numeric(12, 2)::text as importe_fondos,
+           (count(m.id) filter (where m.tipo = 'salida_sobre'))::int as sobres,
+           coalesce(sum(m.importe) filter (where m.tipo = 'salida_sobre'), 0)::numeric(12, 2)::text as importe_sobres
     from turno t join usuario u on u.id = t.abierto_por
     join lugar_efectivo l on l.sucursal_id = t.sucursal_id and l.tipo = 'bolsa_visitas'
     join conteo_efectivo c on c.turno_id = t.id and c.lugar_id = l.id and c.momento = 'apertura'
@@ -307,7 +317,8 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     where t.id = ${e.turno_id}
     group by t.abierto_en, u.nombre, c.importe`;
   const centavos = (v: string) => Math.round(Number(v) * 100);
-  const calculado = ((centavos(d.contado) + centavos(d.importe_cobros) + centavos(d.importe_cancelaciones) + centavos(d.importe_retiros) + centavos(d.importe_fondos)) / 100).toFixed(2);
+  const calculado = ((centavos(d.contado) + centavos(d.importe_cobros) + centavos(d.importe_cancelaciones) + centavos(d.importe_retiros) + centavos(d.importe_fondos)
+                     + centavos(d.importe_sobres)) / 100).toFixed(2);
 
   const difs = (await DIFERENCIAS(sql, [e.id])).map(aDiferencia);
   const incidencias = (await INCIDENCIAS(sql, [e.id])).map(aIncidencia);
@@ -435,7 +446,8 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
       abiertoEn: d.abierto_en, abiertoPor: d.abierto_por, contadoAlAbrir: d.contado,
       cobros: { cuantos: d.cobros, visitas: d.visitas, importe: d.importe_cobros },
       cancelaciones: { cuantas: d.cancelaciones, importe: d.importe_cancelaciones },
-      retiros: { cuantos: d.retiros, importe: d.importe_retiros }, fondos: { cuantas: d.fondos, importe: d.importe_fondos }, calculado,
+      retiros: { cuantos: d.retiros, importe: d.importe_retiros }, fondos: { cuantas: d.fondos, importe: d.importe_fondos },
+      sobres: { cuantos: d.sobres, importe: d.importe_sobres }, calculado,
     },
     fueraDeLaBolsa: ventasDelTurno(await cobrosDelTurno(sql, e.turno_id)),
     deRetiros: [...(await sql<DetalleDiferencias["deRetiros"]>`

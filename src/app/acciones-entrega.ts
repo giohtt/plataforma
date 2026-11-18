@@ -5,7 +5,7 @@
  * quién recibe, el bloqueo de cobros y el de producción se comprueban en src/lib/entregas.ts.
  */
 import { redirect } from "next/navigation";
-import { importes, leerApoyo } from "@/lib/formulario-conteo";
+import { importes, leerApoyo, leerLlaveFormulario, leerVerificacionSobres, MENSAJES_VERIFICACION } from "@/lib/formulario-conteo";
 import { obtenerBaseDatos } from "@/lib/db";
 import { cancelarEntrega, confirmarApoyo, recibirTurno, registrarEntrega, type ErrorEntrega } from "@/lib/entregas";
 import { leerEntorno } from "@/lib/entorno";
@@ -34,6 +34,11 @@ const MENSAJES: Record<ErrorEntrega | "sin_entrega", string> = {
   apoyo: "Indica si alguien te ayudó a contar y, si sí, elige a las personas de la sucursal que participaron.",
   cambio: "La entrega cambió mientras la tenías abierta. Revisa los datos actuales.",
   sin_entrega: "No tienes una entrega pendiente de recibir en esta sucursal.",
+  sobres: MENSAJES_VERIFICACION.sobres,
+  estado: MENSAJES_VERIFICACION.estado,
+  folio_visto: MENSAJES_VERIFICACION.folio_visto,
+  motivo_llave: "Indica si recibiste la llave del cajón de los fondos y, si hay un problema, escribe el motivo (de 5 a 300 caracteres).",
+  motivo_llave_caja: "Indica si recibiste la llave de la caja de sobres y, si hay un problema, escribe el motivo (de 5 a 300 caracteres).",
   bloqueado_produccion: "El cambio de turno está desactivado fuera del entorno de pruebas.",
 };
 
@@ -89,20 +94,45 @@ export async function accionRecibirTurno(previo: EstadoFormularioEntrega, datos:
   const { sesion, sql } = await inicio();
   const leer = lector(datos);
   const codigo = leer("codigo");
-  const valores = { bolsa: leer("bolsa"), cajon: leer("cajon"), aclaracion: leer("aclaracion", 400), apoyo: leer("apoyo") };
+  const { sobres, valores: vs } = leerVerificacionSobres(datos);
+  const llave = leerLlaveFormulario(datos);
+  const llaveCaja = leerLlaveFormulario(datos, "llave_caja");
+  const conCaja = leer("caja") === "si";
+  const valores = {
+    ...vs, bolsa: leer("bolsa"), cajon: leer("cajon"), aclaracion: leer("aclaracion", 400), apoyo: leer("apoyo"),
+    llave: llave.estado, motivo_llave: llave.motivo, llave_caja: llaveCaja.estado, motivo_llave_caja: llaveCaja.motivo,
+  };
   const intento = (previo?.intento ?? 0) + 1;
   const i = importes(valores);
   const a = leerApoyo(datos);
-  if (!i.ok || !a.ok) {
-    return { error: "Revisa los campos marcados.", errores: { ...(i.ok ? {} : i.errores), apoyo: a.ok ? undefined : MENSAJES.apoyo }, valores, personas: a.personas, intento };
+  const elegida = (l: { estado: string }) => l.estado === "correcta" || l.estado === "incidencia";
+  const sinLlave = conCaja && !elegida(llave);
+  const sinLlaveCaja = conCaja && !elegida(llaveCaja);
+  if (!i.ok || !a.ok || sinLlave || sinLlaveCaja) {
+    return {
+      error: "Revisa los campos marcados.",
+      errores: {
+        ...(i.ok ? {} : i.errores), apoyo: a.ok ? undefined : MENSAJES.apoyo,
+        motivo_llave: sinLlave ? MENSAJES.motivo_llave : undefined, motivo_llave_caja: sinLlaveCaja ? MENSAJES.motivo_llave_caja : undefined,
+      },
+      valores, personas: a.personas, intento,
+    };
   }
   const r = await recibirTurno(sql, sesion.usuarioId, codigo,
-    { entregaId: leer("entrega", 40), version: Number(leer("version")), conteo: i.conteo, aclaracion: valores.aclaracion, apoyo: a.apoyo },
+    { entregaId: leer("entrega", 40), version: Number(leer("version")), conteo: i.conteo, aclaracion: valores.aclaracion, apoyo: a.apoyo,
+      caja: conCaja ? { sobres, llaveCaja, llaveCajon: llave } : undefined },
     { entorno: leerEntorno() });
   if (r.ok && r.resultado === "confirmada") redirect(`/sucursales/${codigo}/turno?aviso=recibido`);
   if (r.ok) redirect(`/sucursales/${codigo}/turno/recibir?aviso=recuento`);
   if (r.error === "aclaracion") return { error: "Revisa los campos marcados.", errores: { aclaracion: MENSAJES.aclaracion }, valores, personas: a.personas, intento };
   if (r.error === "apoyo") return { error: "Revisa los campos marcados.", errores: { apoyo: MENSAJES.apoyo }, valores, personas: a.personas, intento };
+  if (r.error === "motivo_llave" || r.error === "motivo_llave_caja") {
+    return { error: "Revisa los campos marcados.", errores: { [r.error]: MENSAJES[r.error] }, valores, personas: a.personas, intento };
+  }
+  if (r.error in MENSAJES_VERIFICACION) {
+    const campo = r.sobreId ? `sobre-${r.sobreId}` : "sobres";
+    return { error: "Revisa los campos marcados.", errores: { [campo]: MENSAJES_VERIFICACION[r.error] }, valores, personas: a.personas, intento };
+  }
   return { error: MENSAJES[r.error], valores, personas: a.personas, intento };
 }
 

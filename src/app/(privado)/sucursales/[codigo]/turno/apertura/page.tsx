@@ -38,7 +38,7 @@ export default async function AperturaDesdeCierre({ params, searchParams }: Page
       ) : (
         <>
           <p className="sub">
-            Cerró <strong>{p.cierre.cerradoPor}</strong> · {conPunto(hora.format(p.cierre.cerradoEn))} Custodio nocturno: <strong>{p.cierre.custodio}</strong>
+            Cerró <strong>{p.cierre.cerradoPor}</strong> · {conPunto(hora.format(p.cierre.cerradoEn))} {p.cierre.sobresGuardados ? "Llave de la caja" : "Custodio nocturno"}: <strong>{p.cierre.custodio}</strong>
             {p.cierre.custodia ? <> · guardó los sobres en {p.cierre.custodia.ubicacion}.</> : <> · <strong>sin confirmar la custodia</strong>.</>}
             {" "}Solo datos ficticios.
           </p>
@@ -88,13 +88,13 @@ export default async function AperturaDesdeCierre({ params, searchParams }: Page
                   ))}
                 </ul>
                 <FormularioTerminarApertura codigo={codigo} entregaId={p.cierre.entregaId} version={p.cierre.version} custodio={p.cierre.custodio}
-                  sobres={p.cierre.sobres} fondos={p.cierre.fondos} />
+                  sobres={p.cierre.sobres} fondos={p.cierre.fondos} guardados={p.cierre.sobresGuardados} />
               </section>
             </>
           ) : (
             <section className="tarjeta">
               <FormularioAperturaCierre codigo={codigo} entregaId={p.cierre.entregaId} version={p.cierre.version} sobres={p.cierre.sobres} fondos={p.cierre.fondos} apoyos={p.apoyos}
-                custodioSinConfirmar={p.cierre.custodia ? null : p.cierre.custodio} />
+                custodioSinConfirmar={p.cierre.custodia ? null : p.cierre.custodio} caja={p.cierre.sobresGuardados ? p.caja : null} fuera={p.fuera} />
             </section>
           )}
         </>

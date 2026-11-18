@@ -5,6 +5,7 @@ import {
   accionAbrirDesdeCierre, accionCerrarDia, accionConfigurarCustodia, accionConfirmarCustodia, accionTerminarApertura,
 } from "@/app/acciones-cierre";
 import type { EstadoFormularioEntrega } from "@/app/acciones-entrega";
+import { Llave, Llaves, SobresFuera, VerificarSobres } from "@/components/Caja";
 import { Apoyo, Importe } from "@/components/Entrega";
 import { leerImporte } from "@/lib/datos-turno";
 
@@ -25,11 +26,16 @@ function Aviso({ estado }: { estado: EstadoFormularioEntrega }) {
  * va al sobre con su folio. Elige al custodio (o a sí misma, si también es Encargado: confirma la custodia aquí) y
  * declara si alguien ayudó. Cerrar termina el turno.
  */
-export function FormularioCierre({ codigo, turnoId, usuarioId, esperadoBolsa, contadoCajon, sobres, fondos, custodios, apoyos, configuracion }: {
+export function FormularioCierre({ codigo, turnoId, usuarioId, esperadoBolsa, contadoCajon, sobres, fondos, custodios, apoyos, configuracion, caja, fuera = [] }: {
   codigo: string; turnoId: string; usuarioId: string; esperadoBolsa: string; contadoCajon: string; sobres: Sobre[];
   fondos: { tipo: Sobre["lugar"]; monto: string }[]; custodios: Persona[]; apoyos: Persona[];
-  configuracion: { lugar: string; acceso: Persona[]; lugarFondos: string; accesoCajon: Persona[] };
+  configuracion: { lugar: string; acceso: Persona[]; lugarFondos: string; accesoCajon: Persona[]; guardados: boolean };
+  /** Sobres que ya estaban guardados en la caja (con sobres guardados). */
+  caja: Sobre[];
+  /** Entregados a Dirección sin confirmar o por devolver: no están en la caja. */
+  fuera?: Fuera[];
 }) {
+  const guardados = configuracion.guardados;
   const [estado, accion, enviando] = useActionState(accionCerrarDia, null);
   const [total, setTotal] = useState({ bolsa: estado?.valores?.bolsa ?? "", cajon: estado?.valores?.cajon ?? "" });
   const [fondo, setFondo] = useState({ bolsa: estado?.valores?.fondo_bolsa ?? "", cajon: estado?.valores?.fondo_cajon ?? "" });
@@ -101,8 +107,14 @@ export function FormularioCierre({ codigo, turnoId, usuarioId, esperadoBolsa, co
           <span className="sub">Folio del sobre: <span className="mono" data-testid="folio-cajon">{sobres.find((s) => s.lugar === "cajon_mensualidades")!.folio}</span></span>
         </fieldset>
       </div>
+      {guardados ? (
+        <p className="aviso aviso-info" data-testid="aviso-sobres-guardados">
+          Los sobres se quedan sellados en la caja con llave hasta que Dirección los recoja. Al siguiente turno pasa solo el fondo;
+          quien abra no abre los sobres.
+        </p>
+      ) : null}
       <fieldset className="campo campo-grupo" data-testid="custodia">
-        <legend>Custodia nocturna</legend>
+        <legend>{guardados ? "Custodia de la caja y la llave" : "Custodia nocturna"}</legend>
         <dl className="cuentas-lugar">
           <dt>Dónde quedan los sobres</dt>
           <dd className="dd-largo" data-testid="lugar-custodia">{configuracion.lugar}</dd>
@@ -113,12 +125,19 @@ export function FormularioCierre({ codigo, turnoId, usuarioId, esperadoBolsa, co
           <dt>Acceso al cajón</dt>
           <dd className="dd-largo">{configuracion.accesoCajon.map((p) => p.nombre).join(" · ")}</dd>
         </dl>
-        <span className="sub">Lo definió Dirección para esta sucursal y queda copiado en este cierre. El custodio guarda los sobres y la llave del cajón.</span>
-        <label htmlFor="custodio">Custodio nocturno</label>
+        <span className="sub">
+          Lo definió Dirección para esta sucursal y queda copiado en este cierre.
+          {guardados ? " La custodia guarda la llave de la caja de sobres y del cajón." : " El custodio guarda los sobres y la llave del cajón."}
+        </span>
+        <label htmlFor="custodio">{guardados ? "Custodia que se queda con la llave" : "Custodio nocturno"}</label>
         <select id="custodio" name="custodio" value={custodio} onChange={(e) => setCustodio(e.target.value)}
           aria-invalid={estado?.errores?.custodio ? true : undefined}>
-          <option value="">Elige al Encargado que recibe los sobres y la llave</option>
-          {custodios.map((c) => <option key={c.id} value={c.id}>{c.id === usuarioId ? `Yo · ${c.nombre} — cierro y custodio` : c.nombre}</option>)}
+          <option value="">{guardados ? "Elige a la custodia que nombró Dirección" : "Elige al Encargado que recibe los sobres y la llave"}</option>
+          {custodios.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.id === usuarioId ? `Yo · ${c.nombre} — ${guardados ? "cierro y me quedo con la llave" : "cierro y custodio"}` : c.nombre}
+            </option>
+          ))}
         </select>
         <span className="sub">{yo ? "Como cierras y custodias tú, confirmas la custodia aquí mismo." : "Confirma desde su cuenta dónde guardó los sobres y la llave, y verifica sello y folio de cada sobre."}</span>
         {estado?.errores?.custodio ? <span className="campo-error">{estado.errores.custodio}</span> : null}
@@ -127,7 +146,14 @@ export function FormularioCierre({ codigo, turnoId, usuarioId, esperadoBolsa, co
         <fieldset className="campo campo-grupo" data-testid="custodia-misma-persona">
           <legend>Confirmar la custodia</legend>
           <VerificarSobres estado={estado} sobres={sobres} pregunta="¿Queda cerrado, con el sello intacto y con este folio? (si no lleva sobre, no se toma en cuenta)" />
-          <Llave estado={estado} />
+          {caja.length ? (
+            <>
+              <p className="sub" data-testid="caja-anterior">Sobres que ya estaban en la caja: verifica cada uno al recibir la llave.</p>
+              <VerificarSobres estado={estado} sobres={caja} porFolio pregunta="¿Sigue en la caja, cerrado y con este folio?" />
+            </>
+          ) : null}
+          <SobresFuera fuera={fuera} />
+          {guardados ? <Llaves estado={estado} /> : <Llave estado={estado} />}
           <div className="campo">
             <label htmlFor="ubicacion">Dónde guardas los sobres y la llave del cajón</label>
             <input id="ubicacion" name="ubicacion" maxLength={120} defaultValue={estado?.valores?.ubicacion ?? configuracion.lugar}
@@ -154,80 +180,10 @@ export function FormularioCierre({ codigo, turnoId, usuarioId, esperadoBolsa, co
   );
 }
 
-/** Cajón cerrado y llave recibida, o una incidencia con motivo. */
-function Llave({ estado }: { estado: EstadoFormularioEntrega }) {
-  const [llave, setLlave] = useState(estado?.valores?.llave ?? "");
-  return (
-    <fieldset className="campo campo-grupo" data-testid="llave" aria-invalid={estado?.errores?.motivo_llave ? true : undefined}>
-      <legend>Cajón con los fondos y su llave</legend>
-      <label className="opcion-revision">
-        <input type="radio" name="llave" value="correcta" checked={llave === "correcta"} onChange={() => setLlave("correcta")} />
-        <span>Sí: el cajón quedó cerrado con los fondos separados e identificados, y tengo la llave</span>
-      </label>
-      <label className="opcion-revision">
-        <input type="radio" name="llave" value="incidencia" checked={llave === "incidencia"} onChange={() => setLlave("incidencia")} />
-        <span>Hay un problema con el cajón o la llave</span>
-      </label>
-      {llave === "incidencia" ? (
-        <div className="campo">
-          <label htmlFor="motivo_llave">Motivo de la incidencia</label>
-          <textarea id="motivo_llave" name="motivo_llave" rows={2} maxLength={300} defaultValue={estado?.valores?.motivo_llave ?? ""} />
-        </div>
-      ) : null}
-      {estado?.errores?.motivo_llave ? <span className="campo-error">{estado.errores.motivo_llave}</span> : null}
-    </fieldset>
-  );
-}
-
-/** Sello y folio de cada sobre: «Cerrado y con este folio» o una incidencia (falta, abierto, otro folio) con motivo. */
-function VerificarSobres({ estado, sobres, pregunta }: { estado: EstadoFormularioEntrega; sobres: Sobre[]; pregunta: string }) {
-  const [elegidos, setElegidos] = useState<Record<string, string>>(
-    Object.fromEntries(sobres.map((s) => [s.id, estado?.valores?.[`estado-${s.id}`] ?? ""])),
-  );
-  return (
-    <>
-      {estado?.errores?.sobres ? <p className="campo-error">{estado.errores.sobres}</p> : null}
-      {sobres.map((s) => {
-        const elegido = elegidos[s.id];
-        const error = estado?.errores?.[`sobre-${s.id}`];
-        return (
-          <fieldset key={s.id} className="campo campo-grupo" data-testid={`verificar-${s.lugar}`} aria-invalid={error ? true : undefined}>
-            <input type="hidden" name="sobre" value={s.id} />
-            <legend>{NOMBRE[s.lugar]} · sobre <span className="mono">{s.folio}</span></legend>
-            <span className="sub">{pregunta}</span>
-            {([
-              ["correcto", "Sí: cerrado, sello intacto y con este folio"],
-              ["abierto", "Llegó abierto o con el sello roto"],
-              ["otro_folio", "Trae otro folio"],
-              ["falta", "No está el sobre"],
-            ] as const).map(([v, t]) => (
-              <label key={v} className="opcion-revision">
-                <input type="radio" name={`estado-${s.id}`} value={v} checked={elegido === v} onChange={() => setElegidos({ ...elegidos, [s.id]: v })} />
-                <span>{t}</span>
-              </label>
-            ))}
-            {elegido === "otro_folio" ? (
-              <div className="campo">
-                <label htmlFor={`folio-${s.id}`}>Folio que trae el sobre</label>
-                <input id={`folio-${s.id}`} name={`folio-${s.id}`} autoComplete="off" className="mono" defaultValue={estado?.valores?.[`folio-${s.id}`] ?? ""} />
-              </div>
-            ) : null}
-            {elegido && elegido !== "correcto" ? (
-              <div className="campo">
-                <label htmlFor={`motivo-${s.id}`}>Motivo de la incidencia</label>
-                <textarea id={`motivo-${s.id}`} name={`motivo-${s.id}`} rows={2} maxLength={300} defaultValue={estado?.valores?.[`motivo-${s.id}`] ?? ""} />
-              </div>
-            ) : null}
-            {error ? <span className="campo-error">{error}</span> : null}
-          </fieldset>
-        );
-      })}
-    </>
-  );
-}
-
 /** El custodio confirma desde su cuenta dónde guardó los sobres y verifica cada uno. No ve importes. */
-export function FormularioCustodia({ codigo, entregaId, sobres, lugar }: { codigo: string; entregaId: string; sobres: Sobre[]; lugar: string }) {
+export function FormularioCustodia({ codigo, entregaId, sobres, lugar, caja, guardados, fuera = [] }: {
+  codigo: string; entregaId: string; sobres: Sobre[]; lugar: string; caja: Sobre[]; guardados: boolean; fuera?: Fuera[];
+}) {
   const [estado, accion, enviando] = useActionState(accionConfirmarCustodia, null);
   return (
     <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate data-testid="formulario-custodia">
@@ -235,7 +191,14 @@ export function FormularioCustodia({ codigo, entregaId, sobres, lugar }: { codig
       <input type="hidden" name="codigo" value={codigo} />
       <input type="hidden" name="entrega" value={entregaId} />
       <VerificarSobres estado={estado} sobres={sobres} pregunta="¿Lo recibiste cerrado y con este folio?" />
-      <Llave estado={estado} />
+      {caja.length ? (
+        <>
+          <p className="sub" data-testid="caja-anterior">Sobres que ya estaban en la caja: verifica cada uno al recibir la llave.</p>
+          <VerificarSobres estado={estado} sobres={caja} porFolio pregunta="¿Sigue en la caja, cerrado y con este folio?" />
+        </>
+      ) : null}
+      <SobresFuera fuera={fuera} />
+      {guardados ? <Llaves estado={estado} /> : <Llave estado={estado} />}
       <div className="campo">
         <label htmlFor="ubicacion">Dónde guardaste los sobres y la llave</label>
         <input id="ubicacion" name="ubicacion" maxLength={120} defaultValue={estado?.valores?.ubicacion ?? lugar}
@@ -249,10 +212,13 @@ export function FormularioCustodia({ codigo, entregaId, sobres, lugar }: { codig
 }
 
 /** Quien abre verifica los sobres y cuenta a ciegas cada lugar. */
-export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, fondos, apoyos, custodioSinConfirmar }: {
+export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, fondos, apoyos, custodioSinConfirmar, caja, fuera = [] }: {
   codigo: string; entregaId: string; version: number; sobres: Sobre[]; fondos: Fondos; apoyos: Persona[];
   /** Nombre del custodio si todavía no confirma la custodia. */
   custodioSinConfirmar: string | null;
+  /** Con sobres guardados: todos los sobres de la caja (se verifican, no se abren). null en cierres anteriores. */
+  caja: Sobre[] | null;
+  fuera?: Fuera[];
 }) {
   const [estado, accion, enviando] = useActionState(accionAbrirDesdeCierre, null);
   const [sinCustodia, setSinCustodia] = useState(estado?.valores?.sinCustodia === "si");
@@ -283,9 +249,26 @@ export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, f
           {estado?.errores?.sinCustodia ? <span className="campo-error">{estado.errores.sinCustodia}</span> : null}
         </fieldset>
       ) : null}
-      <VerificarSobres estado={estado} sobres={sobres} pregunta="¿El sobre está cerrado, con el sello intacto y con este folio?" />
+      {caja ? (
+        <>
+          <input type="hidden" name="guardados" value="si" />
+          <p className="aviso aviso-info" data-testid="aviso-caja-apertura">
+            Los sobres se quedan sellados en la caja hasta que Dirección los recoja: no los abras. Verifica cada uno y cuenta solo el fondo.
+          </p>
+          {caja.length ? (
+            <VerificarSobres estado={estado} sobres={caja} porFolio pregunta="¿Está en la caja, cerrado, con el sello intacto y con este folio?" />
+          ) : <p className="sub">La caja no tiene sobres guardados.</p>}
+          <SobresFuera fuera={fuera} />
+          <Llaves estado={estado} />
+          <ConteoFondo estado={estado} fondos={fondos} etiqueta="que cuentas" prefijo="apertura" />
+        </>
+      ) : (
+        <>
+          <VerificarSobres estado={estado} sobres={sobres} pregunta="¿El sobre está cerrado, con el sello intacto y con este folio?" />
+          <ConteoSeparado estado={estado} sobres={sobres} fondos={fondos} etiqueta="que cuentas" prefijo="apertura" />
+        </>
+      )}
       <p className="sub">Si un sobre no llega cerrado y con su folio, queda por revisar aunque el efectivo cuadre.</p>
-      <ConteoSeparado estado={estado} sobres={sobres} fondos={fondos} etiqueta="que cuentas" prefijo="apertura" />
       <Apoyo estado={estado} candidatos={apoyos} etapa="a contar al abrir" />
       <p className="sub">Cuenta sin ver el cierre. Si coincide, el turno abre con lo que cuentas; si no, se pide recontar con el custodio.</p>
       <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Abriendo…" : "Abrir el turno"}</button>
@@ -293,7 +276,27 @@ export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, f
   );
 }
 
+type Fuera = Sobre & { estado: "por_confirmar" | "por_devolver"; entrego: string; recibe: string };
 type Fondos = { lugar: Sobre["lugar"]; monto: string; tieneSobre: boolean }[];
+/** Con sobres guardados: en cada lugar se cuenta solo el fondo (los sobres siguen en la caja). */
+function ConteoFondo({ estado, fondos, etiqueta, prefijo }: { estado: EstadoFormularioEntrega; fondos: Fondos; etiqueta: string; prefijo: string }) {
+  return (
+    <div className="lugares-turno">
+      {(["bolsa_visitas", "cajon_mensualidades"] as const).map((l) => {
+        const clave = l === "bolsa_visitas" ? "bolsa" : "cajon";
+        const f = fondos.find((x) => x.lugar === l);
+        return (
+          <fieldset key={l} className="campo campo-grupo" data-testid={`${prefijo}-${clave}`}>
+            <legend>{NOMBRE[l]}</legend>
+            <Importe estado={estado} campo={`fondo_${clave}`}
+              etiqueta={f && Number(f.monto) ? `Fondo ${etiqueta} (fondo de ${pesos.format(Number(f.monto))})` : `Efectivo ${etiqueta} (sin fondo fijo)`} />
+            <input type="hidden" name={`sobre_${clave}`} value="0" />
+          </fieldset>
+        );
+      })}
+    </div>
+  );
+}
 /** Fondo y sobre de cada lugar, por separado. Un lugar sin fondo o sin sobre no pide ese campo (va en 0). */
 function ConteoSeparado({ estado, sobres, fondos, etiqueta, prefijo }: { estado: EstadoFormularioEntrega; sobres: Sobre[]; fondos: Fondos; etiqueta: string; prefijo: string }) {
   return (
@@ -324,8 +327,8 @@ function ConteoSeparado({ estado, sobres, fondos, etiqueta, prefijo }: { estado:
 }
 
 /** Si no coincidió: recuento con el custodio, o abrir con lo contado con motivo obligatorio. */
-export function FormularioTerminarApertura({ codigo, entregaId, version, custodio, sobres, fondos }: {
-  codigo: string; entregaId: string; version: number; custodio: string; sobres: Sobre[]; fondos: Fondos;
+export function FormularioTerminarApertura({ codigo, entregaId, version, custodio, sobres, fondos, guardados = false }: {
+  codigo: string; entregaId: string; version: number; custodio: string; sobres: Sobre[]; fondos: Fondos; guardados?: boolean;
 }) {
   const [estado, accion, enviando] = useActionState(accionTerminarApertura, null);
   const [recontaron, setRecontaron] = useState(estado?.valores?.recontaron ?? "");
@@ -348,7 +351,9 @@ export function FormularioTerminarApertura({ codigo, entregaId, version, custodi
         {estado?.errores?.recontaron ? <span className="campo-error">{estado.errores.recontaron}</span> : null}
       </fieldset>
       {recontaron === "si" ? (
-        <ConteoSeparado estado={estado} sobres={sobres} fondos={fondos} etiqueta="tras recontar" prefijo="recuento" />
+        guardados
+          ? <ConteoFondo estado={estado} fondos={fondos} etiqueta="tras recontar" prefijo="recuento" />
+          : <ConteoSeparado estado={estado} sobres={sobres} fondos={fondos} etiqueta="tras recontar" prefijo="recuento" />
       ) : null}
       {recontaron ? (
         <div className="campo">
@@ -366,9 +371,10 @@ export function FormularioTerminarApertura({ codigo, entregaId, version, custodi
 
 /** Dirección define el lugar de custodia y quién tiene acceso. Nada se marca por omisión. */
 export function FormularioConfigurarCustodia({ codigo, personas, vigente }: {
-  codigo: string; personas: Persona[]; vigente: { lugar: string; acceso: string[]; lugarFondos: string | null; accesoCajon: string[] } | null;
+  codigo: string; personas: Persona[]; vigente: { lugar: string; acceso: string[]; lugarFondos: string | null; accesoCajon: string[]; custodias: string[] } | null;
 }) {
   const [estado, accion, enviando] = useActionState(accionConfigurarCustodia, null);
+  const marcadasCustodias = estado ? (estado.valores?.custodias ?? "").split(",").filter(Boolean) : (vigente?.custodias ?? []);
   const marcados = estado?.personas ?? vigente?.acceso ?? [];
   const marcadosCajon = estado ? (estado.valores?.acceso_cajon ?? "").split(",").filter(Boolean) : (vigente?.accesoCajon ?? []);
   return (
@@ -407,6 +413,20 @@ export function FormularioConfigurarCustodia({ codigo, personas, vigente }: {
           </label>
         ))}
         {estado?.errores?.acceso_cajon ? <span className="campo-error">{estado.errores.acceso_cajon}</span> : null}
+      </fieldset>
+      <fieldset className="campo campo-grupo" aria-invalid={estado?.errores?.custodias ? true : undefined} data-testid="custodias">
+        <legend>Custodias: quién puede quedarse con la llave de la caja</legend>
+        <span className="sub">
+          Al cerrar, una de ellas se queda con la llave; la llave pasa con el turno. Los sobres se quedan sellados en la caja hasta
+          que Dirección los recoja. Nadie queda marcada por omisión.
+        </span>
+        {personas.map((p) => (
+          <label key={p.id} className="opcion-revision">
+            <input type="checkbox" name="custodias" value={p.id} defaultChecked={marcadasCustodias.includes(p.id)} />
+            <span>{p.nombre}</span>
+          </label>
+        ))}
+        {estado?.errores?.custodias ? <span className="campo-error">{estado.errores.custodias}</span> : null}
       </fieldset>
       <p className="sub">Cada cierre guarda la configuración vigente en ese momento. Los cambios no alteran cierres anteriores.</p>
       <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Guardando…" : "Guardar la custodia"}</button>

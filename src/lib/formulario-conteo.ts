@@ -21,3 +21,35 @@ export function importes(valores: { bolsa: string; cajon: string }) {
   };
 }
 
+
+/** Sello y folio de cada sobre (campos sobre, estado-<id>, folio-<id>, motivo-<id>), con sus valores para repintar. */
+export function leerVerificacionSobres(datos: FormData, max = 80) {
+  const leer = (campo: string, n: number) => {
+    const v = datos.get(campo);
+    return typeof v === "string" ? v.slice(0, n) : "";
+  };
+  const ids = datos.getAll("sobre").filter((s): s is string => typeof s === "string").slice(0, max).map((s) => s.slice(0, 40));
+  const valores: Record<string, string> = {};
+  const sobres = ids.map((id) => {
+    const v = { sobreId: id, estado: leer(`estado-${id}`, 30), folioVisto: leer(`folio-${id}`, 40), motivo: leer(`motivo-${id}`, 400) };
+    Object.assign(valores, { [`estado-${id}`]: v.estado, [`folio-${id}`]: v.folioVisto, [`motivo-${id}`]: v.motivo });
+    return v;
+  });
+  return { sobres, valores };
+}
+
+/** Una llave («correcta» o «incidencia» con motivo): «llave» es la del cajón de los fondos; «llave_caja», la de la caja de sobres. */
+export function leerLlaveFormulario(datos: FormData, campo: "llave" | "llave_caja" = "llave") {
+  const v = (c: string, n: number) => {
+    const x = datos.get(c);
+    return typeof x === "string" ? x.slice(0, n) : "";
+  };
+  return { estado: v(campo, 30), motivo: v(`motivo_${campo}`, 400) };
+}
+
+export const MENSAJES_VERIFICACION: Record<string, string> = {
+  sobres: "Verifica cada sobre de la caja.",
+  estado: "Indica cómo está el sobre.",
+  folio_visto: "Escribe el folio que trae el sobre.",
+  motivo: "Escribe el motivo (de 5 a 300 caracteres).",
+};

@@ -27,14 +27,15 @@ const MENSAJES_CIERRE: Record<ErrorCierre, string> = {
   cancelaciones_pendientes: "Hay solicitudes de cancelación pendientes en este turno: deben resolverse antes de cerrar.",
   sin_configuracion: "Dirección todavía no define dónde se guardan los sobres ni quién tiene acceso en esta sucursal.",
   sin_preparacion: "Genera los folios de los sobres antes de cerrar.",
-  custodio: "Elige al Encargado de la sucursal que queda como custodio nocturno.",
+  custodio: "Elige quién se queda con los sobres y la llave (una de las custodias que nombró Dirección).",
   nota: "La nota debe tener entre 5 y 300 caracteres, o déjala vacía.",
   apoyo: "Indica si alguien te ayudó a contar y, si sí, elige a las personas de la sucursal que participaron.",
   cambio: "El turno cambió mientras tenías la pantalla abierta. Revisa los datos actuales.",
   fondo: "El fondo apartado no puede ser mayor que lo contado ni que el fondo vigente.",
   fondo_primero: "Primero completa el fondo: solo lo que sobra va al sobre.",
   ubicacion: "Escribe dónde guardas los sobres y la llave (de 5 a 120 caracteres).",
-  motivo_llave: "Si el cajón o la llave tienen un problema, escribe el motivo (de 5 a 300 caracteres).",
+  motivo_llave: "Indica si el cajón de los fondos quedó cerrado y tienes su llave; si hay un problema, escribe el motivo (de 5 a 300 caracteres).",
+  motivo_llave_caja: "Indica si la caja de sobres quedó cerrada y tienes su llave; si hay un problema, escribe el motivo (de 5 a 300 caracteres).",
   sobres: "Verifica cada sobre.",
   estado: "Indica cómo quedó cada sobre.",
   folio_visto: "Escribe el folio que trae el sobre.",
@@ -56,6 +57,8 @@ const MENSAJES_APERTURA: Record<ErrorApertura, string> = {
   custodia_pendiente: "El custodio todavía no confirma la custodia. Si está disponible, que confirme primero desde su cuenta; si no, marca que no está disponible y escribe el motivo.",
   motivo_custodia: "Escribe por qué abres sin la confirmación del custodio (de 5 a 300 caracteres).",
   fondo: "Revisa el fondo y el sobre de cada lugar.",
+  motivo_llave: "Indica si recibiste la llave del cajón de los fondos y, si hay un problema, escribe el motivo (de 5 a 300 caracteres).",
+  motivo_llave_caja: "Indica si recibiste la llave de la caja de sobres y, si hay un problema, escribe el motivo (de 5 a 300 caracteres).",
   bloqueado_produccion: "La apertura está desactivada fuera del entorno de pruebas.",
 };
 
@@ -73,7 +76,8 @@ const lector = (datos: FormData) => (campo: string, max = 30) => {
 /** Sello y folio de cada sobre: campos sobre-<id>, folio-<id> y motivo-<id>. */
 function leerSobres(datos: FormData): { sobres: VerificacionDatos[]; valores: Record<string, string> } {
   const leer = lector(datos);
-  const ids = datos.getAll("sobre").filter((s): s is string => typeof s === "string").slice(0, 2).map((s) => s.slice(0, 40));
+  // Los dos sobres del cierre más los que ya estaban guardados en la caja.
+  const ids = datos.getAll("sobre").filter((s): s is string => typeof s === "string").slice(0, 80).map((s) => s.slice(0, 40));
   const valores: Record<string, string> = {};
   const sobres = ids.map((id) => {
     const v = { sobreId: id, estado: leer(`estado-${id}`), folioVisto: leer(`folio-${id}`, 40), motivo: leer(`motivo-${id}`, 400) };
@@ -82,10 +86,15 @@ function leerSobres(datos: FormData): { sobres: VerificacionDatos[]; valores: Re
   });
   return { sobres, valores };
 }
-/** Llave del cajón: «correcta» o «incidencia» con motivo. */
+/** Llave del cajón de los fondos: «correcta» o «incidencia» con motivo. */
 function leerLlave(datos: FormData) {
   const leer = lector(datos);
   return { estado: leer("llave") || "", motivo: leer("motivo_llave", 400) };
+}
+/** Llave de la caja de sobres, por separado. */
+function leerLlaveCaja(datos: FormData) {
+  const leer = lector(datos);
+  return { estado: leer("llave_caja") || "", motivo: leer("motivo_llave_caja", 400) };
 }
 /** Fondo y sobre de cada lugar (fondo_bolsa, sobre_bolsa, fondo_cajon, sobre_cajon); el total es la suma. */
 function leerSeparado(valores: Record<string, string>) {
@@ -133,8 +142,9 @@ export async function accionCerrarDia(previo: EstadoFormularioEntrega, datos: Fo
   const codigo = leer("codigo");
   const { sobres, valores: vs } = leerSobres(datos);
   const llave = leerLlave(datos);
+  const llaveCaja = leerLlaveCaja(datos);
   const valores = {
-    ...vs, bolsa: leer("bolsa"), cajon: leer("cajon"), fondo_bolsa: leer("fondo_bolsa"), fondo_cajon: leer("fondo_cajon"),
+    ...vs, llave_caja: llaveCaja.estado, motivo_llave_caja: llaveCaja.motivo, bolsa: leer("bolsa"), cajon: leer("cajon"), fondo_bolsa: leer("fondo_bolsa"), fondo_cajon: leer("fondo_cajon"),
     custodio: leer("custodio", 40), nota: leer("nota", 400), apoyo: leer("apoyo"), ubicacion: leer("ubicacion", 200), llave: llave.estado, motivo_llave: llave.motivo,
   };
   const intento = (previo?.intento ?? 0) + 1;
@@ -154,7 +164,7 @@ export async function accionCerrarDia(previo: EstadoFormularioEntrega, datos: Fo
   const mismaPersona = valores.custodio === sesion.usuarioId;
   const r = await cerrarDia(sql, sesion.usuarioId, codigo, {
     turnoId: leer("turno", 40), conteo: i.conteo, fondos: f.conteo, custodio: valores.custodio, nota: valores.nota, apoyo: a.apoyo,
-    custodia: mismaPersona ? { ubicacion: valores.ubicacion, sobres, llave } : undefined,
+    custodia: mismaPersona ? { ubicacion: valores.ubicacion, sobres, llave, llaveCaja } : undefined,
   }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/turno?aviso=cerrado${mismaPersona ? "-custodia" : ""}`);
   const marcados = "Revisa los campos marcados.";
@@ -164,7 +174,7 @@ export async function accionCerrarDia(previo: EstadoFormularioEntrega, datos: Fo
   if (r.error in MENSAJE_SOBRE) {
     return { error: marcados, errores: { [r.sobreId ? `sobre-${r.sobreId}` : "sobres"]: MENSAJES_CIERRE[r.error] }, valores, personas: a.personas, intento };
   }
-  if (["nota", "custodio", "apoyo", "ubicacion", "motivo_llave"].includes(r.error)) {
+  if (["nota", "custodio", "apoyo", "ubicacion", "motivo_llave", "motivo_llave_caja"].includes(r.error)) {
     return { error: marcados, errores: { [r.error]: MENSAJES_CIERRE[r.error] }, valores, personas: a.personas, intento };
   }
   return { error: MENSAJES_CIERRE[r.error], valores, personas: a.personas, intento };
@@ -179,15 +189,18 @@ export async function accionConfirmarCustodia(previo: EstadoFormularioEntrega, d
   const { sobres, valores } = leerSobres(datos);
   const ubicacion = leer("ubicacion", 200);
   const llave = leerLlave(datos);
+  const llaveCaja = leerLlaveCaja(datos);
   const intento = (previo?.intento ?? 0) + 1;
-  const todos = { ...valores, ubicacion, llave: llave.estado, motivo_llave: llave.motivo };
+  const todos = { ...valores, ubicacion, llave: llave.estado, motivo_llave: llave.motivo, llave_caja: llaveCaja.estado, motivo_llave_caja: llaveCaja.motivo };
   if (llave.estado !== "correcta" && llave.estado !== "incidencia") {
     return { error: "Revisa los campos marcados.", errores: { motivo_llave: "Indica si el cajón quedó cerrado y recibiste la llave." }, valores: todos, intento };
   }
-  const r = await confirmarCustodia(sql, sesion.usuarioId, codigo, { entregaId: leer("entrega", 40), ubicacion, sobres, llave }, { entorno: leerEntorno() });
+  const r = await confirmarCustodia(sql, sesion.usuarioId, codigo, { entregaId: leer("entrega", 40), ubicacion, sobres, llave, llaveCaja }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/custodia?aviso=confirmada&incidencias=${r.incidencias}`);
   if (r.error === "ubicacion") return { error: "Revisa los campos marcados.", errores: { ubicacion: "Escribe dónde guardaste los sobres (de 5 a 120 caracteres)." }, valores: todos, intento };
-  if (r.error === "motivo_llave") return { error: "Revisa los campos marcados.", errores: { motivo_llave: MENSAJES_CIERRE.motivo_llave }, valores: todos, intento };
+  if (r.error === "motivo_llave" || r.error === "motivo_llave_caja") {
+    return { error: "Revisa los campos marcados.", errores: { [r.error]: MENSAJES_CIERRE[r.error] }, valores: todos, intento };
+  }
   if (r.error in MENSAJE_SOBRE) {
     const campo = r.sobreId ? `sobre-${r.sobreId}` : "sobres";
     return { error: "Revisa los campos marcados.", errores: { [campo]: MENSAJE_SOBRE[r.error as keyof typeof MENSAJE_SOBRE] }, valores: todos, intento };
@@ -210,14 +223,29 @@ export async function accionAbrirDesdeCierre(previo: EstadoFormularioEntrega, da
   const { sobres, valores: vs } = leerSobres(datos);
   const valores = { ...vs, ...CAMPOS_SEPARADOS(leer), apoyo: leer("apoyo"), sinCustodia: leer("sin_custodia"), motivoSinCustodia: leer("motivo_sin_custodia", 400) };
   const intento = (previo?.intento ?? 0) + 1;
+  const guardados = leer("guardados") === "si";
+  const llave = leerLlave(datos);
+  const llaveCaja = leerLlaveCaja(datos);
+  Object.assign(valores, { llave: llave.estado, motivo_llave: llave.motivo, llave_caja: llaveCaja.estado, motivo_llave_caja: llaveCaja.motivo });
   const i = leerSeparado(valores);
   const a = leerApoyo(datos);
-  if (!i.ok || !a.ok) {
-    return { error: "Revisa los campos marcados.", errores: { ...(i.ok ? {} : i.errores), apoyo: a.ok ? undefined : MENSAJES_APERTURA.apoyo }, valores, personas: a.personas, intento };
+  const elegida = (l: { estado: string }) => l.estado === "correcta" || l.estado === "incidencia";
+  const sinLlave = guardados && !elegida(llave);
+  const sinLlaveCaja = guardados && !elegida(llaveCaja);
+  if (!i.ok || !a.ok || sinLlave || sinLlaveCaja) {
+    return {
+      error: "Revisa los campos marcados.",
+      errores: {
+        ...(i.ok ? {} : i.errores), apoyo: a.ok ? undefined : MENSAJES_APERTURA.apoyo,
+        motivo_llave: sinLlave ? MENSAJES_APERTURA.motivo_llave : undefined, motivo_llave_caja: sinLlaveCaja ? MENSAJES_APERTURA.motivo_llave_caja : undefined,
+      },
+      valores, personas: a.personas, intento,
+    };
   }
   const r = await abrirDesdeCierre(sql, sesion.usuarioId, codigo,
     { entregaId: leer("entrega", 40), version: Number(leer("version")), sobres, conteo: i.conteo, fondos: i.fondos, apoyo: a.apoyo,
-      sinCustodia: valores.sinCustodia === "si" ? { motivo: valores.motivoSinCustodia } : null }, { entorno: leerEntorno() });
+      sinCustodia: valores.sinCustodia === "si" ? { motivo: valores.motivoSinCustodia } : null,
+      llave: guardados ? llave : undefined, llaveCaja: guardados ? llaveCaja : undefined }, { entorno: leerEntorno() });
   if (r.ok && r.resultado === "abierto") redirect(`/sucursales/${codigo}/turno?aviso=abierto-cierre`);
   if (r.ok) redirect(`/sucursales/${codigo}/turno/apertura?aviso=recuento`);
   if (r.error in MENSAJE_SOBRE) {
@@ -225,6 +253,9 @@ export async function accionAbrirDesdeCierre(previo: EstadoFormularioEntrega, da
     return { error: "Revisa los campos marcados.", errores: { [campo]: MENSAJE_SOBRE[r.error as keyof typeof MENSAJE_SOBRE] }, valores, personas: a.personas, intento };
   }
   if (r.error === "apoyo") return { error: "Revisa los campos marcados.", errores: { apoyo: MENSAJES_APERTURA.apoyo }, valores, personas: a.personas, intento };
+  if (r.error === "motivo_llave" || r.error === "motivo_llave_caja") {
+    return { error: "Revisa los campos marcados.", errores: { [r.error]: MENSAJES_APERTURA[r.error] }, valores, personas: a.personas, intento };
+  }
   if (r.error === "custodia_pendiente" || r.error === "motivo_custodia") {
     return { error: "Revisa los campos marcados.", errores: { sinCustodia: MENSAJES_APERTURA[r.error] }, valores, personas: a.personas, intento };
   }
@@ -264,15 +295,17 @@ export async function accionConfigurarCustodia(previo: EstadoFormularioEntrega, 
   const codigo = leer("codigo");
   const acceso = datos.getAll("acceso").filter((p): p is string => typeof p === "string").slice(0, 10).map((p) => p.slice(0, 40));
   const accesoCajon = datos.getAll("acceso_cajon").filter((p): p is string => typeof p === "string").slice(0, 10).map((p) => p.slice(0, 40));
-  const valores = { lugar: leer("lugar", 200), lugar_fondos: leer("lugar_fondos", 200), acceso_cajon: accesoCajon.join(",") };
+  const custodias = datos.getAll("custodias").filter((p): p is string => typeof p === "string").slice(0, 10).map((p) => p.slice(0, 40));
+  const valores = { lugar: leer("lugar", 200), lugar_fondos: leer("lugar_fondos", 200), acceso_cajon: accesoCajon.join(","), custodias: custodias.join(",") };
   const intento = (previo?.intento ?? 0) + 1;
   const r = await configurarCustodia(sql, sesion.usuarioId, codigo,
-    { lugar: valores.lugar, acceso, lugarFondos: valores.lugar_fondos, accesoCajon }, { entorno: leerEntorno() });
+    { lugar: valores.lugar, acceso, lugarFondos: valores.lugar_fondos, accesoCajon, custodias }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/custodia/configurar?aviso=guardada`);
   if (r.error === "lugar") return { error: "Revisa los campos marcados.", errores: { lugar: "Escribe el lugar (de 5 a 120 caracteres)." }, valores, personas: acceso, intento };
   if (r.error === "acceso") return { error: "Revisa los campos marcados.", errores: { acceso: "Elige de 1 a 10 personas con asignación en la sucursal." }, valores, personas: acceso, intento };
   if (r.error === "lugar_fondos") return { error: "Revisa los campos marcados.", errores: { lugar_fondos: "Escribe dónde quedan los fondos (de 5 a 120 caracteres)." }, valores, personas: acceso, intento };
   if (r.error === "acceso_cajon") return { error: "Revisa los campos marcados.", errores: { acceso_cajon: "Elige de 1 a 10 personas con asignación en la sucursal." }, valores, personas: acceso, intento };
+  if (r.error === "custodias") return { error: "Revisa los campos marcados.", errores: { custodias: "Elige de 1 a 10 custodias con asignación en la sucursal." }, valores, personas: acceso, intento };
   const OTROS: Record<string, string> = {
     no_encontrada: "No encontrada.",
     sin_permiso: "Solo Dirección con asignación en la sucursal define la custodia.",

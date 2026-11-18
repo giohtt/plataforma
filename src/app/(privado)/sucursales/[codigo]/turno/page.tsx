@@ -12,6 +12,7 @@ import { leerEntorno } from "@/lib/entorno";
 import { requerirSesion } from "@/lib/sesion-servidor";
 import { resumenAccesosTurno } from "@/lib/accesos";
 import { tienePermiso } from "@/lib/permisos";
+import { resumenCaja } from "@/lib/recolecciones";
 import { retirosDelTurno } from "@/lib/retiros";
 import { estadoTurno, type TipoLugar } from "@/lib/turnos";
 import { ventasDelTurno, type Grupo } from "@/lib/ventas";
@@ -39,6 +40,7 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
   const recibida = t ? await entregaRecibida(sql, t.id) : null;
   const retiros = t ? await retirosDelTurno(sql, t.id) : [];
   const cierre = t ? null : await cierrePendiente(sql, e.sucursal.id);
+  const caja = await resumenCaja(sql, e.sucursal.id);
   const puedeCerrar = t && !enCurso && leerEntorno() !== "produccion" && !e.sucursal.inactiva
     && t.lugares.every((l) => l.responsableId === sesion.usuarioId)
     && (await tienePermiso(sql, sesion.usuarioId, "turno.cerrar", e.sucursal.id));
@@ -86,13 +88,27 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
         </p>
       ) : null}
       {aviso === "cerrado" && cierre ? (
-        <p className="aviso aviso-ok" role="status">Turno cerrado. Los sobres y la llave del cajón quedan con {cierre.custodio}, que confirma la custodia desde su cuenta.</p>
+        <p className="aviso aviso-ok" role="status">
+          Turno cerrado. {cierre.sobresGuardados ? "Los sobres quedan sellados en la caja; la llave" : "Los sobres y la llave del cajón"} quedan con {cierre.custodio}, que confirma la custodia desde su cuenta.
+        </p>
       ) : null}
       {aviso === "cerrado-custodia" && cierre ? (
-        <p className="aviso aviso-ok" role="status">Turno cerrado. Cerraste y custodias tú: los sobres y la llave quedan bajo tu custodia y el historial lo indica.</p>
+        <p className="aviso aviso-ok" role="status">
+          Turno cerrado. Cerraste y te quedas con la llave: {cierre.sobresGuardados ? "los sobres quedan sellados en la caja bajo tu custodia" : "los sobres y la llave quedan bajo tu custodia"} y el historial lo indica.
+        </p>
       ) : null}
       {aviso === "abierto-cierre" && recibida ? <p className="aviso aviso-ok" role="status">Turno abierto desde el cierre. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
       {aviso === "recibido" && recibida ? <p className="aviso aviso-ok" role="status">Turno recibido. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
+      {caja.sobres || caja.porConfirmar || caja.porDevolver ? (
+        <p className={caja.conAviso ? "aviso aviso-error" : "aviso aviso-info"} data-testid="resumen-caja">
+          Caja de sobres: {caja.sobres} {caja.sobres === 1 ? "sobre guardado" : "sobres guardados"}
+          {caja.masAntiguo !== null ? ` · el más antiguo lleva ${caja.masAntiguo} ${caja.masAntiguo === 1 ? "día" : "días"}` : ""}
+          {caja.conAviso ? ` · ${caja.conAviso} con 8 días o más: avisa a Dirección para recogerlos` : ""}
+          {caja.porConfirmar ? ` · ${caja.porConfirmar} entregados a Dirección por confirmar (fuera de la caja)` : ""}
+          {caja.porDevolver ? ` · ${caja.porDevolver} por devolver a la caja` : ""}.{" "}
+          <Link href={`/sucursales/${codigo}/recoleccion`} data-testid="ir-recoleccion">Ver la caja</Link>
+        </p>
+      ) : null}
 
       {t ? (
         <>
@@ -380,10 +396,10 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
         </>
       ) : cierre ? (
         <section className="tarjeta" aria-labelledby="t-cerrado" data-testid="turno-cerrado">
-          <h2 id="t-cerrado" className="titulo-seccion">Turno cerrado · sobres en custodia</h2>
+          <h2 id="t-cerrado" className="titulo-seccion">{cierre.sobresGuardados ? "Turno cerrado · sobres en la caja" : "Turno cerrado · sobres en custodia"}</h2>
           <p>Cerró <strong>{cierre.cerradoPor}</strong> · {hora.format(cierre.cerradoEn)}</p>
           <dl className="cuentas-lugar">
-            <dt>Custodio nocturno</dt>
+            <dt>{cierre.sobresGuardados ? "Llave de la caja" : "Custodio nocturno"}</dt>
             <dd>{cierre.custodio}</dd>
             <dt>Custodia</dt>
             <dd className="dd-largo" data-testid="estado-custodia">

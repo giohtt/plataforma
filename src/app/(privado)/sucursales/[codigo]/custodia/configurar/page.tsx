@@ -31,6 +31,7 @@ export default async function ConfigurarCustodia({ params, searchParams }: PageP
             vigente={p.vigente ? {
               lugar: p.vigente.lugar, acceso: p.vigente.acceso.map((a) => a.id),
               lugarFondos: p.vigente.lugarFondos, accesoCajon: (p.vigente.accesoCajon ?? []).map((a) => a.id),
+              custodias: (p.vigente.custodias ?? []).map((a) => a.id),
             } : null} />
         </section>
       )}
@@ -42,6 +43,7 @@ export default async function ConfigurarCustodia({ params, searchParams }: PageP
               <li key={c.id}>
                 {hora.format(c.en)} · {c.configuradaPor} · <strong>{c.lugar}</strong> · acceso: {c.acceso.map((a) => a.nombre).join(", ")}
                 {c.lugarFondos ? <> · fondos: <strong>{c.lugarFondos}</strong> · acceso al cajón: {(c.accesoCajon ?? []).map((a) => a.nombre).join(", ")}</> : " · sin fondos ni acceso al cajón"}
+                {c.custodias ? <> · custodias: <strong>{c.custodias.map((a) => a.nombre).join(", ")}</strong></> : " · custodia del Encargado (sin custodias nombradas)"}
                 {i === 0 ? " · vigente" : ""}
               </li>
             ))}
