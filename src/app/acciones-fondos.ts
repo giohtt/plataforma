@@ -31,8 +31,9 @@ const OTROS: Record<string, string> = {
   bloqueado_produccion: "Los fondos están desactivados fuera del entorno de pruebas.",
   no_pendiente: "Esta entrada ya no está pendiente.",
   sin_turno: "Se recibe con un turno abierto: abre el turno primero.",
+  entrega_en_curso: "Hay un cambio de turno pendiente o en recuento: confírmalo o cancélalo antes de recibir el fondo.",
   no_puedes: "Confirma la responsable vigente del lugar; si ella entregó, otra persona autorizada (Encargado, Administración o Dirección).",
-  no_coincide: "Lo que recibiste no coincide con lo registrado. No se aplicó: aclara con quien entrega; puede cancelar y registrar de nuevo.",
+  no_coincide: "Lo que recibiste no coincide con lo registrado. No se aplicó, pero quedó constancia de tu conteo: aclara con quien entrega; puede cancelar y registrar de nuevo.",
 };
 
 export async function accionCambiarMontoFondo(previo: EstadoFormularioEntrega, datos: FormData): Promise<EstadoFormularioEntrega> {

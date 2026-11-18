@@ -30,6 +30,8 @@ export type EntradaFondo = {
   puedoConfirmar: boolean;
   /** Esta cuenta la registró y puede cancelarla mientras está pendiente. */
   puedoCancelar: boolean;
+  /** Confirmaciones que no coincidieron: quién, cuándo y cuánto declaró recibir. */
+  intentos: { por: string; en: Date; declarado: string }[];
 };
 export type CambioFondo = {
   id: string; lugar: TipoLugar; anterior: string; monto: string; origen: "entrega_persona" | "excedente_cierre" | null;
@@ -76,6 +78,9 @@ export async function pantallaFondos(sql: Sql, usuarioId: string, codigo: string
            x.registrada_en, x.estado, r.nombre as recibida_por, x.resuelta_en, x.motivo_cancelacion
     from entrada_fondo x join lugar_efectivo l on l.id = x.lugar_id join usuario u on u.id = x.entrega left join usuario r on r.id = x.recibida_por
     where x.sucursal_id = ${s.id} order by x.registrada_en desc limit 100`;
+  const intentos = filas.length ? await sql<{ entrada_id: string; por: string; en: Date; declarado: string }[]>`
+    select i.entrada_id, u.nombre as por, i.en, i.declarado::text as declarado
+    from intento_entrada_fondo i join usuario u on u.id = i.por where i.entrada_id in ${sql(filas.map((f) => f.id))} order by i.en` : [];
   const entradas: EntradaFondo[] = [];
   for (const f of filas) {
     entradas.push({
@@ -83,6 +88,7 @@ export async function pantallaFondos(sql: Sql, usuarioId: string, codigo: string
       registradaEn: f.registrada_en, estado: f.estado, recibidaPor: f.recibida_por, resueltaEn: f.resuelta_en, motivoCancelacion: f.motivo_cancelacion,
       puedoConfirmar: f.estado === "pendiente" && (await puedeConfirmar(sql, usuarioId, { sucursal_id: f.sucursal_id, lugar_id: f.lugar_id, entrega: f.entrega_id })),
       puedoCancelar: f.estado === "pendiente" && f.entrega_id === usuarioId,
+      intentos: intentos.filter((i) => i.entrada_id === f.id).map((i) => ({ por: i.por, en: i.en, declarado: i.declarado })),
     });
   }
   const cambios = await sql<CambioFondo[]>`
@@ -195,11 +201,14 @@ export async function registrarReposicion(
   });
 }
 
-export type ErrorConfirmacion = "no_encontrada" | "no_pendiente" | "sin_turno" | "no_puedes" | "importe" | "no_coincide" | "bloqueado_produccion";
+export type ErrorConfirmacion =
+  | "no_encontrada" | "no_pendiente" | "sin_turno" | "entrega_en_curso" | "no_puedes" | "importe" | "no_coincide" | "bloqueado_produccion";
 
 /**
- * Quien recibe confirma desde su cuenta cuánto recibió. Si no coincide con lo registrado, no se aplica: se aclara con
- * quien entrega (que puede cancelar y registrar de nuevo). Lo recibido entra al efectivo del lugar en el turno.
+ * Quien recibe confirma desde su cuenta cuánto recibió. Si no coincide con lo registrado, no se aplica pero el intento
+ * queda guardado (cuenta, hora e importe declarado); se aclara con quien entrega, que puede cancelar y registrar de
+ * nuevo. Lo recibido entra al efectivo del lugar en el turno. Con un cambio de turno pendiente o en recuento no se
+ * confirma: cambiaría el esperado de una entrega ya contada.
  */
 export async function confirmarEntradaFondo(
   sql: Sql, usuarioId: string, codigo: string, datos: { entradaId: string; recibido: string }, { entorno }: { entorno: Entorno },
@@ -218,8 +227,18 @@ export async function confirmarEntradaFondo(
     if (!e) return { ok: false as const, error: "no_encontrada" as const };
     if (e.estado !== "pendiente") return { ok: false as const, error: "no_pendiente" as const };
     if (!t) return { ok: false as const, error: "sin_turno" as const };
+    // El turno ya está bloqueado: una entrega no puede registrarse a la vez.
+    if ((await tx`select 1 from entrega_turno where turno_id = ${t.id} and estado in ('pendiente', 'recuento')`).length) {
+      return { ok: false as const, error: "entrega_en_curso" as const };
+    }
     if (!(await puedeConfirmar(tx, usuarioId, e))) return { ok: false as const, error: "no_puedes" as const };
-    if (Math.round(Number(r.valor) * 100) !== Math.round(Number(e.importe) * 100)) return { ok: false as const, error: "no_coincide" as const };
+    if (Math.round(Number(r.valor) * 100) !== Math.round(Number(e.importe) * 100)) {
+      // Constancia de lo que contó esta persona, aunque la entrada se cancele después.
+      await tx`insert into intento_entrada_fondo (entrada_id, declarado, registrado, por) values (${e.id}, ${r.valor}, ${e.importe}, ${usuarioId})`;
+      await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
+               values ('entrada_fondo', ${e.id}, 'recibir_no_coincide', ${tx.json({ declarado: r.valor, registrado: e.importe })}, ${usuarioId})`;
+      return { ok: false as const, error: "no_coincide" as const };
+    }
     const [resp] = await tx<{ usuario_id: string }[]>`
       select usuario_id from responsable_lugar where turno_id = ${t.id} and lugar_id = ${e.lugar_id} and hasta is null`;
     await tx`update entrada_fondo set estado = 'recibida', recibida_por = ${usuarioId}, importe_recibido = ${r.valor}, turno_id = ${t.id}, resuelta_en = now()

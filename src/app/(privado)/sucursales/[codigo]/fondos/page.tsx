@@ -55,6 +55,11 @@ export default async function Fondos({ params, searchParams }: PageProps<"/sucur
             <div key={e.id} className="tarjeta" data-testid="entrada-pendiente">
               <p><strong>{e.tipo === "aumento" ? "Aumento del fondo" : "Reposición"}</strong> · {NOMBRE[e.lugar]} · {pesos.format(Number(e.importe))}</p>
               <p className="sub">Entrega {e.entrega} · {hora.format(e.registradaEn)} · origen: {e.origen}</p>
+              {e.intentos.map((i, n) => (
+                <p key={n} className="aviso aviso-error" data-testid="intento-no-coincide">
+                  {hora.format(i.en)} · {i.por} declaró recibir {pesos.format(Number(i.declarado))}: no coincide con lo registrado.
+                </p>
+              ))}
               {produccion ? null : e.puedoConfirmar ? (
                 p.turnoAbierto ? <FormularioConfirmarEntrada codigo={codigo} entradaId={e.id} /> : <p className="sub">Se recibe con un turno abierto.</p>
               ) : <p className="sub">La confirma la responsable vigente del lugar (si ella entregó, otra persona autorizada).</p>}
@@ -84,6 +89,10 @@ export default async function Fondos({ params, searchParams }: PageProps<"/sucur
               en: c.en, id: c.id,
               texto: `${NOMBRE[c.lugar]}: ${pesos.format(Number(c.anterior))} → ${pesos.format(Number(c.monto))} · ${c.origen ? ORIGEN[c.origen] : DESTINO[c.destino!]} · autorizó ${c.autorizadoPor} · «${c.motivo}»`,
             })),
+            ...p.entradas.flatMap((e) => e.intentos.map((i, n) => ({
+              en: i.en, id: `${e.id}-intento-${n}`,
+              texto: `${NOMBRE[e.lugar]}: ${i.por} declaró recibir ${pesos.format(Number(i.declarado))} de ${pesos.format(Number(e.importe))} registrados · no coincidió, no se aplicó`,
+            }))),
             ...p.entradas.map((e) => ({
               en: e.resueltaEn ?? e.registradaEn, id: e.id,
               texto: `${NOMBRE[e.lugar]}: ${e.tipo === "aumento" ? "entrega del aumento" : "reposición"} ${pesos.format(Number(e.importe))} · entregó ${e.entrega} · origen: ${e.origen} · `

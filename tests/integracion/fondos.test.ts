@@ -6,6 +6,7 @@ import {
 } from "@/lib/cierres";
 import { detalleDiferencias, revisarIncidencia } from "@/lib/diferencias";
 import { cambiarMontoFondo, cancelarEntradaFondo, confirmarEntradaFondo, pantallaFondos, registrarReposicion } from "@/lib/fondos";
+import { cancelarEntrega, recibirTurno, registrarEntrega } from "@/lib/entregas";
 import { abrirTurno, estadoTurno } from "@/lib/turnos";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
@@ -157,6 +158,73 @@ describe.skipIf(!URL_ADMIN)("fondo fijo de caja", () => {
     expect(await confirmarEntradaFondo(sql, e.vespertina, e.codigo, { entradaId, recibido: "20" }, PRUEBAS)).toEqual({ ok: false, error: "no_puedes" });
     expect(await confirmarEntradaFondo(sql, e.encargado, e.codigo, { entradaId, recibido: "20" }, PRUEBAS)).toEqual({ ok: true });
     await expect(sql`update entrada_fondo set estado = 'recibida' where id = ${entradaId}`).rejects.toThrow();
+  });
+
+  it("con un cambio de turno pendiente o en recuento no se confirma una entrada al fondo, ni en el servidor ni en la base", async () => {
+    const e = await escenario();
+    const r = await registrarReposicion(sql, e.admin, e.codigo, { lugar: "bolsa_visitas", importe: "50", origen: "Caja chica ficticia de Administración" }, PRUEBAS);
+    const entradaId = (r as { entradaId: string }).entradaId;
+    const entrega = await registrarEntrega(sql, e.recepcion, e.codigo,
+      { turnoId: e.turnoId, conteo: { bolsa: "1200", cajon: "3400" }, recibe: e.vespertina, nota: "", apoyo: NADIE }, PRUEBAS);
+    const entregaId = (entrega as { entregaId: string }).entregaId;
+    expect(await confirmarEntradaFondo(sql, e.recepcion, e.codigo, { entradaId, recibido: "50" }, PRUEBAS)).toEqual({ ok: false, error: "entrega_en_curso" });
+    // En recuento tampoco.
+    const version = async () => (await sql<{ version: number }[]>`select version from entrega_turno where id = ${entregaId}`)[0].version;
+    expect(await recibirTurno(sql, e.vespertina, e.codigo,
+      { entregaId, version: await version(), conteo: { bolsa: "1150", cajon: "3400" }, aclaracion: "", apoyo: NADIE }, PRUEBAS)).toMatchObject({ ok: true });
+    const [{ estado }] = await sql<{ estado: string }[]>`select estado from entrega_turno where id = ${entregaId}`;
+    expect(estado).toBe("recuento");
+    expect(await confirmarEntradaFondo(sql, e.recepcion, e.codigo, { entradaId, recibido: "50" }, PRUEBAS)).toEqual({ ok: false, error: "entrega_en_curso" });
+    // La base lo exige aunque se salte el servidor.
+    await expect(sql`update entrada_fondo set estado = 'recibida', recibida_por = ${e.recepcion}, importe_recibido = 50, turno_id = ${e.turnoId}, resuelta_en = now()
+                     where id = ${entradaId}`).rejects.toThrow(/cambio de turno pendiente o en recuento/);
+    // Cancelada la entrega, se confirma.
+    expect(await cancelarEntrega(sql, e.recepcion, e.codigo, { entregaId, version: await version(), motivo: "Se repite el conteo" }, PRUEBAS)).toMatchObject({ ok: true });
+    expect(await confirmarEntradaFondo(sql, e.recepcion, e.codigo, { entradaId, recibido: "50" }, PRUEBAS)).toEqual({ ok: true });
+  });
+
+  it("en paralelo, una entrega y una entrada al fondo no se cruzan: si entra primero el fondo, la entrega ya lo espera", async () => {
+    for (let i = 0; i < 6; i++) {
+      const e = await escenario();
+      const r = await registrarReposicion(sql, e.admin, e.codigo, { lugar: "bolsa_visitas", importe: "50", origen: "Caja chica ficticia de Administración" }, PRUEBAS);
+      const entradaId = (r as { entradaId: string }).entradaId;
+      const [entrega, entrada] = await Promise.all([
+        registrarEntrega(sql, e.recepcion, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "1250", cajon: "3400" }, recibe: e.vespertina, nota: "", apoyo: NADIE }, PRUEBAS),
+        confirmarEntradaFondo(sql, e.recepcion, e.codigo, { entradaId, recibido: "50" }, PRUEBAS),
+      ]);
+      expect(entrega).toMatchObject({ ok: true });
+      const [c] = await sql<{ esperado: string }[]>`
+        select c.esperado::text from entrega_conteo c join lugar_efectivo l on l.id = c.lugar_id
+        where c.entrega_id = ${(entrega as { entregaId: string }).entregaId} and l.tipo = 'bolsa_visitas'`;
+      if (entrada.ok) {
+        // El fondo entró antes: la entrega lo incluye en su esperado.
+        expect(c.esperado).toBe("1250.00");
+      } else {
+        expect(entrada).toEqual({ ok: false, error: "entrega_en_curso" });
+        expect(c.esperado).toBe("1200.00");
+        const [x] = await sql<{ estado: string }[]>`select estado from entrada_fondo where id = ${entradaId}`;
+        expect(x.estado).toBe("pendiente");
+      }
+    }
+  });
+
+  it("si lo recibido no coincide, se conserva el intento con cuenta, hora e importe, aunque luego se cancele", async () => {
+    const e = await escenario();
+    const r = await registrarReposicion(sql, e.admin, e.codigo, { lugar: "bolsa_visitas", importe: "50", origen: "Caja chica ficticia de Administración" }, PRUEBAS);
+    const entradaId = (r as { entradaId: string }).entradaId;
+    expect(await confirmarEntradaFondo(sql, e.recepcion, e.codigo, { entradaId, recibido: "40" }, PRUEBAS)).toEqual({ ok: false, error: "no_coincide" });
+    expect(await confirmarEntradaFondo(sql, e.recepcion, e.codigo, { entradaId, recibido: "45" }, PRUEBAS)).toEqual({ ok: false, error: "no_coincide" });
+    expect(await cancelarEntradaFondo(sql, e.admin, e.codigo, { entradaId, motivo: "No coincidió lo entregado" }, PRUEBAS)).toEqual({ ok: true });
+    const otra = await registrarReposicion(sql, e.admin, e.codigo, { lugar: "bolsa_visitas", importe: "40", origen: "Caja chica ficticia de Administración" }, PRUEBAS);
+    expect(await confirmarEntradaFondo(sql, e.recepcion, e.codigo, { entradaId: (otra as { entradaId: string }).entradaId, recibido: "40" }, PRUEBAS)).toEqual({ ok: true });
+    const p = (await pantallaFondos(sql, e.dir, e.codigo))!;
+    const cancelada = p.entradas.find((x) => x.id === entradaId)!;
+    expect(cancelada).toMatchObject({ estado: "cancelada", motivoCancelacion: "No coincidió lo entregado" });
+    expect(cancelada.intentos.map((i) => [i.por, i.declarado])).toEqual([[expect.stringMatching(/^Recepción /), "40.00"], [expect.stringMatching(/^Recepción /), "45.00"]]);
+    expect(cancelada.intentos.every((i) => i.en instanceof Date)).toBe(true);
+    // La constancia no se borra ni se cambia, y solo la deja quien recibe sobre una entrada pendiente.
+    await expect(sql`delete from intento_entrada_fondo where entrada_id = ${entradaId}`).rejects.toThrow();
+    await expect(sql`insert into intento_entrada_fondo (entrada_id, declarado, registrado, por) values (${entradaId}, 30, 50, ${e.recepcion})`).rejects.toThrow(/entrada pendiente/);
   });
 
   it("al cerrar se cuenta aparte el fondo, primero se completa y solo el excedente va al sobre; fondo + sobre = lo contado", async () => {
