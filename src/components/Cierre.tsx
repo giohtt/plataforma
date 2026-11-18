@@ -5,7 +5,7 @@ import {
   accionAbrirDesdeCierre, accionCerrarDia, accionConfigurarCustodia, accionConfirmarCustodia, accionTerminarApertura,
 } from "@/app/acciones-cierre";
 import type { EstadoFormularioEntrega } from "@/app/acciones-entrega";
-import { Llave, VerificarSobres } from "@/components/Caja";
+import { Llave, Llaves, SobresFuera, VerificarSobres } from "@/components/Caja";
 import { Apoyo, Importe } from "@/components/Entrega";
 import { leerImporte } from "@/lib/datos-turno";
 
@@ -26,12 +26,14 @@ function Aviso({ estado }: { estado: EstadoFormularioEntrega }) {
  * va al sobre con su folio. Elige al custodio (o a sí misma, si también es Encargado: confirma la custodia aquí) y
  * declara si alguien ayudó. Cerrar termina el turno.
  */
-export function FormularioCierre({ codigo, turnoId, usuarioId, esperadoBolsa, contadoCajon, sobres, fondos, custodios, apoyos, configuracion, caja }: {
+export function FormularioCierre({ codigo, turnoId, usuarioId, esperadoBolsa, contadoCajon, sobres, fondos, custodios, apoyos, configuracion, caja, fuera = [] }: {
   codigo: string; turnoId: string; usuarioId: string; esperadoBolsa: string; contadoCajon: string; sobres: Sobre[];
   fondos: { tipo: Sobre["lugar"]; monto: string }[]; custodios: Persona[]; apoyos: Persona[];
   configuracion: { lugar: string; acceso: Persona[]; lugarFondos: string; accesoCajon: Persona[]; guardados: boolean };
   /** Sobres que ya estaban guardados en la caja (con sobres guardados). */
   caja: Sobre[];
+  /** Entregados a Dirección sin confirmar o por devolver: no están en la caja. */
+  fuera?: Fuera[];
 }) {
   const guardados = configuracion.guardados;
   const [estado, accion, enviando] = useActionState(accionCerrarDia, null);
@@ -150,7 +152,8 @@ export function FormularioCierre({ codigo, turnoId, usuarioId, esperadoBolsa, co
               <VerificarSobres estado={estado} sobres={caja} porFolio pregunta="¿Sigue en la caja, cerrado y con este folio?" />
             </>
           ) : null}
-          <Llave estado={estado} caja={guardados} />
+          <SobresFuera fuera={fuera} />
+          {guardados ? <Llaves estado={estado} /> : <Llave estado={estado} />}
           <div className="campo">
             <label htmlFor="ubicacion">Dónde guardas los sobres y la llave del cajón</label>
             <input id="ubicacion" name="ubicacion" maxLength={120} defaultValue={estado?.valores?.ubicacion ?? configuracion.lugar}
@@ -178,8 +181,8 @@ export function FormularioCierre({ codigo, turnoId, usuarioId, esperadoBolsa, co
 }
 
 /** El custodio confirma desde su cuenta dónde guardó los sobres y verifica cada uno. No ve importes. */
-export function FormularioCustodia({ codigo, entregaId, sobres, lugar, caja, guardados }: {
-  codigo: string; entregaId: string; sobres: Sobre[]; lugar: string; caja: Sobre[]; guardados: boolean;
+export function FormularioCustodia({ codigo, entregaId, sobres, lugar, caja, guardados, fuera = [] }: {
+  codigo: string; entregaId: string; sobres: Sobre[]; lugar: string; caja: Sobre[]; guardados: boolean; fuera?: Fuera[];
 }) {
   const [estado, accion, enviando] = useActionState(accionConfirmarCustodia, null);
   return (
@@ -194,7 +197,8 @@ export function FormularioCustodia({ codigo, entregaId, sobres, lugar, caja, gua
           <VerificarSobres estado={estado} sobres={caja} porFolio pregunta="¿Sigue en la caja, cerrado y con este folio?" />
         </>
       ) : null}
-      <Llave estado={estado} caja={guardados} />
+      <SobresFuera fuera={fuera} />
+      {guardados ? <Llaves estado={estado} /> : <Llave estado={estado} />}
       <div className="campo">
         <label htmlFor="ubicacion">Dónde guardaste los sobres y la llave</label>
         <input id="ubicacion" name="ubicacion" maxLength={120} defaultValue={estado?.valores?.ubicacion ?? lugar}
@@ -208,12 +212,13 @@ export function FormularioCustodia({ codigo, entregaId, sobres, lugar, caja, gua
 }
 
 /** Quien abre verifica los sobres y cuenta a ciegas cada lugar. */
-export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, fondos, apoyos, custodioSinConfirmar, caja }: {
+export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, fondos, apoyos, custodioSinConfirmar, caja, fuera = [] }: {
   codigo: string; entregaId: string; version: number; sobres: Sobre[]; fondos: Fondos; apoyos: Persona[];
   /** Nombre del custodio si todavía no confirma la custodia. */
   custodioSinConfirmar: string | null;
   /** Con sobres guardados: todos los sobres de la caja (se verifican, no se abren). null en cierres anteriores. */
   caja: Sobre[] | null;
+  fuera?: Fuera[];
 }) {
   const [estado, accion, enviando] = useActionState(accionAbrirDesdeCierre, null);
   const [sinCustodia, setSinCustodia] = useState(estado?.valores?.sinCustodia === "si");
@@ -253,7 +258,8 @@ export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, f
           {caja.length ? (
             <VerificarSobres estado={estado} sobres={caja} porFolio pregunta="¿Está en la caja, cerrado, con el sello intacto y con este folio?" />
           ) : <p className="sub">La caja no tiene sobres guardados.</p>}
-          <Llave estado={estado} caja />
+          <SobresFuera fuera={fuera} />
+          <Llaves estado={estado} />
           <ConteoFondo estado={estado} fondos={fondos} etiqueta="que cuentas" prefijo="apertura" />
         </>
       ) : (
@@ -270,6 +276,7 @@ export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, f
   );
 }
 
+type Fuera = Sobre & { estado: "por_confirmar" | "por_devolver"; entrego: string; recibe: string };
 type Fondos = { lugar: Sobre["lugar"]; monto: string; tieneSobre: boolean }[];
 /** Con sobres guardados: en cada lugar se cuenta solo el fondo (los sobres siguen en la caja). */
 function ConteoFondo({ estado, fondos, etiqueta, prefijo }: { estado: EstadoFormularioEntrega; fondos: Fondos; etiqueta: string; prefijo: string }) {

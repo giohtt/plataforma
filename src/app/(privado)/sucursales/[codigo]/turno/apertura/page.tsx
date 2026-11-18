@@ -94,7 +94,7 @@ export default async function AperturaDesdeCierre({ params, searchParams }: Page
           ) : (
             <section className="tarjeta">
               <FormularioAperturaCierre codigo={codigo} entregaId={p.cierre.entregaId} version={p.cierre.version} sobres={p.cierre.sobres} fondos={p.cierre.fondos} apoyos={p.apoyos}
-                custodioSinConfirmar={p.cierre.custodia ? null : p.cierre.custodio} caja={p.cierre.sobresGuardados ? p.caja : null} />
+                custodioSinConfirmar={p.cierre.custodia ? null : p.cierre.custodio} caja={p.cierre.sobresGuardados ? p.caja : null} fuera={p.fuera} />
             </section>
           )}
         </>

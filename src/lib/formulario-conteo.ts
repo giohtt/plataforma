@@ -38,13 +38,13 @@ export function leerVerificacionSobres(datos: FormData, max = 80) {
   return { sobres, valores };
 }
 
-/** Llave de la caja y del cajón: «correcta» o «incidencia» con motivo. */
-export function leerLlaveFormulario(datos: FormData) {
-  const v = (campo: string, n: number) => {
-    const x = datos.get(campo);
+/** Una llave («correcta» o «incidencia» con motivo): «llave» es la del cajón de los fondos; «llave_caja», la de la caja de sobres. */
+export function leerLlaveFormulario(datos: FormData, campo: "llave" | "llave_caja" = "llave") {
+  const v = (c: string, n: number) => {
+    const x = datos.get(c);
     return typeof x === "string" ? x.slice(0, n) : "";
   };
-  return { estado: v("llave", 30), motivo: v("motivo_llave", 400) };
+  return { estado: v(campo, 30), motivo: v(`motivo_${campo}`, 400) };
 }
 
 export const MENSAJES_VERIFICACION: Record<string, string> = {

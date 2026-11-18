@@ -3,8 +3,8 @@ import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
 import { turnoAbiertoDe, type TipoLugar } from "@/lib/turnos";
 import {
-  configuracionVigente, leerCaja, leerLlave, registrarIncidenciasCaja, registrarRevisionCaja, sobresEnCaja,
-  type ErrorVerificacion, type LlaveDatos, type SobreEnCaja, type VerificacionDatos,
+  configuracionVigente, leerCaja, leerLlaveRequerida, registrarIncidenciasCaja, registrarRevisionCaja, sobresEnCaja, sobresFueraDeCaja,
+  type ErrorVerificacion, type LlaveDatos, type SobreEnCaja, type SobreFueraDeCaja, type VerificacionDatos,
 } from "@/lib/cierres";
 
 /**
@@ -60,6 +60,7 @@ export type ErrorEntrega =
   | "apoyo"
   | "cambio"
   | "motivo_llave"
+  | "motivo_llave_caja"
   | ErrorVerificacion
   | "bloqueado_produccion";
 
@@ -294,6 +295,9 @@ export type PantallaRecepcion =
       /** Caja con llave: si hay custodias nombradas o sobres guardados, quien recibe el turno recibe la llave y verifica
        *  cada sobre (solo en el primer conteo). null si no aplica. */
       caja: SobreEnCaja[] | null;
+      /** Sobres que no están en la caja (entregados a Dirección sin confirmar o por devolver): no se verifican; se ve
+       *  quién los entregó y quién debe confirmar. */
+      fuera: SobreFueraDeCaja[];
     }
   | { ok: false; error: ErrorEntrega | "sin_entrega" };
 
@@ -329,6 +333,7 @@ export async function pantallaRecepcion(sql: Sql, usuarioId: string, codigo: str
     return {
       ok: true, sucursal: c.s.nombre, entrega: c.e, recuento, apoyos: await candidatosApoyo(tx, c.s.id, [c.e.entregaPorId, c.e.recibeId]),
       caja: c.e.estado === "pendiente" ? await cajaAlRecibir(tx, c.s.id) : null,
+      fuera: await sobresFueraDeCaja(tx, c.s.id),
     };
   });
 }
@@ -336,7 +341,7 @@ export async function pantallaRecepcion(sql: Sql, usuarioId: string, codigo: str
 /** La llave de la caja pasa con el turno cuando Dirección nombró custodias o hay sobres guardados. */
 async function cajaAlRecibir(tx: Tx | Sql, sucursalId: string): Promise<SobreEnCaja[] | null> {
   const caja = await sobresEnCaja(tx, sucursalId);
-  if (caja.length) return caja;
+  if (caja.length || (await sobresFueraDeCaja(tx, sucursalId)).length) return caja;
   return (await configuracionVigente(tx, sucursalId))?.custodias ? [] : null;
 }
 
@@ -357,7 +362,7 @@ export async function recibirTurno(
   datos: {
     entregaId: string; version: number; conteo: ConteoLugares; aclaracion: string; apoyo: DeclaracionApoyo;
     /** Caja con llave (primer conteo): verificación de cada sobre guardado y de la llave. */
-    caja?: { sobres: VerificacionDatos[]; llave: LlaveDatos };
+    caja?: { sobres: VerificacionDatos[]; llaveCaja?: LlaveDatos; llaveCajon?: LlaveDatos };
   },
   { entorno }: { entorno: Entorno },
 ): Promise<ResultadoRecepcion> {
@@ -383,16 +388,20 @@ export async function recibirTurno(
     if (caja) {
       const v = leerCaja(caja, datos.caja?.sobres);
       if (!v.ok) return v;
-      const llave = leerLlave(datos.caja?.llave);
-      if (!llave.ok) return { ok: false, error: "motivo_llave" };
-      revision = { filas: v.filas, llave };
+      // Las dos llaves pasan con el turno y se registran por separado.
+      const llaveCaja = leerLlaveRequerida(datos.caja?.llaveCaja);
+      if (!llaveCaja.ok) return { ok: false, error: "motivo_llave_caja" };
+      const llaveCajon = leerLlaveRequerida(datos.caja?.llaveCajon);
+      if (!llaveCajon.ok) return { ok: false, error: "motivo_llave" };
+      revision = { filas: v.filas, llaveCaja, llaveCajon };
     }
     if (!(await declararApoyo(tx, c.s.id, c.e.id, etapa, usuarioId, [c.e.entregaPorId, c.e.recibeId], datos.apoyo))) {
       throw new ApoyoInvalido();
     }
     if (revision) {
       await registrarRevisionCaja(tx, {
-        sucursalId: c.s.id, momento: "cambio_turno", entregaId: c.e.id, por: usuarioId, custodio: usuarioId, llave: revision.llave, filas: revision.filas,
+        sucursalId: c.s.id, momento: "cambio_turno", entregaId: c.e.id, por: usuarioId, custodio: usuarioId,
+        llave: revision.llaveCaja, llaveCajon: revision.llaveCajon, filas: revision.filas,
       });
     }
 

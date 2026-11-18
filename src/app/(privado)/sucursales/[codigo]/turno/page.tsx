@@ -99,12 +99,13 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
       ) : null}
       {aviso === "abierto-cierre" && recibida ? <p className="aviso aviso-ok" role="status">Turno abierto desde el cierre. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
       {aviso === "recibido" && recibida ? <p className="aviso aviso-ok" role="status">Turno recibido. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
-      {caja.sobres ? (
+      {caja.sobres || caja.porConfirmar || caja.porDevolver ? (
         <p className={caja.conAviso ? "aviso aviso-error" : "aviso aviso-info"} data-testid="resumen-caja">
           Caja de sobres: {caja.sobres} {caja.sobres === 1 ? "sobre guardado" : "sobres guardados"}
           {caja.masAntiguo !== null ? ` · el más antiguo lleva ${caja.masAntiguo} ${caja.masAntiguo === 1 ? "día" : "días"}` : ""}
           {caja.conAviso ? ` · ${caja.conAviso} con 8 días o más: avisa a Dirección para recogerlos` : ""}
-          {caja.pendiente ? " · entrega a Dirección pendiente" : ""}.{" "}
+          {caja.porConfirmar ? ` · ${caja.porConfirmar} entregados a Dirección por confirmar (fuera de la caja)` : ""}
+          {caja.porDevolver ? ` · ${caja.porDevolver} por devolver a la caja` : ""}.{" "}
           <Link href={`/sucursales/${codigo}/recoleccion`} data-testid="ir-recoleccion">Ver la caja</Link>
         </p>
       ) : null}

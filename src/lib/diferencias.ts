@@ -49,7 +49,7 @@ export type Diferencia = {
 /** Incidencia de un cierre (custodia sin confirmar o sobre con problema): queda por revisar aunque el efectivo cuadre. */
 export type IncidenciaCierre = {
   id: string;
-  tipo: "custodia_sin_confirmar" | "sobre_en_custodia" | "sobre_al_abrir" | "fondo_incompleto" | "llave_custodia" | "sobre_caja" | "llave_caja";
+  tipo: "custodia_sin_confirmar" | "sobre_en_custodia" | "sobre_al_abrir" | "fondo_incompleto" | "llave_custodia" | "sobre_caja" | "llave_caja" | "llave_cajon";
   /** Texto de la incidencia: el motivo de abrir sin custodia, o el sobre, cómo llegó y el motivo. */
   detalle: string;
   registradaEn: Date;
@@ -61,11 +61,11 @@ const INCIDENCIAS = (sql: Sql | Tx, entregaIds: string[]) => sql<{
   folio: string | null; estado: string | null; folio_visto: string | null; motivo_sobre: string | null; por: string | null;
   r_motivo: string | null; r_por: string | null; r_nivel: NivelRevision | null; r_en: Date | null;
   lugar: TipoLugar | null; fondo: string | null; fondo_monto: string | null; motivo_llave: string | null; custodio: string | null;
-  rc_motivo: string | null; rc_por: string | null }[]>`
+  rc_motivo: string | null; rc_motivo_cajon: string | null; rc_por: string | null }[]>`
   select i.id, i.entrega_id, i.tipo, i.registrada_en, a.motivo as motivo_sin_custodia,
          li.tipo as lugar, cf.fondo::text as fondo, cf.fondo_monto::text as fondo_monto, cc.motivo_llave, uc.nombre as custodio,
          s.folio, v.estado, v.folio_visto, v.motivo as motivo_sobre, u.nombre as por,
-         r.motivo as r_motivo, ru.nombre as r_por, r.nivel as r_nivel, r.en as r_en, rc.motivo_llave as rc_motivo, rcu.nombre as rc_por
+         r.motivo as r_motivo, ru.nombre as r_por, r.nivel as r_nivel, r.en as r_en, rc.motivo_llave as rc_motivo, rc.motivo_llave_cajon as rc_motivo_cajon, rcu.nombre as rc_por
   from incidencia_cierre i
   left join revision_caja rc on rc.id = i.revision_id left join usuario rcu on rcu.id = rc.por
   left join apertura_sin_custodia a on a.entrega_id = i.entrega_id and i.tipo = 'custodia_sin_confirmar'
@@ -90,6 +90,8 @@ function aIncidencia(f: Awaited<ReturnType<typeof INCIDENCIAS>>[number]): Incide
     ? `Llave o cajón en la custodia (${f.custodio}). Motivo: «${f.motivo_llave}»`
     : f.tipo === "llave_caja"
     ? `Llave de la caja de sobres (${f.rc_por}). Motivo: «${f.rc_motivo}»`
+    : f.tipo === "llave_cajon"
+    ? `Llave del cajón de los fondos al recibir la custodia (${f.rc_por}). Motivo: «${f.rc_motivo_cajon}»`
     : `${f.tipo === "sobre_en_custodia" ? "Custodia" : f.tipo === "sobre_caja" ? "Caja de sobres" : "Al abrir"} (${f.por}): sobre ${f.folio} ${COMO[f.estado!]}${f.folio_visto ? ` (${f.folio_visto})` : ""}. Motivo: «${f.motivo_sobre}»`;
   return {
     id: f.id, tipo: f.tipo, detalle, registradaEn: f.registrada_en,

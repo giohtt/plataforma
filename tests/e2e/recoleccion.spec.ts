@@ -83,7 +83,9 @@ test("custodia por las recepcionistas, sobres guardados en la caja y recolecció
   await expect(page.getByTestId("aviso-sobres-guardados")).toBeVisible();
   await page.getByLabel("Custodia que se queda con la llave").selectOption({ label: `Yo · ${e.laura.nombre} — cierro y me quedo con la llave` });
   for (const l of ["bolsa_visitas", "cajon_mensualidades"]) await page.getByTestId(`verificar-${l}`).getByLabel(/^Sí: cerrado/).check();
-  await page.getByLabel(/^Sí: la caja de sobres y el cajón/).check();
+  // Las dos llaves se registran por separado.
+  await page.getByLabel("Sí: la caja de sobres está cerrada y tengo su llave").check();
+  await page.getByLabel(/^Sí: el cajón quedó cerrado/).check();
   await page.getByLabel("No, nadie más participó").check();
   await capturar(page, "recoleccion-cierre");
   await page.getByRole("button", { name: "Cerrar el turno y guardar sobres y llave" }).click();
@@ -95,7 +97,10 @@ test("custodia por las recepcionistas, sobres guardados en la caja y recolecció
   await expect(page.getByTestId("aviso-caja-apertura")).toBeVisible();
   await expect(page.getByTestId("formulario-apertura-cierre")).not.toContainText("3,400");
   for (const f of [bolsa, cajon]) await page.getByTestId(`verificar-${f}`).getByLabel(/^Sí: cerrado/).check();
-  await page.getByLabel(/^Sí: la caja de sobres y el cajón/).check();
+  await page.getByLabel("Sí: la caja de sobres está cerrada y tengo su llave").check();
+  // El cajón de los fondos con problema: queda por revisar aparte.
+  await page.getByLabel("Hay un problema con el cajón o su llave").check();
+  await page.getByLabel("Motivo de la incidencia").fill("La llave del cajón estaba fuera de su lugar");
   await page.getByTestId("apertura-bolsa").getByLabel(/^Efectivo que cuentas/).fill("0");
   await page.getByTestId("apertura-cajon").getByLabel(/^Efectivo que cuentas/).fill("0");
   await page.getByLabel("No, nadie más participó").check();
@@ -113,12 +118,42 @@ test("custodia por las recepcionistas, sobres guardados en la caja y recolecció
   await expect(page.getByTestId(`aviso-${bolsa}`)).toBeVisible();
   await expect(page.getByTestId(`aviso-${cajon}`)).toHaveCount(0);
   await expect(page.getByTestId("llave-caja")).toContainText(e.sofia.nombre);
+  await expect(page.getByTestId("llave-caja")).toContainText("llave del cajón de fondos: con incidencia");
   await page.getByTestId(`elegir-${bolsa}`).getByRole("checkbox").check();
   await page.getByLabel("Recoge (Dirección)").selectOption({ label: e.dir.nombre });
   await capturar(page, "recoleccion-entregar");
   await page.getByRole("button", { name: "Entregar los sobres elegidos" }).click();
   await expect(page.getByTestId("entrega-pendiente")).toContainText(bolsa);
   await expect(page.getByTestId(`caja-${cajon}`)).toContainText("En la caja");
+  // El entregado ya no está en la caja: aparte, con quién lo entregó y quién debe confirmar.
+  await expect(page.getByTestId(`caja-${bolsa}`)).toHaveCount(0);
+  await expect(page.getByTestId(`fuera-${bolsa}`)).toContainText(e.sofia.nombre);
+  await expect(page.getByTestId(`fuera-${bolsa}`)).toContainText(`${e.dir.nombre} (Dirección) confirma`);
+
+  // Cambio de turno antes de que Dirección confirme: Sofía entrega el turno a Laura.
+  await page.goto(`/sucursales/${e.codigo}/turno`);
+  await page.getByTestId("ir-entregar").click();
+  await page.waitForLoadState("networkidle");
+  await page.locator("#bolsa").fill("0");
+  await page.locator("#cajon").fill("0");
+  await page.getByLabel("Quién recibe").selectOption({ label: e.laura.nombre });
+  await page.getByTestId("apoyo").getByRole("radio", { name: "No, nadie más participó" }).check();
+  await page.getByRole("button", { name: "Entregar el turno" }).click();
+  await expect(page.getByTestId("estado-entrega")).toContainText(`Entrega pendiente de confirmar por ${e.laura.nombre}`);
+  await entrar(page, e.laura.correo);
+  await page.goto(`/sucursales/${e.codigo}/turno/recibir`);
+  await expect(page.getByTestId(`fuera-${bolsa}`)).toContainText(`entregó ${e.sofia.nombre}`);
+  await expect(page.getByTestId(`fuera-${bolsa}`)).toContainText(`debe confirmar su recepción ${e.dir.nombre}`);
+  await expect(page.getByTestId(`verificar-${bolsa}`)).toHaveCount(0);
+  await page.getByTestId(`verificar-${cajon}`).getByLabel(/^Sí: cerrado/).check();
+  await page.getByLabel("Sí: la caja de sobres está cerrada y tengo su llave").check();
+  await page.getByLabel(/^Sí: el cajón quedó cerrado/).check();
+  await page.locator("#bolsa").fill("0");
+  await page.locator("#cajon").fill("0");
+  await page.getByTestId("apoyo").getByRole("radio", { name: "No, nadie más participó" }).check();
+  await capturar(page, "recoleccion-cambio-turno");
+  await page.getByRole("button", { name: "Confirmar lo que recibo" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toContainText("Turno recibido");
 
   // Dirección cuenta a ciegas: no ve lo anotado. Faltan $50.
   await entrar(page, e.dir.correo);
@@ -148,9 +183,79 @@ test("custodia por las recepcionistas, sobres guardados en la caja y recolecció
   await expect(dif.getByTestId("cadena")).toContainText(e.laura.nombre);
   await expect(dif.getByTestId("cadena")).toContainText(e.sofia.nombre);
   await expect(dif.getByTestId("cadena")).toContainText(e.dir.nombre);
+  await expect(dif.getByTestId("cadena")).toContainText("Entregó a Dirección");
   await dif.getByLabel("Faltante confirmado").check();
   await dif.getByLabel("Motivo").fill("Faltan $50 en el sobre de la bolsa");
   await capturar(page, "recoleccion-revision");
   await dif.getByRole("button", { name: "Guardar la revisión" }).click();
   await expect(page.getByTestId(`diferencia-${bolsa}`).getByTestId("estado-diferencia")).toContainText("Faltante confirmado");
+});
+
+/** Dirección nombra custodias; Laura cierra y se queda con las llaves; Sofía abre. Devuelve los folios. */
+async function cierreYApertura(page: Page, e: Awaited<ReturnType<typeof escenario>>) {
+  const [s] = await sql<{ id: string }[]>`select id from sucursal where codigo = ${e.codigo}`;
+  await sql`insert into custodia_configuracion (sucursal_id, lugar, acceso, configurada_por, lugar_fondos, acceso_cajon, custodias)
+            values (${s.id}, 'Caja con llave de recepción', ${[e.laura.id, e.sofia.id]}::uuid[], ${e.dir.id}, 'Cajón con llave de recepción',
+                    ${[e.laura.id, e.sofia.id]}::uuid[], ${[e.laura.id, e.sofia.id]}::uuid[])`;
+  await entrar(page, e.laura.correo);
+  await page.goto(`/sucursales/${e.codigo}/turno/cierre`);
+  await page.getByTestId("generar-folios").click();
+  const bolsa = (await page.getByTestId("folio-bolsa").textContent())!;
+  const cajon = (await page.getByTestId("folio-cajon").textContent())!;
+  await page.getByTestId("cierre-bolsa").getByLabel("Total contado al cerrar").fill("900");
+  await page.getByTestId("cierre-cajon").getByLabel("Total contado al cerrar").fill("3400");
+  await page.getByLabel("Custodia que se queda con la llave").selectOption({ label: `Yo · ${e.laura.nombre} — cierro y me quedo con la llave` });
+  for (const l of ["bolsa_visitas", "cajon_mensualidades"]) await page.getByTestId(`verificar-${l}`).getByLabel(/^Sí: cerrado/).check();
+  await page.getByLabel("Sí: la caja de sobres está cerrada y tengo su llave").check();
+  await page.getByLabel(/^Sí: el cajón quedó cerrado/).check();
+  await page.getByLabel("No, nadie más participó").check();
+  await page.getByRole("button", { name: "Cerrar el turno y guardar sobres y llave" }).click();
+  await expect(page.getByRole("heading", { name: "Turno cerrado · sobres en la caja" })).toBeVisible();
+  await entrar(page, e.sofia.correo);
+  await page.goto(`/sucursales/${e.codigo}/turno/apertura`);
+  for (const f of [bolsa, cajon]) await page.getByTestId(`verificar-${f}`).getByLabel(/^Sí: cerrado/).check();
+  await page.getByLabel("Sí: la caja de sobres está cerrada y tengo su llave").check();
+  await page.getByLabel(/^Sí: el cajón quedó cerrado/).check();
+  await page.getByTestId("apertura-bolsa").getByLabel(/^Efectivo que cuentas/).fill("0");
+  await page.getByTestId("apertura-cajon").getByLabel(/^Efectivo que cuentas/).fill("0");
+  await page.getByLabel("No, nadie más participó").check();
+  await page.getByRole("button", { name: "Abrir el turno" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toContainText("Turno abierto desde el cierre");
+  return { bolsa, cajon };
+}
+
+test("entrega cancelada: los sobres no vuelven a la caja hasta registrar su devolución física", async ({ page }) => {
+  const e = await escenario();
+  const { bolsa, cajon } = await cierreYApertura(page, e);
+  await page.goto(`/sucursales/${e.codigo}/recoleccion`);
+  await page.getByTestId(`elegir-${bolsa}`).getByRole("checkbox").check();
+  await page.getByLabel("Recoge (Dirección)").selectOption({ label: e.dir.nombre });
+  await page.getByRole("button", { name: "Entregar los sobres elegidos" }).click();
+  await expect(page.getByTestId("entrega-pendiente")).toBeVisible();
+
+  // Dirección cancela: el sobre queda por devolver, fuera de la caja.
+  await entrar(page, e.dir.correo);
+  await page.goto(`/sucursales/${e.codigo}/recoleccion`);
+  await page.getByLabel("Motivo para cancelar la entrega").fill("Hoy no alcanzo a contarlos");
+  await page.getByRole("button", { name: "Cancelar la entrega" }).click();
+  await expect(page.getByTestId(`fuera-${bolsa}`)).toContainText("Entrega cancelada, por devolver");
+  await expect(page.getByTestId(`caja-${bolsa}`)).toHaveCount(0);
+  await expect(page.getByTestId("formulario-devolucion")).toHaveCount(0);
+
+  // Sofía (responsable en turno) recibe el sobre de vuelta y lo verifica; vuelve a la caja.
+  await entrar(page, e.sofia.correo);
+  await page.goto(`/sucursales/${e.codigo}/recoleccion`);
+  await expect(page.getByTestId("formulario-entregar-sobres")).toHaveCount(0);
+  const dev = page.getByTestId("formulario-devolucion");
+  await expect(dev).toContainText(`Recibes de ${e.dir.nombre}`);
+  await dev.getByTestId(`verificar-${bolsa}`).getByLabel(/^Sí: cerrado/).check();
+  await dev.getByLabel("Sí: la caja de sobres está cerrada y tengo su llave").check();
+  await capturar(page, "recoleccion-devolucion");
+  await dev.getByRole("button", { name: "Registrar la devolución a la caja" }).click();
+  await expect(page.locator("p.aviso[role=status]")).toContainText("Devolución registrada");
+  await expect(page.getByTestId(`caja-${bolsa}`)).toBeVisible();
+  await expect(page.getByTestId(`caja-${cajon}`)).toBeVisible();
+  await expect(page.getByTestId("fuera-de-caja")).toHaveCount(0);
+  await expect(page.getByTestId("devolucion")).toContainText(`devolvió ${e.dir.nombre}`);
+  await expect(page.getByTestId("devolucion")).toContainText(`recibió ${e.sofia.nombre}`);
 });

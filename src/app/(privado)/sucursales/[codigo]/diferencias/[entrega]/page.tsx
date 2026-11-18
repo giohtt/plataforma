@@ -173,7 +173,7 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
           {c.incidencias.map((i) => (
             <div key={i.id} className="tarjeta" data-testid="incidencia">
               <p>
-                <strong>{i.tipo === "custodia_sin_confirmar" ? "Custodia sin confirmar" : i.tipo === "fondo_incompleto" ? "Fondo incompleto" : i.tipo === "llave_custodia" ? "Llave o cajón" : i.tipo === "llave_caja" ? "Llave de la caja" : i.tipo === "sobre_caja" ? "Sobre de la caja" : "Sello o folio"}</strong>{" "}
+                <strong>{i.tipo === "custodia_sin_confirmar" ? "Custodia sin confirmar" : i.tipo === "fondo_incompleto" ? "Fondo incompleto" : i.tipo === "llave_custodia" ? "Llave o cajón" : i.tipo === "llave_caja" ? "Llave de la caja de sobres" : i.tipo === "llave_cajon" ? "Llave del cajón de fondos" : i.tipo === "sobre_caja" ? "Sobre de la caja" : "Sello o folio"}</strong>{" "}
                 <span className={`chip-estado ${i.revision ? "" : "chip-vencida"}`} data-testid="estado-incidencia">{i.revision ? "Revisada" : "Por revisar"}</span>
               </p>
               <p className="sub">{i.detalle}</p>

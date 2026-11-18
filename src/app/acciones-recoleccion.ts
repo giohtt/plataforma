@@ -11,7 +11,7 @@ import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { leerLlaveFormulario, leerVerificacionSobres, MENSAJES_VERIFICACION } from "@/lib/formulario-conteo";
 import {
-  cancelarEntregaSobres, confirmarRecoleccion, registrarDepositoRecoleccion, registrarEntregaSobres, revisarDiferenciaSobre,
+  cancelarEntregaSobres, confirmarRecoleccion, registrarDepositoRecoleccion, registrarDevolucion, registrarEntregaSobres, revisarDiferenciaSobre,
   type ErrorRecoleccion,
 } from "@/lib/recolecciones";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
@@ -48,6 +48,9 @@ const MENSAJES: Record<ErrorRecoleccion, string> = {
   saldo: "El depósito no puede ser mayor que lo que falta por depositar.",
   resultado: "Elige un resultado que corresponda a la diferencia.",
   participaste: "Participaste en la cadena de este sobre: lo revisa otra persona de Administración.",
+  devolucion_pendiente: "Hay una entrega cancelada por devolver: registra primero que los sobres volvieron a la caja.",
+  sin_devolucion: "No hay una devolución pendiente con esos datos.",
+  devuelve_misma: "Quien devuelve los sobres no registra que los recibe: lo hace la responsable en turno.",
   estado: MENSAJES_VERIFICACION.estado,
   folio_visto: MENSAJES_VERIFICACION.folio_visto,
   bloqueado_produccion: "La recolección está desactivada fuera del entorno de pruebas.",
@@ -84,8 +87,8 @@ export async function accionConfirmarRecoleccion(previo: EstadoFormularioEntrega
   const leer = lector(datos);
   const codigo = leer("codigo", 10);
   const { sobres, valores: vs } = leerVerificacionSobres(datos, 60);
-  const llave = leerLlaveFormulario(datos);
-  const valores: Record<string, string> = { ...vs, llave: llave.estado, motivo_llave: llave.motivo };
+  const llave = leerLlaveFormulario(datos, "llave_caja");
+  const valores: Record<string, string> = { ...vs, llave_caja: llave.estado, motivo_llave_caja: llave.motivo };
   const errores: Record<string, string> = {};
   const conteo = sobres.map((s) => {
     const contado = leer(`contado-${s.sobreId}`, 30);
@@ -105,7 +108,26 @@ export async function accionConfirmarRecoleccion(previo: EstadoFormularioEntrega
     return { error: MARCADOS, errores: { [r.sobreId ? `sobre-${r.sobreId}` : "sobres"]: MENSAJES_VERIFICACION[r.error] }, valores, intento };
   }
   if (r.error === "motivo" && r.sobreId) return { error: MARCADOS, errores: { [`sobre-${r.sobreId}`]: MENSAJES.motivo }, valores, intento };
-  if (r.error === "motivo_llave") return { error: MARCADOS, errores: { motivo_llave: MENSAJES.motivo_llave }, valores, intento };
+  if (r.error === "motivo_llave") return { error: MARCADOS, errores: { motivo_llave_caja: MENSAJES.motivo_llave }, valores, intento };
+  return { error: MENSAJES[r.error], valores, intento };
+}
+
+export async function accionRegistrarDevolucion(previo: EstadoFormularioEntrega, datos: FormData): Promise<EstadoFormularioEntrega> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 10);
+  const { sobres, valores: vs } = leerVerificacionSobres(datos, 60);
+  const llave = leerLlaveFormulario(datos, "llave_caja");
+  const valores: Record<string, string> = { ...vs, llave_caja: llave.estado, motivo_llave_caja: llave.motivo };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await registrarDevolucion(sql, sesion.usuarioId, codigo, { recoleccionId: leer("recoleccion"), sobres, llave }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/recoleccion?aviso=devuelta&incidencias=${r.incidencias}`);
+  if (r.error === "motivo_llave") {
+    return { error: MARCADOS, errores: { motivo_llave_caja: "Indica si la caja de sobres está cerrada y tienes su llave; si hay un problema, escribe el motivo." }, valores, intento };
+  }
+  if (r.error in MENSAJES_VERIFICACION) {
+    return { error: MARCADOS, errores: { [r.sobreId ? `sobre-${r.sobreId}` : "sobres"]: MENSAJES_VERIFICACION[r.error] }, valores, intento };
+  }
   return { error: MENSAJES[r.error], valores, intento };
 }
 

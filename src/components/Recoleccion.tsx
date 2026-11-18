@@ -3,14 +3,15 @@
 import { useActionState, useState } from "react";
 import type { EstadoFormularioEntrega } from "@/app/acciones-entrega";
 import {
-  accionCancelarEntregaSobres, accionConfirmarRecoleccion, accionEntregarSobres, accionRegistrarDeposito, accionRevisarDiferenciaSobre,
+  accionCancelarEntregaSobres, accionConfirmarRecoleccion, accionEntregarSobres, accionRegistrarDeposito, accionRegistrarDevolucion,
+  accionRevisarDiferenciaSobre,
 } from "@/app/acciones-recoleccion";
-import { VerificarSobres } from "@/components/Caja";
+import { Llave, VerificarSobres } from "@/components/Caja";
 import { Importe } from "@/components/Entrega";
 
 type Persona = { id: string; nombre: string };
 type Sobre = { id: string; lugar: "bolsa_visitas" | "cajon_mensualidades"; folio: string };
-type SobreCaja = Sobre & { dias: number; aviso: boolean; enEntrega: boolean; importe: string | null };
+type SobreCaja = Sobre & { dias: number; aviso: boolean; importe: string | null };
 
 const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
 const LUGAR = { bolsa_visitas: "bolsa", cajon_mensualidades: "cajón" } as const;
@@ -70,7 +71,8 @@ export function FormularioCancelarEntregaSobres({ codigo, recoleccionId, version
           aria-invalid={estado?.errores?.motivo ? true : undefined} />
         {estado?.errores?.motivo ? <span className="campo-error">{estado.errores.motivo}</span> : null}
       </div>
-      <button className="boton" type="submit" disabled={enviando}>{enviando ? "Cancelando…" : "Cancelar la entrega (los sobres siguen en la caja)"}</button>
+      <span className="sub">Al cancelar, los sobres quedan por devolver: vuelven a la caja cuando la responsable en turno registre que los recibe.</span>
+      <button className="boton" type="submit" disabled={enviando}>{enviando ? "Cancelando…" : "Cancelar la entrega"}</button>
     </form>
   );
 }
@@ -80,7 +82,7 @@ export function FormularioConfirmarRecoleccion({ codigo, recoleccionId, version,
   codigo: string; recoleccionId: string; version: number; sobres: Sobre[];
 }) {
   const [estado, accion, enviando] = useActionState(accionConfirmarRecoleccion, null);
-  const [llave, setLlave] = useState(estado?.valores?.llave ?? "correcta");
+  const [llave, setLlave] = useState(estado?.valores?.llave_caja ?? "correcta");
   return (
     <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate data-testid="formulario-confirmar-recoleccion">
       <Aviso estado={estado} />
@@ -96,23 +98,23 @@ export function FormularioConfirmarRecoleccion({ codigo, recoleccionId, version,
  />
         ))}
       </fieldset>
-      <fieldset className="campo campo-grupo" data-testid="caja-recoleccion" aria-invalid={estado?.errores?.motivo_llave ? true : undefined}>
-        <legend>Caja de sobres</legend>
+      <fieldset className="campo campo-grupo" data-testid="caja-recoleccion" aria-invalid={estado?.errores?.motivo_llave_caja ? true : undefined}>
+        <legend>Caja de sobres y su llave</legend>
         <label className="opcion-revision">
-          <input type="radio" name="llave" value="correcta" checked={llave === "correcta"} onChange={() => setLlave("correcta")} />
+          <input type="radio" name="llave_caja" value="correcta" checked={llave === "correcta"} onChange={() => setLlave("correcta")} />
           <span>La caja estaba cerrada con llave y la abrió la custodia</span>
         </label>
         <label className="opcion-revision">
-          <input type="radio" name="llave" value="incidencia" checked={llave === "incidencia"} onChange={() => setLlave("incidencia")} />
+          <input type="radio" name="llave_caja" value="incidencia" checked={llave === "incidencia"} onChange={() => setLlave("incidencia")} />
           <span>Hubo un problema con la caja o la llave</span>
         </label>
         {llave === "incidencia" ? (
           <div className="campo">
-            <label htmlFor="motivo_llave">Motivo</label>
-            <textarea id="motivo_llave" name="motivo_llave" rows={2} maxLength={300} defaultValue={estado?.valores?.motivo_llave ?? ""} />
+            <label htmlFor="motivo_llave_caja">Motivo</label>
+            <textarea id="motivo_llave_caja" name="motivo_llave_caja" rows={2} maxLength={300} defaultValue={estado?.valores?.motivo_llave_caja ?? ""} />
           </div>
         ) : null}
-        {estado?.errores?.motivo_llave ? <span className="campo-error">{estado.errores.motivo_llave}</span> : null}
+        {estado?.errores?.motivo_llave_caja ? <span className="campo-error">{estado.errores.motivo_llave_caja}</span> : null}
       </fieldset>
       <p className="sub">Desde que confirmes, lo recogido queda bajo tu responsabilidad hasta depositarlo.</p>
       <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Confirmando…" : "Confirmar lo que recojo"}</button>
@@ -177,6 +179,22 @@ export function FormularioRevisarDiferenciaSobre({ codigo, diferenciaId, importe
         {estado?.errores?.motivo ? <span className="campo-error">{estado.errores.motivo}</span> : null}
       </div>
       <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Guardando…" : "Guardar la revisión"}</button>
+    </form>
+  );
+}
+
+/** La responsable en turno recibe de vuelta los sobres de una entrega cancelada y verifica cada uno antes de guardarlos. */
+export function FormularioDevolucion({ codigo, recoleccionId, sobres, devuelve }: { codigo: string; recoleccionId: string; sobres: Sobre[]; devuelve: string }) {
+  const [estado, accion, enviando] = useActionState(accionRegistrarDevolucion, null);
+  return (
+    <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate data-testid="formulario-devolucion">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="recoleccion" value={recoleccionId} />
+      <p className="sub">Recibes de {devuelve} los sobres de la entrega cancelada. Verifica cada uno antes de guardarlo en la caja.</p>
+      <VerificarSobres estado={estado} sobres={sobres} porFolio pregunta="¿Te lo devuelven cerrado, con el sello intacto y con este folio?" />
+      <Llave estado={estado} de="caja" />
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Registrando…" : "Registrar la devolución a la caja"}</button>
     </form>
   );
 }

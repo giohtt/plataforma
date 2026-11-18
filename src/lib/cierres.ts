@@ -142,7 +142,7 @@ export async function configurarCustodia(
 export type ErrorCierre =
   | "no_encontrada" | "sin_permiso" | "sucursal_inactiva" | "sin_turno" | "no_responsable" | "entrega_en_curso"
   | "retiro_en_preparacion" | "cancelaciones_pendientes" | "sin_configuracion" | "sin_preparacion" | "custodio" | "nota"
-  | "apoyo" | "cambio" | "fondo" | "fondo_primero" | "ubicacion" | "motivo_llave" | ErrorVerificacion | "bloqueado_produccion";
+  | "apoyo" | "cambio" | "fondo" | "fondo_primero" | "ubicacion" | "motivo_llave" | "motivo_llave_caja" | ErrorVerificacion | "bloqueado_produccion";
 
 export type Sobre = { id: string; lugar: TipoLugar; folio: string };
 
@@ -162,6 +162,11 @@ export function leerLlave(d: LlaveDatos | undefined): { ok: true; llave: "correc
   if (d.estado !== "incidencia" || motivo.length < 5 || motivo.length > 300) return { ok: false };
   return { ok: true, llave: "incidencia", motivo };
 }
+/** Igual, pero sin suponer que está correcta: la persona tiene que indicarlo (caja con sobres guardados). */
+export function leerLlaveRequerida(d: LlaveDatos | undefined) {
+  if (!d || (d.estado !== "correcta" && d.estado !== "incidencia")) return { ok: false as const };
+  return leerLlave(d);
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Caja con llave: sobres guardados hasta que Dirección los recoge (18 nov 2026)
@@ -174,22 +179,45 @@ export async function sobresEnCaja(tx: Tx | Sql, sucursalId: string, excluirEntr
     select s.id, l.tipo as lugar, s.folio, s.entrega_id as "entregaId", s.resuelto_en as "guardadoEn", u.nombre as cerro,
            floor(extract(epoch from now() - s.resuelto_en) / 86400)::int as dias
     from sobre_cierre s join lugar_efectivo l on l.id = s.lugar_id join entrega_turno e on e.id = s.entrega_id join usuario u on u.id = e.entrega_por
-    where s.sucursal_id = ${sucursalId} and s.estado = 'usado' and s.importe is not null
+    where s.sucursal_id = ${sucursalId} and s.estado = 'usado' and s.importe is not null and sobre_en_caja(s.id)
       and s.entrega_id is distinct from ${excluirEntrega}
     order by s.resuelto_en, s.folio`)];
+}
+
+/**
+ * Sobres guardados que no están físicamente en la caja: entregados a Dirección sin confirmar todavía, o de una entrega
+ * cancelada cuya devolución física aún no se registra. Se muestran en cada cambio de custodia.
+ */
+export type SobreFueraDeCaja = Sobre & {
+  estado: "por_confirmar" | "por_devolver"; recoleccionId: string; entrego: string; recibe: string; desde: Date;
+};
+export async function sobresFueraDeCaja(tx: Tx | Sql, sucursalId: string): Promise<SobreFueraDeCaja[]> {
+  return [...(await tx<SobreFueraDeCaja[]>`
+    select s.id, l.tipo as lugar, s.folio, case r.estado when 'pendiente' then 'por_confirmar' else 'por_devolver' end as estado,
+           r.id as "recoleccionId", a.nombre as entrego, b.nombre as recibe, coalesce(r.resuelta_en, r.creada_en) as desde
+    from recoleccion r join recoleccion_sobre x on x.recoleccion_id = r.id join sobre_cierre s on s.id = x.sobre_id
+    join lugar_efectivo l on l.id = s.lugar_id join usuario a on a.id = r.entrega_por join usuario b on b.id = r.recibe
+    where r.sucursal_id = ${sucursalId}
+      and (r.estado = 'pendiente' or (r.estado = 'cancelada' and not exists (select 1 from devolucion_recoleccion d where d.recoleccion_id = r.id)))
+    order by r.creada_en, s.resuelto_en, s.folio`)];
 }
 /** Días desde que se guardó un sobre a partir de los cuales hay aviso (aprobado el 18 nov 2026). */
 export const DIAS_AVISO_SOBRE = 8;
 
 /** Registra una revisión de la caja: quien recibe la llave verifica cada sobre guardado. */
 async function registrarRevisionCaja(tx: Tx, d: {
-  sucursalId: string; momento: "cierre" | "apertura" | "cambio_turno" | "recoleccion"; entregaId?: string; recoleccionId?: string;
-  por: string; custodio: string; llave: { llave: "correcta" | "incidencia"; motivo: string | null };
+  sucursalId: string; momento: "cierre" | "apertura" | "cambio_turno" | "recoleccion" | "devolucion"; entregaId?: string; recoleccionId?: string;
+  por: string; custodio: string;
+  /** Llave de la caja de sobres. */
+  llave: { llave: "correcta" | "incidencia"; motivo: string | null };
+  /** Llave del cajón de los fondos, por separado (cierre, apertura y cambio de turno). */
+  llaveCajon: { llave: "correcta" | "incidencia"; motivo: string | null } | null;
   filas: { sobreId: string; estado: string; folioVisto: string | null; motivo: string | null }[];
 }) {
   const [r] = await tx<{ id: string }[]>`
-    insert into revision_caja (sucursal_id, momento, entrega_id, recoleccion_id, por, custodio_id, llave, motivo_llave)
-    values (${d.sucursalId}, ${d.momento}, ${d.entregaId ?? null}, ${d.recoleccionId ?? null}, ${d.por}, ${d.custodio}, ${d.llave.llave}, ${d.llave.motivo})
+    insert into revision_caja (sucursal_id, momento, entrega_id, recoleccion_id, por, custodio_id, llave, motivo_llave, llave_cajon, motivo_llave_cajon)
+    values (${d.sucursalId}, ${d.momento}, ${d.entregaId ?? null}, ${d.recoleccionId ?? null}, ${d.por}, ${d.custodio}, ${d.llave.llave}, ${d.llave.motivo},
+            ${d.llaveCajon?.llave ?? null}, ${d.llaveCajon?.motivo ?? null})
     returning id`;
   for (const f of d.filas) {
     await tx`insert into verificacion_sobre (sobre_id, momento, estado, folio_visto, motivo, verificado_por, revision_id)
@@ -272,6 +300,8 @@ export type PantallaCierre =
       custodios: Receptor[];
       /** Sobres ya guardados en la caja: si quien cierra se queda la llave, los verifica. */
       caja: SobreEnCaja[];
+      /** Entregados a Dirección sin confirmar o por devolver: no están en la caja. */
+      fuera: SobreFueraDeCaja[];
       fondos: { tipo: TipoLugar; monto: string }[];
       apoyos: Receptor[];
       sobres: Sobre[];
@@ -302,6 +332,7 @@ export async function pantallaCierre(sql: Sql, usuarioId: string, codigo: string
       configuracion: config,
       custodios: await custodios(tx, c.s.id, config),
       caja: await sobresEnCaja(tx, c.s.id),
+      fuera: await sobresFueraDeCaja(tx, c.s.id),
       fondos: (await fondosVigentes(tx, c.s.id)).map((f) => ({ tipo: f.tipo, monto: f.monto })),
       apoyos: await candidatosApoyo(tx, c.s.id, [usuarioId]),
       sobres: [...(await SOBRES_RESERVADOS(tx, c.turnoId))],
@@ -380,7 +411,7 @@ export async function cerrarDia(
     /** Fondo apartado y contado en cada lugar (si no hay fondo vigente, 0). El sobre lleva el excedente. */
     fondos?: ConteoLugares;
     /** Solo si quien cierra queda como custodio: la custodia se confirma en el mismo cierre. */
-    custodia?: { ubicacion: string; sobres: VerificacionDatos[]; llave: LlaveDatos };
+    custodia?: { ubicacion: string; sobres: VerificacionDatos[]; llave: LlaveDatos; llaveCaja?: LlaveDatos };
   },
   { entorno }: { entorno: Entorno },
 ): Promise<{ ok: true; entregaId: string; diferenciaEsperado: string | null } | { ok: false; error: ErrorCierre; lugar?: TipoLugar; sobreId?: string }> {
@@ -435,9 +466,12 @@ export async function cerrarDia(
       if (!v.ok) return v;
       const vc = leerCaja(caja, datos.custodia.sobres);
       if (!vc.ok) return vc;
-      const llave = leerLlave(datos.custodia.llave);
+      const llave = guardados ? leerLlaveRequerida(datos.custodia.llave) : leerLlave(datos.custodia.llave);
       if (!llave.ok) return { ok: false as const, error: "motivo_llave" as const };
-      custodia = { ubicacion, filas: v.filas, caja: vc.filas, llave };
+      // Con sobres guardados, la llave de la caja de sobres se registra aparte de la del cajón de los fondos.
+      const llaveCaja = guardados ? leerLlaveRequerida(datos.custodia.llaveCaja) : null;
+      if (llaveCaja && !llaveCaja.ok) return { ok: false as const, error: "motivo_llave_caja" as const };
+      custodia = { ubicacion, filas: v.filas, caja: vc.filas, llave, llaveCaja: llaveCaja?.ok ? llaveCaja : null };
     }
 
     const t = (await turnoAbiertoDe(tx, c.s.id))!;
@@ -486,12 +520,14 @@ export async function cerrarDia(
                values (${e.id}, ${usuarioId}, ${custodia.ubicacion}, ${custodia.llave.llave}, ${custodia.llave.motivo})`;
       if (guardados) {
         await registrarRevisionCaja(tx, {
-          sucursalId: c.s.id, momento: "cierre", entregaId: e.id, por: usuarioId, custodio: usuarioId, llave: custodia.llave, filas: custodia.caja,
+          sucursalId: c.s.id, momento: "cierre", entregaId: e.id, por: usuarioId, custodio: usuarioId,
+          llave: custodia.llaveCaja!, llaveCajon: custodia.llave, filas: custodia.caja,
         });
       }
       await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
                values ('entrega_turno', ${e.id}, 'confirmar_custodia',
-                       ${tx.json({ ubicacion: custodia.ubicacion, sobres: custodia.filas, llave: custodia.llave.llave, motivo_llave: custodia.llave.motivo, misma_persona: true })},
+                       ${tx.json({ ubicacion: custodia.ubicacion, sobres: custodia.filas, caja: custodia.caja, llave_cajon: custodia.llave.llave, motivo_llave_cajon: custodia.llave.motivo,
+                                 llave_caja: custodia.llaveCaja?.llave ?? null, motivo_llave_caja: custodia.llaveCaja?.motivo ?? null, misma_persona: true })},
                        ${usuarioId})`;
     }
     await tx`update responsable_lugar set hasta = now() where turno_id = ${c.turnoId} and hasta is null`;
@@ -585,7 +621,7 @@ async function sobresDe(tx: Tx | Sql, entregaId: string, momento: "custodia" | "
  * Cierre de la sucursal cuyo custodio es esta cuenta y aún no confirma la custodia, con los sobres que ya estaban en la
  * caja. null si la cuenta no puede ser custodio ahí (Encargado con custodia.confirmar o custodia nombrada por Dirección).
  */
-export async function custodiasPorConfirmar(sql: Sql, usuarioId: string, codigo: string): Promise<{ sucursal: string; sucursalId: string; cierre: CierrePendiente | null; caja: SobreEnCaja[] } | null> {
+export async function custodiasPorConfirmar(sql: Sql, usuarioId: string, codigo: string): Promise<{ sucursal: string; sucursalId: string; cierre: CierrePendiente | null; caja: SobreEnCaja[]; fuera: SobreFueraDeCaja[] } | null> {
   if (!valido(codigo)) return null;
   const [s] = await sql<{ id: string; nombre: string }[]>`
     select id, nombre from sucursal x where codigo = ${codigo}
@@ -596,7 +632,10 @@ export async function custodiasPorConfirmar(sql: Sql, usuarioId: string, codigo:
   if (!s) return null;
   const c = await cierrePendiente(sql, s.id);
   const cierre = c && c.custodioId === usuarioId && !c.custodia ? c : null;
-  return { sucursal: s.nombre, sucursalId: s.id, cierre, caja: cierre ? await sobresEnCaja(sql, s.id, cierre.entregaId) : [] };
+  return {
+    sucursal: s.nombre, sucursalId: s.id, cierre, caja: cierre ? await sobresEnCaja(sql, s.id, cierre.entregaId) : [],
+    fuera: cierre ? await sobresFueraDeCaja(sql, s.id) : [],
+  };
 }
 
 export type VerificacionDatos = { sobreId: string; estado: string; folioVisto: string; motivo: string };
@@ -625,9 +664,15 @@ export function leerVerificaciones(sobres: Sobre[], datos: VerificacionDatos[]):
  */
 export async function confirmarCustodia(
   sql: Sql, usuarioId: string, codigo: string,
-  datos: { entregaId: string; ubicacion: string; sobres: VerificacionDatos[]; llave?: LlaveDatos },
+  datos: {
+    entregaId: string; ubicacion: string; sobres: VerificacionDatos[];
+    /** Llave del cajón de los fondos. */
+    llave?: LlaveDatos;
+    /** Con sobres guardados: llave de la caja de sobres, por separado. */
+    llaveCaja?: LlaveDatos;
+  },
   { entorno }: { entorno: Entorno },
-): Promise<{ ok: true; incidencias: number } | { ok: false; error: "no_encontrada" | "ya_confirmada" | "ya_abierto" | "ubicacion" | "motivo_llave" | ErrorVerificacion | "bloqueado_produccion"; sobreId?: string }> {
+): Promise<{ ok: true; incidencias: number } | { ok: false; error: "no_encontrada" | "ya_confirmada" | "ya_abierto" | "ubicacion" | "motivo_llave" | "motivo_llave_caja" | ErrorVerificacion | "bloqueado_produccion"; sobreId?: string }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
   if (!valido(codigo) || !esIdentificadorValido(datos.entregaId)) return { ok: false, error: "no_encontrada" };
   const ubicacion = limpiar(datos.ubicacion);
@@ -651,19 +696,26 @@ export async function confirmarCustodia(
     const caja = guardados ? await sobresEnCaja(tx, e.sucursal_id, e.id) : [];
     const vc = leerCaja(caja, datos.sobres);
     if (!vc.ok) return vc;
+    if (guardados && !leerLlaveRequerida(datos.llave).ok) return { ok: false as const, error: "motivo_llave" as const };
+    const llaveCaja = guardados ? leerLlaveRequerida(datos.llaveCaja) : null;
+    if (llaveCaja && !llaveCaja.ok) return { ok: false as const, error: "motivo_llave_caja" as const };
     for (const f of v.filas) {
       await tx`insert into verificacion_sobre (sobre_id, momento, estado, folio_visto, motivo, verificado_por)
                values (${f.sobreId}, 'custodia', ${f.estado}, ${f.folioVisto}, ${f.motivo}, ${usuarioId})`;
     }
     await tx`insert into custodia_cierre (entrega_id, custodio_id, ubicacion, llave, motivo_llave)
              values (${e.id}, ${usuarioId}, ${ubicacion}, ${llave.llave}, ${llave.motivo})`;
-    if (guardados) {
-      await registrarRevisionCaja(tx, { sucursalId: e.sucursal_id, momento: "cierre", entregaId: e.id, por: usuarioId, custodio: usuarioId, llave, filas: vc.filas });
+    if (llaveCaja?.ok) {
+      await registrarRevisionCaja(tx, {
+        sucursalId: e.sucursal_id, momento: "cierre", entregaId: e.id, por: usuarioId, custodio: usuarioId, llave: llaveCaja, llaveCajon: llave, filas: vc.filas,
+      });
     }
-    const incidencias = [...v.filas, ...vc.filas].filter((f) => f.estado !== "correcto").length + (llave.llave === "incidencia" ? 1 : 0);
+    const incidencias = [...v.filas, ...vc.filas].filter((f) => f.estado !== "correcto").length + (llave.llave === "incidencia" ? 1 : 0)
+      + (llaveCaja?.ok && llaveCaja.llave === "incidencia" ? 1 : 0);
     await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
              values ('entrega_turno', ${e.id}, 'confirmar_custodia',
-                     ${tx.json({ ubicacion, sobres: v.filas, caja: vc.filas, llave: llave.llave, motivo_llave: llave.motivo, incidencias })}, ${usuarioId})`;
+                     ${tx.json({ ubicacion, sobres: v.filas, caja: vc.filas, llave: llave.llave, motivo_llave: llave.motivo,
+                                 llave_caja: llaveCaja?.ok ? llaveCaja.llave : null, motivo_llave_caja: llaveCaja?.ok ? llaveCaja.motivo : null, incidencias })}, ${usuarioId})`;
     return { ok: true as const, incidencias };
   });
 }
@@ -674,7 +726,7 @@ export async function confirmarCustodia(
 
 export type ErrorApertura =
   | "no_encontrada" | "sin_permiso" | "sucursal_inactiva" | "sin_cierre" | "otra_persona" | "cambio" | "motivo" | "apoyo"
-  | "custodia_pendiente" | "motivo_custodia" | "fondo" | "motivo_llave" | ErrorVerificacion | "bloqueado_produccion";
+  | "custodia_pendiente" | "motivo_custodia" | "fondo" | "motivo_llave" | "motivo_llave_caja" | ErrorVerificacion | "bloqueado_produccion";
 
 /** Fondo y sobre contados por separado en cada lugar (el total de cada lugar es la suma). */
 export type FondoYSobre = { fondo: string; sobre: string };
@@ -727,6 +779,8 @@ export type PantallaApertura =
       apoyos: Receptor[];
       /** Con sobres guardados: todos los sobres de la caja (incluidos los de este cierre), que quien abre verifica. */
       caja: SobreEnCaja[];
+      /** Sobres que no están en la caja: entregados a Dirección sin confirmar o por devolver. No se verifican. */
+      fuera: SobreFueraDeCaja[];
     }
   | { ok: false; error: ErrorApertura };
 
@@ -752,6 +806,7 @@ export async function pantallaApertura(sql: Sql, usuarioId: string, codigo: stri
     return {
       ok: true, sucursal: s.nombre, cierre: c, recuento, apoyos: await candidatosApoyo(tx, s.id, [usuarioId, c.custodioId]),
       caja: c.sobresGuardados ? await sobresEnCaja(tx, s.id) : [],
+      fuera: c.sobresGuardados ? await sobresFueraDeCaja(tx, s.id) : [],
     };
   });
 }
@@ -768,22 +823,27 @@ export async function abrirDesdeCierre(
     fondos?: ConteoLugares;
     /** Solo si el custodio no confirmó y no está disponible: por qué se abre sin su confirmación. */
     sinCustodia?: { motivo: string } | null;
-    /** Con sobres guardados: quien abre recibe la llave de la caja. */
+    /** Con sobres guardados: quien abre recibe la llave del cajón de los fondos… */
     llave?: LlaveDatos;
+    /** …y, por separado, la de la caja de sobres. */
+    llaveCaja?: LlaveDatos;
   },
   { entorno }: { entorno: Entorno },
 ): Promise<{ ok: true; resultado: "abierto"; turnoId: string } | { ok: true; resultado: "recuento" } | { ok: false; error: ErrorApertura; sobreId?: string }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
   if (!esIdentificadorValido(datos.entregaId)) return { ok: false, error: "sin_cierre" };
   if (!apoyoValido(datos.apoyo)) return { ok: false, error: "apoyo" };
-  const llave = leerLlave(datos.llave);
-  if (!llave.ok) return { ok: false, error: "motivo_llave" };
   return conApoyo(() => sql.begin(async (tx) => {
     const c = await contextoApertura(tx, usuarioId, codigo, datos.entregaId, datos.version);
     if (!c.ok) return c;
     if (c.cierre.estado !== "pendiente") return { ok: false as const, error: "cambio" as const };
-    // Con sobres guardados los sobres no se abren ni se cuentan: pasa solo el fondo, y quien abre verifica la caja.
+    // Con sobres guardados los sobres no se abren ni se cuentan: pasa solo el fondo, y quien abre verifica la caja y
+    // recibe las dos llaves (cada una se registra aparte).
     const guardados = c.cierre.sobresGuardados;
+    const llave = guardados ? leerLlaveRequerida(datos.llave) : leerLlave(datos.llave);
+    if (!llave.ok) return { ok: false as const, error: "motivo_llave" as const };
+    const llaveCaja = guardados ? leerLlaveRequerida(datos.llaveCaja) : leerLlave(undefined);
+    if (!llaveCaja.ok) return { ok: false as const, error: "motivo_llave_caja" as const };
     const fondos = guardados ? datos.conteo : datos.fondos ?? { bolsa: "0", cajon: "0" };
     if (!fondoValido(datos.conteo, fondos)) return { ok: false as const, error: "fondo" as const };
     const sobres = guardados ? [...(await sobresEnCaja(tx, c.sucursalId))] : c.cierre.sobres.map((s) => ({ id: s.id, lugar: s.lugar, folio: s.folio }));
@@ -804,7 +864,8 @@ export async function abrirDesdeCierre(
     }
     if (guardados) {
       await registrarRevisionCaja(tx, {
-        sucursalId: c.sucursalId, momento: "apertura", entregaId: c.cierre.entregaId, por: usuarioId, custodio: usuarioId, llave, filas: v.filas,
+        sucursalId: c.sucursalId, momento: "apertura", entregaId: c.cierre.entregaId, por: usuarioId, custodio: usuarioId,
+        llave: llaveCaja, llaveCajon: llave, filas: v.filas,
       });
     } else {
       for (const f of v.filas) {
@@ -824,7 +885,8 @@ export async function abrirDesdeCierre(
     await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
              values ('entrega_turno', ${c.cierre.entregaId}, 'abrir_conteo',
                      ${tx.json({ sobres: v.filas, bolsa_visitas: datos.conteo.bolsa, cajon_mensualidades: datos.conteo.cajon, fondos,
-                                 sobres_guardados: guardados, llave: guardados ? llave.llave : null, motivo_llave: guardados ? llave.motivo : null,
+                                 sobres_guardados: guardados, llave_cajon: guardados ? llave.llave : null, motivo_llave_cajon: guardados ? llave.motivo : null,
+                                 llave_caja: guardados ? llaveCaja.llave : null, motivo_llave_caja: guardados ? llaveCaja.motivo : null,
                                  misma_persona: usuarioId === c.cierre.cerradoPorId, custodio_abre: usuarioId === c.cierre.custodioId })},
                      ${usuarioId})`;
     const cerrado = porLugar(await CONTEOS(tx, c.cierre.entregaId), "entregado");
@@ -922,6 +984,10 @@ export async function registrarIncidenciasCaja(tx: Tx, entregaId: string) {
            where r.entrega_id = ${entregaId} and v.estado <> 'correcto' order by r.en, v.id`;
   await tx`insert into incidencia_cierre (entrega_id, tipo, revision_id)
            select ${entregaId}, 'llave_caja', r.id from revision_caja r where r.entrega_id = ${entregaId} and r.llave = 'incidencia' order by r.en`;
+  // Llave del cajón de los fondos al recibir la custodia (al cerrar ya queda como «llave_custodia»).
+  await tx`insert into incidencia_cierre (entrega_id, tipo, revision_id)
+           select ${entregaId}, 'llave_cajon', r.id from revision_caja r
+           where r.entrega_id = ${entregaId} and r.momento in ('apertura', 'cambio_turno') and r.llave_cajon = 'incidencia' order by r.en`;
 }
 
 /** Bloquea el cierre (primero la fila de la entrega) y comprueba quién abre. */
