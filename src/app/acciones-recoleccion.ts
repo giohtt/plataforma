@@ -11,7 +11,7 @@ import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { leerLlaveFormulario, leerVerificacionSobres, MENSAJES_VERIFICACION } from "@/lib/formulario-conteo";
 import {
-  cancelarEntregaSobres, confirmarRecoleccion, registrarDepositoRecoleccion, registrarDevolucion, registrarEntregaSobres, revisarDiferenciaSobre,
+  cancelarEntregaSobres, confirmarRecoleccion, registrarDepositoRecoleccion, registrarDevolucion, registrarEntregaSobres, revisarDiferenciaSobre, revisarIncidenciaLlave,
   type ErrorRecoleccion,
 } from "@/lib/recolecciones";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
@@ -121,7 +121,7 @@ export async function accionRegistrarDevolucion(previo: EstadoFormularioEntrega,
   const valores: Record<string, string> = { ...vs, llave_caja: llave.estado, motivo_llave_caja: llave.motivo };
   const intento = (previo?.intento ?? 0) + 1;
   const r = await registrarDevolucion(sql, sesion.usuarioId, codigo, { recoleccionId: leer("recoleccion"), sobres, llave }, { entorno: leerEntorno() });
-  if (r.ok) redirect(`/sucursales/${codigo}/recoleccion?aviso=devuelta&incidencias=${r.incidencias}`);
+  if (r.ok) redirect(`/sucursales/${codigo}/recoleccion?aviso=devuelta&pendientes=${r.pendientes}&incidencias=${r.incidencias}`);
   if (r.error === "motivo_llave") {
     return { error: MARCADOS, errores: { motivo_llave_caja: "Indica si la caja de sobres está cerrada y tienes su llave; si hay un problema, escribe el motivo." }, valores, intento };
   }
@@ -151,6 +151,18 @@ export async function accionRevisarDiferenciaSobre(previo: EstadoFormularioEntre
   const valores = { resultado: leer("resultado", 30), motivo: leer("motivo", 400) };
   const intento = (previo?.intento ?? 0) + 1;
   const r = await revisarDiferenciaSobre(sql, sesion.usuarioId, codigo, { diferenciaId: leer("diferencia"), ...valores }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/recoleccion?aviso=revisada`);
+  if (r.error === "motivo" || r.error === "resultado") return { error: MARCADOS, errores: { [r.error]: MENSAJES[r.error] }, valores, intento };
+  return { error: MENSAJES[r.error], valores, intento };
+}
+
+export async function accionRevisarIncidenciaLlave(previo: EstadoFormularioEntrega, datos: FormData): Promise<EstadoFormularioEntrega> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 10);
+  const valores = { resultado: leer("resultado", 30), motivo: leer("motivo", 400) };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await revisarIncidenciaLlave(sql, sesion.usuarioId, codigo, { incidenciaId: leer("incidencia"), ...valores }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/recoleccion?aviso=revisada`);
   if (r.error === "motivo" || r.error === "resultado") return { error: MARCADOS, errores: { [r.error]: MENSAJES[r.error] }, valores, intento };
   return { error: MENSAJES[r.error], valores, intento };

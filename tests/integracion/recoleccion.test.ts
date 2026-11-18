@@ -4,11 +4,11 @@ import {
   abrirDesdeCierre, cerrarDia, cierrePendiente, configurarCustodia, confirmarCustodia, custodiasPorConfirmar, pantallaApertura,
   pantallaCierre, prepararCierre, sobresEnCaja, sobresFueraDeCaja,
 } from "@/lib/cierres";
-import { pantallaRecepcion, recibirTurno, registrarEntrega } from "@/lib/entregas";
+import { cancelarEntrega, pantallaRecepcion, recibirTurno, registrarEntrega } from "@/lib/entregas";
 import { cambiarMontoFondo, confirmarEntradaFondo } from "@/lib/fondos";
 import {
   cancelarEntregaSobres, confirmarRecoleccion, pantallaRecoleccion, registrarDepositoRecoleccion, registrarDevolucion, registrarEntregaSobres,
-  revisarDiferenciaSobre,
+  revisarDiferenciaSobre, revisarIncidenciaLlave,
 } from "@/lib/recolecciones";
 import { listaDiferencias } from "@/lib/diferencias";
 import { pantallaFondos } from "@/lib/fondos";
@@ -379,7 +379,7 @@ describe.skipIf(!URL_ADMIN)("sobres guardados y recolección semanal por Direcci
     expect((await sobresEnCaja(sql, e.sucursalId)).map((s) => s.id)).toEqual([c.sobres[1].id]);
   });
 
-  it("si se cancela la entrega, los sobres vuelven a la caja solo al registrar su devolución física", async () => {
+  it("si se cancela la entrega, el sobre vuelve a la caja solo al registrar su devolución física", async () => {
     const e = await escenario();
     const c = await cerrarYo(e, e.vespertina);
     await abrir(e, e.matutina);
@@ -387,34 +387,144 @@ describe.skipIf(!URL_ADMIN)("sobres guardados y recolección semanal por Direcci
     if (!en.ok) throw new Error(en.error);
     expect(await cancelarEntregaSobres(sql, e.matutina, e.codigo, { recoleccionId: en.recoleccionId, version: 1, motivo: "no" }, PRUEBAS)).toEqual({ ok: false, error: "motivo" });
     expect(await cancelarEntregaSobres(sql, e.dir, e.codigo, { recoleccionId: en.recoleccionId, version: 1, motivo: "No pude contarlos hoy" }, PRUEBAS)).toEqual({ ok: true });
-    // Cancelada pero sin devolver: no está en la caja ni se puede volver a entregar.
+    // Cancelada pero sin devolver: no está en la caja ni se puede volver a entregar (la base tampoco lo deja).
     expect((await sobresEnCaja(sql, e.sucursalId)).map((s) => s.id)).toEqual([c.sobres[1].id]);
     expect((await sobresFueraDeCaja(sql, e.sucursalId)).map((f) => [f.id, f.estado])).toEqual([[c.sobres[0].id, "por_devolver"]]);
-    expect(await registrarEntregaSobres(sql, e.matutina, e.codigo, { sobres: [c.sobres[1].id], recibe: e.dir }, PRUEBAS)).toEqual({ ok: false, error: "devolucion_pendiente" });
-    const [cfg] = await sql<{ id: string }[]>`
+    expect(await registrarEntregaSobres(sql, e.matutina, e.codigo, { sobres: [c.sobres[0].id], recibe: e.dir }, PRUEBAS)).toEqual({ ok: false, error: "sobres" });
+    const [x] = await sql<{ id: string }[]>`
       insert into recoleccion (sucursal_id, turno_id, entrega_por, recibe) values (${e.sucursalId}, ${e.turnoId}, ${e.matutina}, ${e.dir}) returning id`;
-    await expect(sql`insert into recoleccion_sobre (recoleccion_id, sobre_id) values (${cfg.id}, ${c.sobres[0].id})`).rejects.toThrow(/por devolver/);
-    await sql`update recoleccion set estado = 'cancelada', resuelta_en = now(), motivo_cancelacion = 'Prueba de la base' where id = ${cfg.id}`;
-    await sql`insert into devolucion_recoleccion (recoleccion_id, devuelve_por, recibida_por, turno_id) values (${cfg.id}, ${e.dir}, ${e.matutina}, ${e.turnoId})`;
+    await expect(sql`insert into recoleccion_sobre (recoleccion_id, sobre_id) values (${x.id}, ${c.sobres[0].id})`).rejects.toThrow(/por devolver/);
+    await sql`update recoleccion set estado = 'cancelada', resuelta_en = now(), motivo_cancelacion = 'Prueba de la base' where id = ${x.id}`;
     // Dirección no registra su propia devolución; la recibe la responsable en turno, verificando el sobre.
     const datos = { recoleccionId: en.recoleccionId, sobres: [{ sobreId: c.sobres[0].id, estado: "abierto", folioVisto: "", motivo: "El sello volvió despegado" }], llave: LLAVE };
     expect(await registrarDevolucion(sql, e.dir, e.codigo, datos, PRUEBAS)).toEqual({ ok: false, error: "sin_permiso" });
     expect(await registrarDevolucion(sql, e.vespertina, e.codigo, datos, PRUEBAS)).toEqual({ ok: false, error: "no_responsable" });
     expect(await registrarDevolucion(sql, e.matutina, e.codigo, { ...datos, sobres: [] }, PRUEBAS)).toEqual({ ok: false, error: "sobres" });
-    expect(await registrarDevolucion(sql, e.matutina, e.codigo, datos, PRUEBAS)).toEqual({ ok: true, incidencias: 1 });
+    expect(await registrarDevolucion(sql, e.matutina, e.codigo, { ...datos, llave: undefined }, PRUEBAS)).toEqual({ ok: false, error: "motivo_llave" });
+    expect(await registrarDevolucion(sql, e.matutina, e.codigo, datos, PRUEBAS)).toEqual({ ok: true, devueltos: 1, pendientes: 0, incidencias: 1 });
     expect((await sobresEnCaja(sql, e.sucursalId)).map((s) => s.id).sort()).toEqual(c.sobres.map((s) => s.id).sort());
     expect(await sobresFueraDeCaja(sql, e.sucursalId)).toEqual([]);
+    // Ya no queda nada por devolver de esa entrega.
+    expect(await registrarDevolucion(sql, e.matutina, e.codigo, datos, PRUEBAS)).toEqual({ ok: false, error: "sin_devolucion" });
     // El sobre que volvió abierto queda por revisar, y Administración que no participó lo revisa.
     const p = await pantallaRecoleccion(sql, e.admin, e.codigo, "pruebas");
     if (!p.ok) throw new Error(p.error);
     const dev = p.devoluciones.find((d) => d.id === en.recoleccionId)!;
-    expect(dev.diferencias).toEqual([expect.objectContaining({ folio: c.sobres[0].folio, importe: "0.00", puedeRevisar: true })]);
-    expect(dev.diferencias[0].cadena.map((x) => x.momento)).toEqual(expect.arrayContaining(["Entrega cancelada (por devolver)", "Recibió la devolución en la caja"]));
-    expect(await revisarDiferenciaSobre(sql, e.admin, e.codigo, { diferenciaId: dev.diferencias[0].id, resultado: "incidencia_confirmada", motivo: "El sobre volvió abierto" }, PRUEBAS))
+    const dif = dev.sobres[0].diferencias;
+    expect(dif).toEqual([expect.objectContaining({ folio: c.sobres[0].folio, importe: "0.00", puedeRevisar: true })]);
+    expect(dif[0].cadena.map((y) => y.momento)).toEqual(expect.arrayContaining(["Entrega cancelada (por devolver)", "Revisó la devolución", "Volvió a la caja (devolución)"]));
+    expect(await revisarDiferenciaSobre(sql, e.admin, e.codigo, { diferenciaId: dif[0].id, resultado: "incidencia_confirmada", motivo: "El sobre volvió abierto" }, PRUEBAS))
       .toEqual({ ok: true });
     // Ya devuelto, se puede volver a entregar.
     const otra = await registrarEntregaSobres(sql, e.matutina, e.codigo, { sobres: [c.sobres[0].id], recibe: e.dir }, PRUEBAS);
     expect(otra.ok).toBe(true);
+  });
+
+  it("devolución por sobre: se devuelven dos y falta uno, que sigue pendiente con su incidencia y su cadena hasta que regresa", async () => {
+    const e = await escenario();
+    const dia1 = await cerrarYo(e, e.vespertina);
+    await abrir(e, e.matutina);
+    const dia2 = await cerrarYo(e, e.matutina, { bolsa: "800", cajon: "3300" }, { bolsa: "300", cajon: "300" });
+    await abrir(e, e.vespertina);
+    // Tres sobres a Dirección; el cajón del día 2 se queda en la caja.
+    const tres = [dia1.sobres[0], dia1.sobres[1], dia2.sobres[0]];
+    const en = await registrarEntregaSobres(sql, e.vespertina, e.codigo, { sobres: tres.map((x) => x.id), recibe: e.dir }, PRUEBAS);
+    if (!en.ok) throw new Error(en.error);
+    await cancelarEntregaSobres(sql, e.dir, e.codigo, { recoleccionId: en.recoleccionId, version: 1, motivo: "Se canceló la visita" }, PRUEBAS);
+    expect((await sobresFueraDeCaja(sql, e.sucursalId)).map((f) => f.estado)).toEqual(["por_devolver", "por_devolver", "por_devolver"]);
+
+    // Dirección devuelve dos; el tercero (la bolsa del día 2) no regresa. La llave de la caja también tuvo un problema.
+    const verificacion = [
+      { sobreId: tres[0].id, estado: "correcto", folioVisto: "", motivo: "" },
+      { sobreId: tres[1].id, estado: "correcto", folioVisto: "", motivo: "" },
+      { sobreId: tres[2].id, estado: "falta", folioVisto: "", motivo: "Dirección no lo trajo de vuelta" },
+    ];
+    // Hay que indicar qué pasó con cada sobre pendiente, también con el que falta.
+    expect(await registrarDevolucion(sql, e.vespertina, e.codigo, { recoleccionId: en.recoleccionId, sobres: verificacion.slice(0, 2), llave: LLAVE }, PRUEBAS))
+      .toEqual({ ok: false, error: "sobres" });
+    const r1 = await registrarDevolucion(sql, e.vespertina, e.codigo, {
+      recoleccionId: en.recoleccionId, sobres: verificacion, llave: { estado: "incidencia", motivo: "La caja de sobres estaba sin llave" },
+    }, PRUEBAS);
+    expect(r1).toEqual({ ok: true, devueltos: 2, pendientes: 1, incidencias: 2 });
+
+    // Solo los dos recibidos vuelven a la caja; el tercero sigue visible como pendiente de devolución.
+    expect((await sobresEnCaja(sql, e.sucursalId)).map((x) => x.id).sort()).toEqual([dia1.sobres[0].id, dia1.sobres[1].id, dia2.sobres[1].id].sort());
+    expect(await sobresFueraDeCaja(sql, e.sucursalId)).toEqual([expect.objectContaining({ id: tres[2].id, estado: "por_devolver", recibe: expect.stringContaining("Dirección") })]);
+    // La base no deja meterlo a la caja sin haberlo recibido.
+    const [rev] = await sql<{ revision_id: string; id: string }[]>`
+      select revision_id, id from devolucion_recoleccion where recoleccion_id = ${en.recoleccionId}`;
+    await expect(sql`insert into devolucion_sobre (devolucion_id, recoleccion_id, sobre_id) values (${rev.id}, ${en.recoleccionId}, ${tres[2].id})`)
+      .rejects.toThrow(/recibido y verificado/);
+    // Un cambio de turno no lo pide en la caja.
+    const ent = await registrarEntrega(sql, e.vespertina, e.codigo, { turnoId: e.turnoId, conteo: { bolsa: "300", cajon: "300" }, recibe: e.matutina, nota: "", apoyo: NADIE }, PRUEBAS);
+    if (!ent.ok) throw new Error(ent.error);
+    const pr = await pantallaRecepcion(sql, e.matutina, e.codigo, "pruebas");
+    if (!pr.ok) throw new Error(pr.error);
+    expect(pr.caja!.map((x) => x.id)).not.toContain(tres[2].id);
+    expect(pr.fuera.map((f) => [f.id, f.estado])).toEqual([[tres[2].id, "por_devolver"]]);
+    const [v] = await sql<{ version: number }[]>`select version from entrega_turno where id = ${ent.entregaId}`;
+    expect(await cancelarEntrega(sql, e.vespertina, e.codigo, { entregaId: ent.entregaId, version: v.version, motivo: "Sigue la vespertina" }, PRUEBAS)).toMatchObject({ ok: true });
+
+    // En pantalla: dos devueltos, uno pendiente con su incidencia («no está») y su cadena; la llave queda por revisar.
+    const p = await pantallaRecoleccion(sql, e.admin, e.codigo, "pruebas");
+    if (!p.ok) throw new Error(p.error);
+    const pend = p.porDevolver.find((d) => d.id === en.recoleccionId)!;
+    expect(pend.sobres.map((x) => [x.id, x.devuelto !== null])).toEqual(tres.map((x, i) => [x.id, i < 2]));
+    const falta = pend.sobres[2];
+    expect(falta.diferencias).toEqual([expect.objectContaining({ verificacion: expect.objectContaining({ estado: "falta" }), estado: "por_revisar", puedeRevisar: true })]);
+    expect(falta.cadena.map((x) => x.momento)).toEqual(expect.arrayContaining(["Entregó a Dirección", "Entrega cancelada (por devolver)", "Revisó la devolución"]));
+    expect(falta.cadena.map((x) => x.momento)).not.toContain("Volvió a la caja (devolución)");
+    expect(p.incidenciasLlave).toEqual([expect.objectContaining({ momento: "devolucion", estado: "por_revisar", puedeRevisar: true })]);
+
+    // Revisa Administración que no participó: quien recibió la devolución no, aunque también sea Administración.
+    await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${e.vespertina}, 'administracion', ${e.sucursalId}, 'Prueba: también Administración')`;
+    const llaveId = p.incidenciasLlave[0].id;
+    expect(await revisarIncidenciaLlave(sql, e.vespertina, e.codigo, { incidenciaId: llaveId, resultado: "aclarada", motivo: "Se le olvidó cerrarla" }, PRUEBAS))
+      .toEqual({ ok: false, error: "participaste" });
+    await expect(sql`insert into revision_incidencia_llave (incidencia_id, resultado, motivo, revisada_por) values (${llaveId}, 'aclarada', 'Se le olvidó', ${e.vespertina})`)
+      .rejects.toThrow(/participó/);
+    expect(await revisarIncidenciaLlave(sql, e.dir, e.codigo, { incidenciaId: llaveId, resultado: "aclarada", motivo: "Se le olvidó cerrarla" }, PRUEBAS))
+      .toEqual({ ok: false, error: "sin_permiso" });
+    expect(await revisarIncidenciaLlave(sql, e.admin, e.codigo, { incidenciaId: llaveId, resultado: "incidencia_confirmada", motivo: "La caja quedó sin llave" }, PRUEBAS))
+      .toEqual({ ok: true });
+
+    // Días después Dirección trae el sobre que faltaba: vuelve a la caja con una segunda devolución.
+    const r2 = await registrarDevolucion(sql, e.vespertina, e.codigo, {
+      recoleccionId: en.recoleccionId, sobres: [{ sobreId: tres[2].id, estado: "correcto", folioVisto: "", motivo: "" }], llave: LLAVE,
+    }, PRUEBAS);
+    expect(r2).toEqual({ ok: true, devueltos: 1, pendientes: 0, incidencias: 0 });
+    expect(await sobresFueraDeCaja(sql, e.sucursalId)).toEqual([]);
+    const q = await pantallaRecoleccion(sql, e.admin, e.codigo, "pruebas");
+    if (!q.ok) throw new Error(q.error);
+    expect(q.porDevolver).toEqual([]);
+    const hecha = q.devoluciones.find((d) => d.id === en.recoleccionId)!;
+    expect(hecha.sobres.every((x) => x.devuelto)).toBe(true);
+    // La incidencia de cuando no regresó se conserva.
+    expect(hecha.sobres[2].diferencias).toHaveLength(1);
+  });
+
+  it("un problema con la llave de la caja al recoger queda por revisar para Administración que no participó", async () => {
+    const e = await escenario();
+    const c = await cerrarYo(e, e.vespertina);
+    await abrir(e, e.matutina);
+    const en = await registrarEntregaSobres(sql, e.matutina, e.codigo, { sobres: [c.sobres[0].id], recibe: e.dir }, PRUEBAS);
+    if (!en.ok) throw new Error(en.error);
+    const ok = await confirmarRecoleccion(sql, e.dir, e.codigo, {
+      recoleccionId: en.recoleccionId, version: 1, sobres: [{ sobreId: c.sobres[0].id, estado: "correcto", folioVisto: "", motivo: "", contado: "420" }],
+      llave: { estado: "incidencia", motivo: "La caja de sobres no tenía puesta la llave" },
+    }, PRUEBAS);
+    expect(ok).toEqual({ ok: true, recogido: "420.00", diferencias: 0 });
+    const p = await pantallaRecoleccion(sql, e.admin, e.codigo, "pruebas");
+    if (!p.ok) throw new Error(p.error);
+    expect(p.incidenciasLlave).toEqual([expect.objectContaining({ momento: "recoleccion", estado: "por_revisar", puedeRevisar: true })]);
+    // Quien entregó los sobres participó: no revisa aunque tenga Administración.
+    await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${e.matutina}, 'administracion', ${e.sucursalId}, 'Prueba: también Administración')`;
+    expect(await revisarIncidenciaLlave(sql, e.matutina, e.codigo, { incidenciaId: p.incidenciasLlave[0].id, resultado: "aclarada", motivo: "Estaba bien" }, PRUEBAS))
+      .toEqual({ ok: false, error: "participaste" });
+    expect(await revisarIncidenciaLlave(sql, e.admin, e.codigo, { incidenciaId: p.incidenciasLlave[0].id, resultado: "aclarada", motivo: "La llave estaba en el cajón" }, PRUEBAS))
+      .toEqual({ ok: true });
+    const q = await pantallaRecoleccion(sql, e.admin, e.codigo, "pruebas");
+    expect(q.ok && q.incidenciasLlave[0]).toMatchObject({ estado: "aclarada", puedeRevisar: false });
   });
 
   it("con un cambio de turno en curso no se entregan sobres", async () => {

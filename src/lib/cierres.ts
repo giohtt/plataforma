@@ -198,7 +198,8 @@ export async function sobresFueraDeCaja(tx: Tx | Sql, sucursalId: string): Promi
     from recoleccion r join recoleccion_sobre x on x.recoleccion_id = r.id join sobre_cierre s on s.id = x.sobre_id
     join lugar_efectivo l on l.id = s.lugar_id join usuario a on a.id = r.entrega_por join usuario b on b.id = r.recibe
     where r.sucursal_id = ${sucursalId}
-      and (r.estado = 'pendiente' or (r.estado = 'cancelada' and not exists (select 1 from devolucion_recoleccion d where d.recoleccion_id = r.id)))
+      and (r.estado = 'pendiente'
+           or (r.estado = 'cancelada' and not exists (select 1 from devolucion_sobre d where d.recoleccion_id = r.id and d.sobre_id = s.id)))
     order by r.creada_en, s.resuelto_en, s.folio`)];
 }
 /** Días desde que se guardó un sobre a partir de los cuales hay aviso (aprobado el 18 nov 2026). */

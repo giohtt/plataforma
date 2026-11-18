@@ -2,11 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   FormularioCancelarEntregaSobres, FormularioConfirmarRecoleccion, FormularioDeposito, FormularioDevolucion, FormularioEntregarSobres,
-  FormularioRevisarDiferenciaSobre,
+  FormularioRevisarDiferenciaSobre, FormularioRevisarIncidenciaLlave,
 } from "@/components/Recoleccion";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
-import { pantallaRecoleccion, type DiferenciaSobre } from "@/lib/recolecciones";
+import { pantallaRecoleccion, type Cadena, type DiferenciaSobre, type EntregaCancelada } from "@/lib/recolecciones";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
 export const metadata = { title: "Caja de sobres · Fitnessland" };
@@ -24,7 +24,7 @@ const COMO = { correcto: "cerrado y con su folio", abierto: "abierto o con el se
 const AVISO: Record<string, string> = {
   entregados: "Entrega registrada. Dirección la confirma desde su cuenta al verificar y contar cada sobre.",
   cancelada: "Entrega cancelada. Los sobres quedan por devolver: vuelven a la caja cuando la responsable en turno registre que los recibe.",
-  devuelta: "Devolución registrada: los sobres están otra vez en la caja.",
+  devuelta: "Devolución registrada: los sobres recibidos están otra vez en la caja.",
   deposito: "Depósito registrado.",
   revisada: "Revisión guardada.",
 };
@@ -36,17 +36,43 @@ function TarjetaDiferencia({ d, codigo, devolucion = false }: { d: DiferenciaSob
       <p>
         <strong>Sobre <span className="mono">{d.folio}</span></strong>
         {d.contado !== null ? <> · anotado {pesos.format(Number(d.anotado))} · contado {pesos.format(Number(d.contado))} · diferencia <strong>{firmado(d.importe)}</strong></> : null}
-        {d.verificacion ? <> · {devolucion ? "volvió" : "llegó"} {COMO[d.verificacion.estado]}{d.verificacion.folioVisto ? ` (${d.verificacion.folioVisto})` : ""}: «{d.verificacion.motivo}»</> : null}
+        {d.verificacion ? <> · {devolucion && d.verificacion.estado === "falta" ? "no regresó en la devolución" : `${devolucion ? "volvió" : "llegó"} ${COMO[d.verificacion.estado]}`}{d.verificacion.folioVisto ? ` (${d.verificacion.folioVisto})` : ""}: «{d.verificacion.motivo}»</> : null}
       </p>
       <p className="sub" data-testid="estado-diferencia">{ESTADO_DIF[d.estado]}{d.revisadaPor ? ` · ${d.revisadaPor}: «${d.motivo}»` : ""}</p>
-      <details>
-        <summary>Cadena de custodia</summary>
-        <ol className="lista-simple" data-testid="cadena">
-          {d.cadena.map((c, i) => <li key={i}>{hora.format(c.en)} · {c.momento} · {c.nombre}{c.estado ? ` · ${COMO[c.estado as keyof typeof COMO] ?? c.estado}` : ""}</li>)}
-        </ol>
-      </details>
+      <ListaCadena cadena={d.cadena} />
       {d.puedeRevisar ? <FormularioRevisarDiferenciaSobre codigo={codigo} diferenciaId={d.id} importe={d.importe} /> : null}
     </div>
+  );
+}
+
+function ListaCadena({ cadena }: { cadena: Cadena }) {
+  return (
+    <details>
+      <summary>Cadena de custodia</summary>
+      <ol className="lista-simple" data-testid="cadena">
+        {cadena.map((c, i) => <li key={i}>{hora.format(c.en)} · {c.momento} · {c.nombre}{c.estado ? ` · ${COMO[c.estado as keyof typeof COMO] ?? c.estado}` : ""}</li>)}
+      </ol>
+    </details>
+  );
+}
+
+/** Entrega cancelada, sobre por sobre: devuelto a la caja o pendiente de devolución, con sus incidencias y su cadena. */
+function SobresCancelados({ d, codigo }: { d: EntregaCancelada; codigo: string }) {
+  return (
+    <ul className="lista-simple">
+      {d.sobres.map((x) => (
+        <li key={x.id} data-testid={`devolucion-${x.folio}`}>
+          <p>
+            Sobre <span className="mono">{x.folio}</span> · {LUGAR[x.lugar]} ·{" "}
+            {x.devuelto
+              ? <>volvió a la caja {hora.format(x.devuelto.en)} · recibió {x.devuelto.recibio}</>
+              : <strong data-testid="pendiente-devolucion">pendiente de devolución (lo tiene {d.devuelve})</strong>}
+          </p>
+          {x.diferencias.map((f) => <TarjetaDiferencia key={f.id} d={f} codigo={codigo} devolucion />)}
+          {!x.diferencias.length ? <ListaCadena cadena={x.cadena} /> : null}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -54,7 +80,7 @@ function TarjetaDiferencia({ d, codigo, devolucion = false }: { d: DiferenciaSob
 export default async function Recoleccion({ params, searchParams }: PageProps<"/sucursales/[codigo]/recoleccion">) {
   const sesion = await requerirSesion();
   const { codigo } = await params;
-  const { aviso, diferencias } = await searchParams;
+  const { aviso, diferencias, pendientes } = await searchParams;
   const p = await pantallaRecoleccion(obtenerBaseDatos()!, sesion.usuarioId, codigo, leerEntorno());
   if (!p.ok && p.error === "no_encontrada") notFound();
   if (!p.ok) {
@@ -80,6 +106,11 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
         <p className="aviso aviso-ok" role="status" data-testid="aviso-recogida">
           Recolección confirmada{diferencias && diferencias !== "0" ? `: ${diferencias} ${diferencias === "1" ? "sobre queda" : "sobres quedan"} por revisar (Administración)` : ""}.
           Lo recogido queda bajo tu responsabilidad hasta depositarlo.
+        </p>
+      ) : aviso === "devuelta" && pendientes && pendientes !== "0" ? (
+        <p className="aviso aviso-info" role="status" data-testid="aviso-devolucion-parcial">
+          Devolución registrada: los sobres recibidos están otra vez en la caja. {pendientes === "1" ? "Un sobre sigue" : `${pendientes} sobres siguen`} pendiente
+          {pendientes === "1" ? "" : "s"} de devolución, con su incidencia por revisar.
         </p>
       ) : typeof aviso === "string" && AVISO[aviso] ? <p className="aviso aviso-ok" role="status">{AVISO[aviso]}</p> : null}
 
@@ -143,11 +174,13 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
         <section key={d.id} className="tarjeta" aria-labelledby={`t-dev-${d.id}`} data-testid="devolucion-pendiente">
           <h2 id={`t-dev-${d.id}`} className="titulo-seccion">Devolución pendiente a la caja</h2>
           <p className="sub">
-            Entrega de {d.entregaPor} a {d.devuelve} cancelada {hora.format(d.canceladaEn)}: «{d.motivo}». Sobres: {d.sobres.map((x) => x.folio).join(", ")}.
+            Entrega de {d.entregaPor} a {d.devuelve} cancelada {hora.format(d.canceladaEn)}: «{d.motivo}». Solo los sobres recibidos
+            físicamente vuelven a la caja; los demás siguen pendientes.
           </p>
+          <SobresCancelados d={d} codigo={codigo} />
           {p.puedeRecibirDevolucion && d.devuelveId !== sesion.usuarioId
-            ? <FormularioDevolucion codigo={codigo} recoleccionId={d.id} sobres={d.sobres} devuelve={d.devuelve} />
-            : <p className="sub">La responsable en turno registra que los recibe de vuelta, verificando cada sobre.</p>}
+            ? <FormularioDevolucion codigo={codigo} recoleccionId={d.id} sobres={d.sobres.filter((x) => !x.devuelto)} devuelve={d.devuelve} />
+            : <p className="sub">La responsable en turno registra los que recibe de vuelta, verificando cada sobre.</p>}
         </section>
       ))}
 
@@ -209,11 +242,26 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
           <h2 id="t-devueltas" className="titulo-seccion">Entregas canceladas y devueltas</h2>
           {p.devoluciones.map((d) => (
             <div key={d.id} className="tarjeta" data-testid="devolucion">
+              <p>Canceló {hora.format(d.canceladaEn)} («{d.motivo}») · devolvió <strong>{d.devuelve}</strong></p>
+              <SobresCancelados d={d} codigo={codigo} />
+            </div>
+          ))}
+        </section>
+      ) : null}
+
+      {p.incidenciasLlave.length ? (
+        <section className="tarjeta" aria-labelledby="t-llaves" data-testid="incidencias-llave">
+          <h2 id="t-llaves" className="titulo-seccion">Llave de la caja de sobres al recoger o devolver</h2>
+          {p.incidenciasLlave.map((i) => (
+            <div key={i.id} className="tarjeta" data-testid="incidencia-llave">
               <p>
-                Canceló {hora.format(d.canceladaEn)} («{d.motivo}») · devolvió <strong>{d.devuelve}</strong> · recibió <strong>{d.recibio}</strong> ·{" "}
-                {hora.format(d.devueltaEn)} · {d.sobres.map((x) => x.folio).join(", ")}
+                {i.momento === "recoleccion" ? "Al recoger" : "Al devolver"} · {hora.format(i.en)} · {i.por}: «{i.motivo}»
               </p>
-              {d.diferencias.map((x) => <TarjetaDiferencia key={x.id} d={x} codigo={codigo} devolucion />)}
+              <p className="sub" data-testid="estado-incidencia-llave">
+                {i.estado === "por_revisar" ? "Por revisar (Administración que no participó)" : i.estado === "aclarada" ? "Aclarada" : "Incidencia confirmada"}
+                {i.revisadaPor ? ` · ${i.revisadaPor}: «${i.motivoRevision}»` : ""}
+              </p>
+              {i.puedeRevisar ? <FormularioRevisarIncidenciaLlave codigo={codigo} incidenciaId={i.id} /> : null}
             </div>
           ))}
         </section>

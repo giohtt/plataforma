@@ -4,7 +4,7 @@ import { useActionState, useState } from "react";
 import type { EstadoFormularioEntrega } from "@/app/acciones-entrega";
 import {
   accionCancelarEntregaSobres, accionConfirmarRecoleccion, accionEntregarSobres, accionRegistrarDeposito, accionRegistrarDevolucion,
-  accionRevisarDiferenciaSobre,
+  accionRevisarDiferenciaSobre, accionRevisarIncidenciaLlave,
 } from "@/app/acciones-recoleccion";
 import { Llave, VerificarSobres } from "@/components/Caja";
 import { Importe } from "@/components/Entrega";
@@ -191,10 +191,42 @@ export function FormularioDevolucion({ codigo, recoleccionId, sobres, devuelve }
       <Aviso estado={estado} />
       <input type="hidden" name="codigo" value={codigo} />
       <input type="hidden" name="recoleccion" value={recoleccionId} />
-      <p className="sub">Recibes de {devuelve} los sobres de la entrega cancelada. Verifica cada uno antes de guardarlo en la caja.</p>
+      <p className="sub">
+        Recibes de {devuelve} los sobres de la entrega cancelada. Verifica cada uno: si no te lo devuelve, marca «No está el sobre»
+        y seguirá pendiente de devolución.
+      </p>
       <VerificarSobres estado={estado} sobres={sobres} porFolio pregunta="¿Te lo devuelven cerrado, con el sello intacto y con este folio?" />
       <Llave estado={estado} de="caja" />
       <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Registrando…" : "Registrar la devolución a la caja"}</button>
+    </form>
+  );
+}
+
+/** Administración (que no participó) revisa un problema con la llave de la caja de sobres al recoger o devolver. */
+export function FormularioRevisarIncidenciaLlave({ codigo, incidenciaId }: { codigo: string; incidenciaId: string }) {
+  const [estado, accion, enviando] = useActionState(accionRevisarIncidenciaLlave, null);
+  return (
+    <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate data-testid="formulario-revisar-llave">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="incidencia" value={incidenciaId} />
+      <fieldset className="campo campo-grupo" aria-invalid={estado?.errores?.resultado ? true : undefined}>
+        <legend>Resultado de la revisión</legend>
+        {([["aclarada", "Aclarada"], ["incidencia_confirmada", "Incidencia confirmada"]] as const).map(([v, t]) => (
+          <label key={v} className="opcion-revision">
+            <input type="radio" name="resultado" value={v} defaultChecked={estado?.valores?.resultado === v} />
+            <span>{t}</span>
+          </label>
+        ))}
+        {estado?.errores?.resultado ? <span className="campo-error">{estado.errores.resultado}</span> : null}
+      </fieldset>
+      <div className="campo">
+        <label htmlFor={`motivo-llave-${incidenciaId}`}>Motivo</label>
+        <textarea id={`motivo-llave-${incidenciaId}`} name="motivo" rows={2} maxLength={300} defaultValue={estado?.valores?.motivo ?? ""}
+          aria-invalid={estado?.errores?.motivo ? true : undefined} />
+        {estado?.errores?.motivo ? <span className="campo-error">{estado.errores.motivo}</span> : null}
+      </div>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Guardando…" : "Guardar la revisión"}</button>
     </form>
   );
 }

@@ -224,38 +224,55 @@ async function cierreYApertura(page: Page, e: Awaited<ReturnType<typeof escenari
   return { bolsa, cajon };
 }
 
-test("entrega cancelada: los sobres no vuelven a la caja hasta registrar su devolución física", async ({ page }) => {
+test("entrega cancelada: devolución por sobre; el que no regresa sigue pendiente con su incidencia, y la llave queda por revisar", async ({ page }) => {
   const e = await escenario();
   const { bolsa, cajon } = await cierreYApertura(page, e);
   await page.goto(`/sucursales/${e.codigo}/recoleccion`);
-  await page.getByTestId(`elegir-${bolsa}`).getByRole("checkbox").check();
+  for (const f of [bolsa, cajon]) await page.getByTestId(`elegir-${f}`).getByRole("checkbox").check();
   await page.getByLabel("Recoge (Dirección)").selectOption({ label: e.dir.nombre });
   await page.getByRole("button", { name: "Entregar los sobres elegidos" }).click();
   await expect(page.getByTestId("entrega-pendiente")).toBeVisible();
 
-  // Dirección cancela: el sobre queda por devolver, fuera de la caja.
+  // Dirección cancela: los dos quedan por devolver, fuera de la caja.
   await entrar(page, e.dir.correo);
   await page.goto(`/sucursales/${e.codigo}/recoleccion`);
   await page.getByLabel("Motivo para cancelar la entrega").fill("Hoy no alcanzo a contarlos");
   await page.getByRole("button", { name: "Cancelar la entrega" }).click();
-  await expect(page.getByTestId(`fuera-${bolsa}`)).toContainText("Entrega cancelada, por devolver");
+  for (const f of [bolsa, cajon]) await expect(page.getByTestId(`fuera-${f}`)).toContainText("Entrega cancelada, por devolver");
   await expect(page.getByTestId(`caja-${bolsa}`)).toHaveCount(0);
   await expect(page.getByTestId("formulario-devolucion")).toHaveCount(0);
 
-  // Sofía (responsable en turno) recibe el sobre de vuelta y lo verifica; vuelve a la caja.
+  // Sofía recibe de vuelta solo la bolsa; el cajón no regresa. La caja de sobres estaba sin llave.
   await entrar(page, e.sofia.correo);
   await page.goto(`/sucursales/${e.codigo}/recoleccion`);
-  await expect(page.getByTestId("formulario-entregar-sobres")).toHaveCount(0);
   const dev = page.getByTestId("formulario-devolucion");
   await expect(dev).toContainText(`Recibes de ${e.dir.nombre}`);
   await dev.getByTestId(`verificar-${bolsa}`).getByLabel(/^Sí: cerrado/).check();
-  await dev.getByLabel("Sí: la caja de sobres está cerrada y tengo su llave").check();
+  await dev.getByTestId(`verificar-${cajon}`).getByLabel("No está el sobre").check();
+  await dev.getByTestId(`verificar-${cajon}`).getByRole("textbox").fill("Dirección no lo trajo de vuelta");
+  await dev.getByLabel("Hay un problema con la caja de sobres o su llave").check();
+  await dev.getByTestId("llave-caja-sobres").getByLabel("Motivo de la incidencia").fill("La caja de sobres estaba sin llave");
   await capturar(page, "recoleccion-devolucion");
   await dev.getByRole("button", { name: "Registrar la devolución a la caja" }).click();
-  await expect(page.locator("p.aviso[role=status]")).toContainText("Devolución registrada");
+  await expect(page.getByTestId("aviso-devolucion-parcial")).toContainText("Un sobre sigue pendiente de devolución");
   await expect(page.getByTestId(`caja-${bolsa}`)).toBeVisible();
-  await expect(page.getByTestId(`caja-${cajon}`)).toBeVisible();
-  await expect(page.getByTestId("fuera-de-caja")).toHaveCount(0);
-  await expect(page.getByTestId("devolucion")).toContainText(`devolvió ${e.dir.nombre}`);
-  await expect(page.getByTestId("devolucion")).toContainText(`recibió ${e.sofia.nombre}`);
+  await expect(page.getByTestId(`caja-${cajon}`)).toHaveCount(0);
+  await expect(page.getByTestId(`fuera-${cajon}`)).toContainText("Entrega cancelada, por devolver");
+  const pendiente = page.getByTestId(`devolucion-${cajon}`);
+  await expect(pendiente.getByTestId("pendiente-devolucion")).toContainText(`lo tiene ${e.dir.nombre}`);
+  await expect(pendiente.getByTestId("estado-diferencia")).toContainText("Por revisar");
+  await expect(page.getByTestId(`devolucion-${bolsa}`)).toContainText(`recibió ${e.sofia.nombre}`);
+  await capturar(page, "recoleccion-devolucion-parcial");
+
+  // Administración (no participó) revisa el problema con la llave y ve la cadena del sobre que falta.
+  await entrar(page, e.admin.correo);
+  await page.goto(`/sucursales/${e.codigo}/recoleccion`);
+  await page.getByTestId(`devolucion-${cajon}`).getByText("Cadena de custodia").click();
+  await expect(page.getByTestId(`devolucion-${cajon}`).getByTestId("cadena")).toContainText("Revisó la devolución");
+  const llave = page.getByTestId("incidencia-llave");
+  await expect(llave).toContainText("La caja de sobres estaba sin llave");
+  await llave.getByLabel("Incidencia confirmada").check();
+  await llave.getByLabel("Motivo").fill("La caja quedó sin llave al devolver");
+  await llave.getByRole("button", { name: "Guardar la revisión" }).click();
+  await expect(page.getByTestId("estado-incidencia-llave")).toContainText("Incidencia confirmada");
 });
