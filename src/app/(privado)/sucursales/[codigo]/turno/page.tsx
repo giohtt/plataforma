@@ -86,7 +86,10 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
         </p>
       ) : null}
       {aviso === "cerrado" && cierre ? (
-        <p className="aviso aviso-ok" role="status">Turno cerrado. Los sobres quedan con {cierre.custodio}, que confirma la custodia desde su cuenta.</p>
+        <p className="aviso aviso-ok" role="status">Turno cerrado. Los sobres y la llave del cajón quedan con {cierre.custodio}, que confirma la custodia desde su cuenta.</p>
+      ) : null}
+      {aviso === "cerrado-custodia" && cierre ? (
+        <p className="aviso aviso-ok" role="status">Turno cerrado. Cerraste y custodias tú: los sobres y la llave quedan bajo tu custodia y el historial lo indica.</p>
       ) : null}
       {aviso === "abierto-cierre" && recibida ? <p className="aviso aviso-ok" role="status">Turno abierto desde el cierre. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
       {aviso === "recibido" && recibida ? <p className="aviso aviso-ok" role="status">Turno recibido. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
@@ -242,6 +245,12 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                       <dd data-testid="retiros">− {pesos.format(-Number(l.retiros))}</dd>
                     </>
                   ) : null}
+                  {l.cantidadFondos ? (
+                    <>
+                      <dt>Entradas al fondo fijo ({l.cantidadFondos})</dt>
+                      <dd data-testid="entradas-fondo">+ {pesos.format(Number(l.fondos))}</dd>
+                    </>
+                  ) : null}
                   <dt>Efectivo esperado</dt>
                   <dd data-testid="esperado" className={l.esperado === null ? "dd-largo" : undefined}>
                     {l.esperado !== null ? <strong>{pesos.format(Number(l.esperado))}</strong> : "No calculado: faltan datos de Open Desk"}
@@ -386,6 +395,20 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                 <dd className="mono" data-testid={`sobre-${s.lugar}`}>{s.folio}{s.custodia && s.custodia.estado !== "correcto" ? " · incidencia del custodio" : ""}</dd>
               </Fragment>
             ))}
+            {cierre.fondos.some((f) => Number(f.monto)) ? (
+              <>
+                <dt>Fondos fijos</dt>
+                <dd className="dd-largo" data-testid="fondos-cerrado">
+                  {cierre.configuracion.lugarFondos ?? "En el cajón"}, separados e identificados · llave con {cierre.custodio}
+                  {cierre.llave?.estado === "incidencia" ? " · incidencia con la llave o el cajón" : ""}
+                </dd>
+                <dt>Acceso al cajón</dt>
+                <dd className="dd-largo">{cierre.configuracion.accesoCajon.map((a) => a.nombre).join(" · ")}</dd>
+              </>
+            ) : null}
+            {cierre.custodioId === cierre.cerradoPorId ? (
+              <><dt>Misma persona</dt><dd className="dd-largo" data-testid="cerro-y-custodio">Cerró y custodia la misma persona</dd></>
+            ) : null}
           </dl>
           {cierre.estado === "recuento" ? (
             <p className="aviso aviso-info">{cierre.abre} empezó a abrir: su conteo no coincidió y falta el recuento.</p>

@@ -43,7 +43,7 @@ export default async function Diferencias({ params }: PageProps<"/sucursales/[co
                       {c.incidencias.length ? (
                         <ul className="lista-simple" data-testid="incidencias-caso">
                           {c.incidencias.map((i) => (
-                            <li key={i.id}>Incidencia: {i.tipo === "custodia_sin_confirmar" ? "custodia sin confirmar" : "sello o folio"} · {i.revision ? "Revisada" : "Por revisar"}</li>
+                            <li key={i.id}>Incidencia: {i.tipo === "custodia_sin_confirmar" ? "custodia sin confirmar" : i.tipo === "fondo_incompleto" ? "fondo incompleto" : i.tipo === "llave_custodia" ? "llave o cajón" : "sello o folio"} · {i.revision ? "Revisada" : "Por revisar"}</li>
                           ))}
                         </ul>
                       ) : null}

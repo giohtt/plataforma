@@ -72,6 +72,7 @@ export default async function CierreDelDia({ params, searchParams }: PageProps<"
               <dt>Cobros en efectivo</dt><dd>+ {pesos.format(Number(bolsa!.entradas))}</dd>
               {Number(bolsa!.ajustes) ? <><dt>Cancelaciones aprobadas</dt><dd>− {pesos.format(-Number(bolsa!.ajustes))}</dd></> : null}
               {Number(bolsa!.retiros) ? <><dt>Retiros a Encargada de retiros</dt><dd>− {pesos.format(-Number(bolsa!.retiros))}</dd></> : null}
+              {Number(bolsa!.fondos) ? <><dt>Entradas al fondo fijo</dt><dd>+ {pesos.format(Number(bolsa!.fondos))}</dd></> : null}
               <dt>Efectivo esperado al cerrar</dt><dd><strong>{pesos.format(Number(bolsa!.esperado))}</strong></dd>
               {Number(bolsa!.diferenciaRetiros) ? (
                 <><dt>Diferencia ya registrada al retirar</dt>
@@ -85,6 +86,10 @@ export default async function CierreDelDia({ params, searchParams }: PageProps<"
           {!p.configuracion ? (
             <p className="aviso aviso-info" data-testid="sin-configuracion">
               Dirección todavía no define dónde se guardan los sobres ni quién tiene acceso en esta sucursal. No se puede cerrar hasta entonces.
+            </p>
+          ) : !p.configuracion.accesoCajon ? (
+            <p className="aviso aviso-info" data-testid="sin-configuracion-cajon">
+              Dirección debe actualizar la custodia de esta sucursal indicando dónde quedan los fondos fijos y quién tiene acceso al cajón. No se puede cerrar hasta entonces.
             </p>
           ) : !p.custodios.length ? (
             <p className="aviso aviso-info" data-testid="sin-custodio">No hay un Encargado de la sucursal que pueda quedar como custodio nocturno.</p>
@@ -107,8 +112,9 @@ export default async function CierreDelDia({ params, searchParams }: PageProps<"
           ) : (
             <section className="tarjeta" aria-labelledby="t-cerrar">
               <h2 id="t-cerrar" className="titulo-seccion">Contar y cerrar</h2>
-              <FormularioCierre codigo={codigo} turnoId={p.turnoId} esperadoBolsa={bolsa!.esperado!} contadoCajon={cajon!.contadoAlAbrir}
-                sobres={p.sobres} custodios={p.custodios} apoyos={p.apoyos} configuracion={p.configuracion} />
+              <FormularioCierre codigo={codigo} turnoId={p.turnoId} usuarioId={sesion.usuarioId} esperadoBolsa={bolsa!.esperado!} contadoCajon={cajon!.contadoAlAbrir}
+                sobres={p.sobres} fondos={p.fondos} custodios={p.custodios} apoyos={p.apoyos}
+                configuracion={{ lugar: p.configuracion.lugar, acceso: p.configuracion.acceso, lugarFondos: p.configuracion.lugarFondos!, accesoCajon: p.configuracion.accesoCajon! }} />
               <form action={accionCancelarPreparacionCierre} className="fila-acciones">
                 <input type="hidden" name="codigo" value={codigo} />
                 <input type="hidden" name="turno" value={p.turnoId} />

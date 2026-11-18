@@ -59,6 +59,8 @@ export const ASIGNACIONES_PRUEBA = [
   // Santa Ana se creó desde la pantalla en el sitio de pruebas: en una base nueva no existe y la asignación no se crea.
   { correo: `recepcion.santaana${D}`, rol: "recepcion", codigo: "SAA", siExiste: true },
   { correo: `encargado.tenango${D}`, rol: "encargado", codigo: "TEN" },
+  // Indicado el 17 nov 2026: también Recepción en Tenango, para probar que cierra, custodia y abre con una sola cuenta.
+  { correo: `encargado.tenango${D}`, rol: "recepcion", codigo: "TEN" },
   // Indicado el 13 nov 2026: Encargada de retiros autorizada solo en Tenango (bloque 5, retiros).
   { correo: `encargada.retiros${D}`, rol: "encargada_retiros", codigo: "TEN" },
   { correo: `administracion${D}`, rol: "administracion", codigo: "TEN" },

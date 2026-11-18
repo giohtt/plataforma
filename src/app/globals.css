@@ -948,3 +948,12 @@ td.mono {
   font-size: 26px;
   letter-spacing: 0.02em;
 }
+
+/* Cierre con fondo fijo: fondo + sobre = lo contado. */
+.cuadre {
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.95rem;
+}
