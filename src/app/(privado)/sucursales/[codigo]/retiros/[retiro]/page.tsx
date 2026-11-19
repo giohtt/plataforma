@@ -95,6 +95,7 @@ export default async function Retiro({ params, searchParams }: PageProps<"/sucur
           <h2 id="t-revision" className="titulo-seccion">Revisión</h2>
           <p>
             <strong>{d.revision.resultado === "aclarada" ? "Aclarada" : "Faltante confirmado"}</strong> · revisó <strong>{d.revision.revisadaPor}</strong> ({NOMBRE_NIVEL_RETIRO[d.revision.nivel]}) · {hora.format(d.revision.en)}
+            {d.revision.propia ? <strong data-testid="revisada-propia"> · Revisada por quien participó</strong> : null}
           </p>
           {d.revision.folioVerificado ? <p data-testid="folio-verificado">Folio verificado: <span className="mono">{d.revision.folioVerificado}</span></p> : null}
           <p>Monto verificado: <strong data-testid="monto-verificado">{pesos.format(Number(d.revision.montoVerificado))}</strong> · Motivo: «{d.revision.motivo}»</p>

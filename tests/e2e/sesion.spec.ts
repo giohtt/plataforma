@@ -117,7 +117,7 @@ test("un enlace vencido no permite fijar contraseña", async ({ page }) => {
   const token = generarToken();
   await sql`
     insert into enlace_recuperacion (token_hash, usuario_id, creado_en, expira_en)
-    values (${huellaToken(token)}, ${u.id}, now() - interval '2 hours', now() - interval '1 hour')`;
+    values (${huellaToken(token)}, ${u.id}, now() - interval '2 hours', now() - interval '100 minutes')`;
   await page.goto(`/recuperar/${token}`);
   await expect(page.locator("[data-estado-enlace]")).toHaveAttribute("data-estado-enlace", "vencido");
   await expect(page.getByLabel("Nueva contraseña")).toHaveCount(0);

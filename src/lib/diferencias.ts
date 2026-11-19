@@ -37,7 +37,8 @@ export type Resolucion = {
 /** Horas a partir de las cuales un caso pendiente para Dirección se marca «Más de 48 horas pendiente». */
 export const HORAS_AVISO_DIRECCION = 48;
 export type NivelRevision = "encargado" | "administracion" | "direccion";
-export type Revision = { resultado: ResultadoRevision; motivo: string; revisadaPor: string; nivel: NivelRevision; en: Date };
+/** propia: la revisó quien participó, con su autorización personal (queda marcada para siempre). */
+export type Revision = { resultado: ResultadoRevision; motivo: string; revisadaPor: string; nivel: NivelRevision; en: Date; propia: boolean };
 export type Diferencia = {
   id: string; lugar: TipoLugar; tipo: TipoDiferencia; importe: string; estado: EstadoDiferencia; registradaEn: Date;
   revision: Revision | null;
@@ -53,19 +54,19 @@ export type IncidenciaCierre = {
   /** Texto de la incidencia: el motivo de abrir sin custodia, o el sobre, cómo llegó y el motivo. */
   detalle: string;
   registradaEn: Date;
-  revision: { motivo: string; revisadaPor: string; nivel: NivelRevision; en: Date } | null;
+  revision: { motivo: string; revisadaPor: string; nivel: NivelRevision; en: Date; propia: boolean } | null;
 };
 
 const INCIDENCIAS = (sql: Sql | Tx, entregaIds: string[]) => sql<{
   id: string; entrega_id: string; tipo: IncidenciaCierre["tipo"]; registrada_en: Date; motivo_sin_custodia: string | null;
   folio: string | null; estado: string | null; folio_visto: string | null; motivo_sobre: string | null; por: string | null;
-  r_motivo: string | null; r_por: string | null; r_nivel: NivelRevision | null; r_en: Date | null;
+  r_motivo: string | null; r_por: string | null; r_nivel: NivelRevision | null; r_en: Date | null; r_propia: boolean | null;
   lugar: TipoLugar | null; fondo: string | null; fondo_monto: string | null; motivo_llave: string | null; custodio: string | null;
   rc_motivo: string | null; rc_motivo_cajon: string | null; rc_por: string | null }[]>`
   select i.id, i.entrega_id, i.tipo, i.registrada_en, a.motivo as motivo_sin_custodia,
          li.tipo as lugar, cf.fondo::text as fondo, cf.fondo_monto::text as fondo_monto, cc.motivo_llave, uc.nombre as custodio,
          s.folio, v.estado, v.folio_visto, v.motivo as motivo_sobre, u.nombre as por,
-         r.motivo as r_motivo, ru.nombre as r_por, r.nivel as r_nivel, r.en as r_en, rc.motivo_llave as rc_motivo, rc.motivo_llave_cajon as rc_motivo_cajon, rcu.nombre as rc_por
+         r.motivo as r_motivo, ru.nombre as r_por, r.nivel as r_nivel, r.en as r_en, r.autorrevision_id is not null as r_propia, rc.motivo_llave as rc_motivo, rc.motivo_llave_cajon as rc_motivo_cajon, rcu.nombre as rc_por
   from incidencia_cierre i
   left join revision_caja rc on rc.id = i.revision_id left join usuario rcu on rcu.id = rc.por
   left join apertura_sin_custodia a on a.entrega_id = i.entrega_id and i.tipo = 'custodia_sin_confirmar'
@@ -95,7 +96,7 @@ function aIncidencia(f: Awaited<ReturnType<typeof INCIDENCIAS>>[number]): Incide
     : `${f.tipo === "sobre_en_custodia" ? "Custodia" : f.tipo === "sobre_caja" ? "Caja de sobres" : "Al abrir"} (${f.por}): sobre ${f.folio} ${COMO[f.estado!]}${f.folio_visto ? ` (${f.folio_visto})` : ""}. Motivo: «${f.motivo_sobre}»`;
   return {
     id: f.id, tipo: f.tipo, detalle, registradaEn: f.registrada_en,
-    revision: f.r_motivo ? { motivo: f.r_motivo, revisadaPor: f.r_por!, nivel: f.r_nivel!, en: f.r_en! } : null,
+    revision: f.r_motivo ? { motivo: f.r_motivo, revisadaPor: f.r_por!, nivel: f.r_nivel!, en: f.r_en!, propia: Boolean(f.r_propia) } : null,
   };
 }
 
@@ -127,14 +128,14 @@ async function sucursalConsultable(sql: Sql, usuarioId: string, codigo: string) 
 
 type FilaDiferencia = {
   id: string; entrega_id: string; lugar: TipoLugar; tipo: TipoDiferencia; importe: string; registrada_en: Date;
-  resultado: ResultadoRevision | null; motivo: string | null; revisor: string | null; nivel: NivelRevision | null; revisada_en: Date | null;
+  resultado: ResultadoRevision | null; motivo: string | null; revisor: string | null; nivel: NivelRevision | null; revisada_en: Date | null; propia: boolean | null;
   decision: DecisionDireccion | null; motivo_dir: string | null; origen: string | null; requiere_correccion: boolean | null;
   resolutor: string | null; resuelta_en: Date | null; correccion: string | null; corrector: string | null; correccion_en: Date | null;
   correccion_ref_tipo: string | null; correccion_ref_id: string | null;
 };
 const DIFERENCIAS = (sql: Sql | Tx, entregaIds: string[]) => sql<FilaDiferencia[]>`
   select d.id, d.entrega_id, l.tipo as lugar, d.tipo, d.importe::text as importe, d.registrada_en,
-         r.resultado, r.motivo, u.nombre as revisor, r.nivel, r.en as revisada_en,
+         r.resultado, r.motivo, u.nombre as revisor, r.nivel, r.en as revisada_en, r.autorrevision_id is not null as propia,
          x.decision, x.motivo as motivo_dir, x.origen, x.requiere_correccion, ux.nombre as resolutor, x.en as resuelta_en,
          x.correccion, uc.nombre as corrector, x.correccion_en, x.correccion_ref_tipo, x.correccion_ref_id
   from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id
@@ -153,7 +154,7 @@ const aDiferencia = (d: FilaDiferencia): Diferencia => {
     : resolucion.requiereCorreccion && !resolucion.correccion ? "correccion_pendiente" : "resuelta";
   return {
     id: d.id, lugar: d.lugar, tipo: d.tipo, importe: d.importe, registradaEn: d.registrada_en, estado, resolucion,
-    revision: d.resultado ? { resultado: d.resultado, motivo: d.motivo!, revisadaPor: d.revisor!, nivel: d.nivel!, en: d.revisada_en! } : null,
+    revision: d.resultado ? { resultado: d.resultado, motivo: d.motivo!, revisadaPor: d.revisor!, nivel: d.nivel!, en: d.revisada_en!, propia: Boolean(d.propia) } : null,
     pendienteDireccionDesde: estado === "faltante_confirmado" || estado === "sobrante_confirmado" || estado === "correccion_pendiente" ? d.revisada_en : null,
   };
 };
@@ -250,6 +251,8 @@ export type DetalleDiferencias = {
   aclaracion: string | null;
   /** La cuenta que consulta contó, entregó o recibió en esta entrega. */
   participaste: boolean;
+  /** Participó, pero tiene autorización personal vigente para revisar lo propio (la revisión queda marcada). */
+  revisarasPropia: boolean;
   /** Perfil al que le toca revisar estas diferencias, y si la cuenta que consulta puede hacerlo. */
   nivel: NivelRevision;
   puedeRevisar: boolean;
@@ -328,8 +331,9 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
            and exists (select 1 from perfiles_en_sucursal(${usuarioId}, ${s.id}) r where r = nivel_revision_entrega(${e.id})) as puede,
            tiene_permiso(${usuarioId}, 'diferencia.resolver', ${s.id})
            and exists (select 1 from perfiles_en_sucursal(${usuarioId}, ${s.id}) r where r = 'direccion') as resuelve`;
-  const [{ participaste }] = await sql<{ participaste: boolean }[]>`
-    select ${usuarioId}::uuid in (select participantes_entrega(${e.id})) as participaste`;
+  const [{ participaste, autorrevision }] = await sql<{ participaste: boolean; autorrevision: string | null }[]>`
+    select ${usuarioId}::uuid in (select participantes_entrega(${e.id})) as participaste, autorrevision_vigente(${usuarioId}, ${s.id}) as autorrevision`;
+  const revisaPropia = participaste && autorrevision !== null;
   const recuento = await sql<{ en: Date }[]>`
     select en from historial_cambio where entidad = 'entrega_turno' and entidad_id = ${e.id} and accion = 'conteo_no_coincide'`;
   const declaraciones = await sql<{ etapa: EtapaApoyo; hubo: boolean; por: string; en: Date }[]>`
@@ -438,7 +442,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   ]).sort((a, b) => a.en.getTime() - b.en.getTime());
   return {
     sucursal: s.nombre, entregaId: e.id, tipo: e.tipo, cierre, entregaPor: e.entrega_por, recibe: e.recibe, entregadaEn: e.creada_en, confirmadaEn: e.resuelta_en,
-    nota: e.nota, aclaracion: e.aclaracion, participaste, nivel: n.nivel, puedeRevisar: n.puede && !participaste, puedeResolver: n.resuelve && !participaste, historial, apoyos,
+    nota: e.nota, aclaracion: e.aclaracion, participaste, revisarasPropia: n.puede && revisaPropia, nivel: n.nivel, puedeRevisar: n.puede && (!participaste || revisaPropia), puedeResolver: n.resuelve && !participaste, historial, apoyos,
     lugares: { bolsa_visitas: cifras("bolsa_visitas"), cajon_mensualidades: cifras("cajon_mensualidades") },
     diferencias: difs,
     incidencias,
@@ -487,8 +491,9 @@ export async function revisarIncidencia(
   if (motivo.length < 5 || motivo.length > 300) return { ok: false, error: "motivo" };
   try {
     return await sql.begin(async (tx) => {
-      const [d] = await tx<{ entrega_id: string; consulta: boolean; revisa: boolean; nivel: NivelRevision; tiene_nivel: boolean; revisada: boolean; participo: boolean }[]>`
-        select i.entrega_id,
+      const [d] = await tx<{ entrega_id: string; consulta: boolean; revisa: boolean; nivel: NivelRevision; tiene_nivel: boolean; revisada: boolean; participo: boolean;
+                             autorrevision: string | null }[]>`
+        select i.entrega_id, autorrevision_vigente(${usuarioId}, t.sucursal_id) as autorrevision,
                tiene_permiso(${usuarioId}, 'diferencia.consultar', t.sucursal_id) as consulta,
                tiene_permiso(${usuarioId}, 'diferencia.revisar', t.sucursal_id) as revisa,
                nivel_revision_entrega(e.id) as nivel,
@@ -501,12 +506,16 @@ export async function revisarIncidencia(
         for update of i`;
       if (!d || !d.consulta) return { ok: false as const, error: "no_encontrada" as const };
       if (!d.revisa) return { ok: false as const, error: "sin_permiso" as const };
-      if (d.participo) return { ok: false as const, error: "participaste" as const };
+      // Quien participó solo revisa con su autorización personal vigente (la revisión queda marcada).
+      if (d.participo && !d.autorrevision) return { ok: false as const, error: "participaste" as const };
       if (!d.tiene_nivel) return { ok: false as const, error: "otro_nivel" as const };
       if (d.revisada) return { ok: false as const, error: "ya_revisada" as const };
-      await tx`insert into revision_incidencia (incidencia_id, motivo, nivel, revisada_por) values (${datos.incidenciaId}, ${motivo}, ${d.nivel}, ${usuarioId})`;
+      const autorrevision = d.participo ? d.autorrevision : null;
+      await tx`insert into revision_incidencia (incidencia_id, motivo, nivel, revisada_por, autorrevision_id)
+               values (${datos.incidenciaId}, ${motivo}, ${d.nivel}, ${usuarioId}, ${autorrevision})`;
       await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, motivo, usuario_id)
-               values ('incidencia_cierre', ${datos.incidenciaId}, 'revisar', ${tx.json({ entrega: d.entrega_id, nivel: d.nivel })}, ${motivo}, ${usuarioId})`;
+               values ('incidencia_cierre', ${datos.incidenciaId}, 'revisar',
+                       ${tx.json({ entrega: d.entrega_id, nivel: d.nivel, revisada_por_quien_participo: autorrevision !== null })}, ${motivo}, ${usuarioId})`;
       return { ok: true as const, entregaId: d.entrega_id };
     });
   } catch (error) {
@@ -538,8 +547,10 @@ export async function revisarDiferencia(
   try {
     return await sql.begin(async (tx) => {
       const [d] = await tx<{ entrega_id: string; importe: string; sucursal_id: string; entrega_por: string; recibe: string;
-                             consulta: boolean; revisa: boolean; nivel: NivelRevision; tiene_nivel: boolean; revisada: boolean; participo: boolean }[]>`
+                             consulta: boolean; revisa: boolean; nivel: NivelRevision; tiene_nivel: boolean; revisada: boolean; participo: boolean;
+                             autorrevision: string | null }[]>`
         select df.entrega_id, df.importe::text as importe, t.sucursal_id, e.entrega_por, e.recibe,
+               autorrevision_vigente(${usuarioId}, t.sucursal_id) as autorrevision,
                tiene_permiso(${usuarioId}, 'diferencia.consultar', t.sucursal_id) as consulta,
                tiene_permiso(${usuarioId}, 'diferencia.revisar', t.sucursal_id) as revisa,
                nivel_revision_entrega(e.id) as nivel,
@@ -553,19 +564,21 @@ export async function revisarDiferencia(
       if (!d || !d.consulta) return { ok: false as const, error: "no_encontrada" as const };
       if (!d.revisa) return { ok: false as const, error: "sin_permiso" as const };
       // Participó quien entregó, quien recibió o quien fue declarado como apoyo (aunque todavía no confirme).
-      if (d.participo) return { ok: false as const, error: "participaste" as const };
+      // Con autorización personal vigente sí revisa, y la revisión queda marcada «Revisada por quien participó».
+      if (d.participo && !d.autorrevision) return { ok: false as const, error: "participaste" as const };
       if (!d.tiene_nivel) return { ok: false as const, error: "otro_nivel" as const };
       if (d.revisada) return { ok: false as const, error: "ya_revisada" as const };
+      const autorrevision = d.participo ? d.autorrevision : null;
       const negativo = Number(d.importe) < 0;
       if ((datos.resultado === "faltante_confirmado" && !negativo) || (datos.resultado === "sobrante_confirmado" && negativo)) {
         return { ok: false as const, error: "resultado" as const };
       }
       const [r] = await tx<{ id: string }[]>`
-        insert into revision_diferencia (diferencia_id, resultado, motivo, nivel, revisada_por)
-        values (${datos.diferenciaId}, ${datos.resultado}, ${motivo}, ${d.nivel}, ${usuarioId}) returning id`;
+        insert into revision_diferencia (diferencia_id, resultado, motivo, nivel, revisada_por, autorrevision_id)
+        values (${datos.diferenciaId}, ${datos.resultado}, ${motivo}, ${d.nivel}, ${usuarioId}, ${autorrevision}) returning id`;
       await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, motivo, usuario_id)
                values ('diferencia_efectivo', ${datos.diferenciaId}, 'revisar',
-                       ${tx.json({ revision: r.id, resultado: datos.resultado, nivel: d.nivel, importe: d.importe })}, ${motivo}, ${usuarioId})`;
+                       ${tx.json({ revision: r.id, resultado: datos.resultado, nivel: d.nivel, importe: d.importe, revisada_por_quien_participo: autorrevision !== null })}, ${motivo}, ${usuarioId})`;
       return { ok: true as const, entregaId: d.entrega_id };
     });
   } catch (error) {
