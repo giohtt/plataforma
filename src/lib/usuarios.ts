@@ -72,19 +72,26 @@ const algunaFacultad = (f: Facultades) => f.crear || f.editar || f.asignar || f.
 // ---------------------------------------------------------------------------
 // Resumen de lo que puede hacer una persona (calculado con tiene_permiso)
 // ---------------------------------------------------------------------------
+export type LimiteAplicado = { limite: string; sucursales: string[]; futuras: boolean };
 export type PermisoEfectivo = {
   clave: string; descripcion: string; area: Area; tipo: TipoPermiso;
-  /** «todas» = todas las sucursales, incluidas las futuras. Si no, las sucursales donde lo tiene hoy. */
-  todas: boolean; sucursales: string[]; limite: string | null;
+  /** Vale en todas las sucursales, incluidas las futuras (por perfil o permiso en «todas»). */
+  todas: boolean;
+  /** Sucursales donde lo tiene hoy. */
+  sucursales: string[];
+  /** Con «todas»: sucursales de hoy donde NO lo tiene (restricción por sucursal). */
+  excepto: string[];
+  /** Permisos de autorizar: el límite que realmente aplica en cada sucursal (el mayor vigente que la cubre). */
+  limites: LimiteAplicado[];
 };
-export type ResumenPermisos = { permisos: PermisoEfectivo[]; sucursales: string[]; todasLasSucursales: boolean };
+export type ResumenPermisos = { permisos: PermisoEfectivo[]; sucursales: string[]; todasLasSucursales: boolean; exceptoSucursales: string[] };
 
 export async function resumenPermisos(db: Sql | Tx, usuarioId: string): Promise<ResumenPermisos> {
-  const filas = await db<{ clave: string; descripcion: string; ambito: string; es_autorizacion: boolean; general: boolean; futuras: boolean;
-                           sucursales: string[]; limite: string | null }[]>`
+  const permisos = await db<{ clave: string; descripcion: string; ambito: string; es_autorizacion: boolean; general: boolean; futuras: boolean;
+                              limite_futuras: string | null }[]>`
     select p.clave, p.descripcion, p.ambito, p.es_autorizacion,
            p.ambito = 'general' and tiene_permiso(${usuarioId}, p.clave, null) as general,
-           -- Alcance en todas (incluidas las futuras): por perfil general o facultad «todas», sin restricción en todas.
+           -- Alcance en todas (incluidas las futuras): por perfil general o permiso en «todas», sin restricción en todas.
            p.ambito = 'sucursal' and exists (select 1 from usuario u where u.id = ${usuarioId} and u.activo)
              and (exists (select 1 from alcance_general g join rol_permiso rp on rp.rol = g.rol and rp.permiso = p.clave
                           where g.usuario_id = ${usuarioId} and vigente(g.vigente_desde, g.vigente_hasta, g.revocado_en))
@@ -92,22 +99,51 @@ export async function resumenPermisos(db: Sql | Tx, usuarioId: string): Promise<
                              and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en)))
              and not exists (select 1 from restriccion_permiso r where r.usuario_id = ${usuarioId} and r.permiso = p.clave and r.todas_las_sucursales
                              and vigente(r.vigente_desde, r.vigente_hasta, r.revocada_en)) as futuras,
-           coalesce(array(select s.nombre from sucursal s where p.ambito = 'sucursal' and tiene_permiso(${usuarioId}, p.clave, s.id) order by s.nombre), '{}') as sucursales,
-           (select max(f.limite_monto)::text from facultad_otorgada f where f.usuario_id = ${usuarioId} and f.permiso = p.clave
-              and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en)) as limite
+           (select max(f.limite_monto)::text from facultad_otorgada f where f.usuario_id = ${usuarioId} and f.permiso = p.clave and f.todas_las_sucursales
+              and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en)) as limite_futuras
     from permiso p order by p.clave`;
-  const [s] = await db<{ sucursales: string[]; todas: boolean }[]>`
+  // Cada permiso en cada sucursal, con el límite que aplica ahí (el mismo cálculo que usa la autorización).
+  const celdas = await db<{ clave: string; sucursal: string; ok: boolean; limite: string | null }[]>`
+    select p.clave, s.nombre as sucursal, tiene_permiso(${usuarioId}, p.clave, s.id) as ok,
+           case when p.es_autorizacion then (select max(f.limite_monto)::text from facultad_otorgada f
+                where f.usuario_id = ${usuarioId} and f.permiso = p.clave and (f.sucursal_id = s.id or f.todas_las_sucursales)
+                  and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en)) end as limite
+    from permiso p cross join sucursal s where p.ambito = 'sucursal' order by s.nombre`;
+  const de = new Map<string, (typeof celdas)[number][]>();
+  for (const c of celdas) de.set(c.clave, [...(de.get(c.clave) ?? []), c]);
+  const [s] = await db<{ sucursales: string[]; excepto: string[]; todas: boolean }[]>`
     select coalesce(array(select s.nombre from sucursal s where tiene_permiso(${usuarioId}, 'sucursal.consultar', s.id) order by s.nombre), '{}') as sucursales,
+           coalesce(array(select s.nombre from sucursal s where not tiene_permiso(${usuarioId}, 'sucursal.consultar', s.id) order by s.nombre), '{}') as excepto,
            exists (select 1 from usuario u where u.id = ${usuarioId} and u.activo)
              and exists (select 1 from alcance_general g where g.usuario_id = ${usuarioId} and vigente(g.vigente_desde, g.vigente_hasta, g.revocado_en))
              and not permiso_restringido(${usuarioId}, 'sucursal.consultar', null) as todas`;
-  return {
-    permisos: filas.filter((f) => f.general || f.futuras || f.sucursales.length).map((f) => ({
-      clave: f.clave, descripcion: f.descripcion, area: areaDe(f.clave), tipo: tipoDe(f.clave, f.es_autorizacion),
-      todas: f.general || f.futuras, sucursales: f.sucursales, limite: f.es_autorizacion ? f.limite : null,
-    })),
-    sucursales: s.sucursales, todasLasSucursales: s.todas,
-  };
+  const salida: PermisoEfectivo[] = [];
+  for (const p of permisos) {
+    const cs = de.get(p.clave) ?? [];
+    const si = cs.filter((c) => c.ok);
+    if (!p.general && !p.futuras && !si.length) continue;
+    const limites: LimiteAplicado[] = [];
+    if (p.es_autorizacion) {
+      for (const c of si) {
+        if (!c.limite) continue;
+        const l = limites.find((x) => x.limite === c.limite);
+        if (l) l.sucursales.push(c.sucursal);
+        else limites.push({ limite: c.limite, sucursales: [c.sucursal], futuras: false });
+      }
+      if (p.futuras && p.limite_futuras) {
+        const l = limites.find((x) => x.limite === p.limite_futuras);
+        if (l) l.futuras = true;
+        else limites.push({ limite: p.limite_futuras, sucursales: [], futuras: true });
+      }
+      limites.sort((a, b) => Number(a.limite) - Number(b.limite));
+    }
+    salida.push({
+      clave: p.clave, descripcion: p.descripcion, area: areaDe(p.clave), tipo: tipoDe(p.clave, p.es_autorizacion),
+      todas: p.general || p.futuras, sucursales: si.map((c) => c.sucursal),
+      excepto: p.futuras ? cs.filter((c) => !c.ok).map((c) => c.sucursal) : [], limites,
+    });
+  }
+  return { permisos: salida, sucursales: s.sucursales, todasLasSucursales: s.todas, exceptoSucursales: s.todas ? s.excepto : [] };
 }
 
 export type CambioPermiso = { clave: string; descripcion: string; area: Area; antes: string; despues: string };
@@ -115,20 +151,33 @@ export type VistaPrevia = {
   gana: CambioPermiso[]; pierde: CambioPermiso[]; cambia: CambioPermiso[];
   sucursalesAntes: string; sucursalesDespues: string;
 };
-const donde = (p: PermisoEfectivo | undefined) =>
-  !p ? "—" : `${p.todas ? "Todas (incluidas las futuras)" : p.sucursales.join(", ")}${p.limite ? ` · límite $${Number(p.limite).toLocaleString("es-MX", { minimumFractionDigits: 2 })}` : ""}`;
-const dondeSucursales = (r: ResumenPermisos) => r.todasLasSucursales ? "Todas (incluidas las que se abran después)" : r.sucursales.length ? r.sucursales.join(", ") : "Ninguna";
+const pesosTexto = (v: string) => `$${Number(v).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const lista = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} y ${xs[xs.length - 1]}`;
+/** Dónde vale un permiso, con sus excepciones por sucursal y el límite que aplica en cada una. */
+export function textoDonde(p: PermisoEfectivo | undefined): string {
+  if (!p) return "—";
+  const base = p.todas ? `Todas (incluidas las futuras)${p.excepto.length ? `, excepto ${lista(p.excepto)}` : ""}` : p.sucursales.join(", ");
+  if (!p.limites.length) return base;
+  const lims = p.limites.map((l) => {
+    const donde = l.futuras && l.sucursales.length === p.sucursales.length ? "todas" : lista(l.futuras ? [...l.sucursales, "las futuras"] : l.sucursales);
+    return `límite ${pesosTexto(l.limite)} en ${donde}`;
+  });
+  return `${base} · ${lims.join(" · ")}`;
+}
+const dondeSucursales = (r: ResumenPermisos) => r.todasLasSucursales
+  ? `Todas (incluidas las que se abran después)${r.exceptoSucursales.length ? `, excepto ${lista(r.exceptoSucursales)}` : ""}`
+  : r.sucursales.length ? r.sucursales.join(", ") : "Ninguna";
 export function compararResumen(antes: ResumenPermisos, despues: ResumenPermisos): VistaPrevia {
   const a = new Map(antes.permisos.map((p) => [p.clave, p]));
   const d = new Map(despues.permisos.map((p) => [p.clave, p]));
   const fila = (clave: string): CambioPermiso => {
     const p = (d.get(clave) ?? a.get(clave))!;
-    return { clave, descripcion: p.descripcion, area: p.area, antes: donde(a.get(clave)), despues: donde(d.get(clave)) };
+    return { clave, descripcion: p.descripcion, area: p.area, antes: textoDonde(a.get(clave)), despues: textoDonde(d.get(clave)) };
   };
   return {
     gana: [...d.keys()].filter((k) => !a.has(k)).map(fila),
     pierde: [...a.keys()].filter((k) => !d.has(k)).map(fila),
-    cambia: [...d.keys()].filter((k) => a.has(k) && donde(a.get(k)) !== donde(d.get(k))).map(fila),
+    cambia: [...d.keys()].filter((k) => a.has(k) && textoDonde(a.get(k)) !== textoDonde(d.get(k))).map(fila),
     sucursalesAntes: dondeSucursales(antes), sucursalesDespues: dondeSucursales(despues),
   };
 }
@@ -359,7 +408,7 @@ export async function editarPersona(
   if (puesto && (puesto.length < 2 || puesto.length > 80)) return { ok: false, error: "puesto" };
   return sql.begin(async (tx) => {
     if (!(await facultadesAdministrar(tx, usuarioId)).editar) return { ok: false as const, error: "sin_permiso" as const };
-    const [u] = await tx<{ nombre: string; puesto: string | null }[]>`select nombre, puesto from usuario where id = ${datos.id} for update`;
+    const [u] = await tx<{ nombre: string; puesto: string | null }[]>`select nombre, puesto from usuario where id = ${datos.id} for no key update`;
     if (!u) return { ok: false as const, error: "no_encontrada" as const };
     if (u.nombre === nombre && u.puesto === puesto) return { ok: false as const, error: "sin_cambio" as const };
     await tx`update usuario set nombre = ${nombre}, puesto = ${puesto}, actualizado_en = now() where id = ${datos.id}`;
@@ -382,7 +431,7 @@ export async function cambiarEstadoPersona(
   if (!datos.activo && datos.id === usuarioId) return { ok: false, error: "propia" };
   return conProteccion(() => sql.begin(async (tx) => {
     if (!(await facultadesAdministrar(tx, usuarioId)).editar) return { ok: false as const, error: "sin_permiso" as const };
-    const [u] = await tx<{ activo: boolean; nombre: string }[]>`select activo, nombre from usuario where id = ${datos.id} for update`;
+    const [u] = await tx<{ activo: boolean; nombre: string }[]>`select activo, nombre from usuario where id = ${datos.id} for no key update`;
     if (!u) return { ok: false as const, error: "no_encontrada" as const };
     if (u.activo === datos.activo) return { ok: false as const, error: "sin_cambio" as const };
     await tx`update usuario set activo = ${datos.activo}, actualizado_en = now() where id = ${datos.id}`;
@@ -410,7 +459,7 @@ export async function invitarPersona(
   const token = generarToken();
   return sql.begin(async (tx) => {
     if (!(await facultadesAdministrar(tx, usuarioId)).restablecer) return { ok: false as const, error: "sin_permiso" as const };
-    const [u] = await tx<{ activo: boolean; es_prueba: boolean }[]>`select activo, es_prueba from usuario where id = ${datos.id} for update`;
+    const [u] = await tx<{ activo: boolean; es_prueba: boolean }[]>`select activo, es_prueba from usuario where id = ${datos.id} for no key update`;
     if (!u) return { ok: false as const, error: "no_encontrada" as const };
     if (!u.activo || !u.es_prueba) return { ok: false as const, error: "sin_canal" as const };
     const anteriores = await tx`update enlace_recuperacion set invalidado_en = now()
@@ -472,15 +521,17 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
       if (!s) return { ok: false, error: "sucursales" };
       const h = await hastaDe(c.hasta);
       if (!h.ok) return { ok: false, error: "hasta" };
+      // Primero se valida todo; después se escribe (y cualquier error deshace la operación completa).
       if (c.alcance.todas) {
         const [ya] = await tx`select 1 from alcance_general where usuario_id = ${personaId} and rol = ${r.clave} and revocado_en is null`;
         if (ya) return { ok: false, error: "ya_tiene" };
         await tx`insert into alcance_general (usuario_id, rol, vigente_hasta, otorgado_por, motivo)
                  values (${personaId}, ${r.clave}, ${h.valor ? finDelDia(tx, h.valor) : null}, ${actor}, ${motivo})`;
       } else {
+        const [ya] = await tx`select 1 from asignacion where usuario_id = ${personaId} and rol = ${r.clave} and revocada_en is null
+                              and sucursal_id in ${tx(s.map((x) => x.id))}`;
+        if (ya) return { ok: false, error: "ya_tiene" };
         for (const x of s) {
-          const [ya] = await tx`select 1 from asignacion where usuario_id = ${personaId} and rol = ${r.clave} and sucursal_id = ${x.id} and revocada_en is null`;
-          if (ya) return { ok: false, error: "ya_tiene" };
           await tx`insert into asignacion (usuario_id, rol, sucursal_id, vigente_hasta, otorgada_por, motivo)
                    values (${personaId}, ${r.clave}, ${x.id}, ${h.valor ? finDelDia(tx, h.valor) : null}, ${actor}, ${motivo})`;
         }
@@ -530,6 +581,8 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
         const [ya] = await tx`select 1 from restriccion_permiso where usuario_id = ${personaId} and permiso = ${p.clave}
                               and sucursal_id is not distinct from ${l} and revocada_en is null`;
         if (ya) return { ok: false, error: "ya_tiene" };
+      }
+      for (const l of lugares) {
         await tx`insert into restriccion_permiso (usuario_id, permiso, sucursal_id, todas_las_sucursales, vigente_hasta, otorgada_por, motivo)
                  values (${personaId}, ${p.clave}, ${l}, ${l === null}, ${h.valor ? finDelDia(tx, h.valor) : null}, ${actor}, ${motivo})`;
       }
@@ -594,7 +647,9 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
 
 async function preparar(tx: Tx, actor: string, personaId: string) {
   if (!(await facultadesAdministrar(tx, actor)).asignar) return { ok: false as const, error: "sin_permiso" as const };
-  const [u] = await tx<{ id: string }[]>`select id from usuario where id = ${personaId} for update`;
+  // «for no key update»: serializa los cambios a la misma persona sin bloquear a quien solo la referencia (por ejemplo,
+  // revocado_por), para que dos cuentas que se cambian entre sí no se bloqueen mutuamente.
+  const [u] = await tx<{ id: string }[]>`select id from usuario where id = ${personaId} for no key update`;
   if (!u) return { ok: false as const, error: "no_encontrada" as const };
   return { ok: true as const };
 }
@@ -633,12 +688,14 @@ export async function aplicarCambio(
 ): Promise<{ ok: true } | { ok: false; error: ErrorUsuarios }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
   if (!esIdentificadorValido(personaId)) return { ok: false, error: "no_encontrada" };
-  return conProteccion(() => sql.begin(async (tx) => {
+  // Todo o nada: si algo falla a la mitad (por ejemplo, la segunda de varias sucursales), se deshace la operación
+  // completa; nunca queda un permiso guardado a medias ni sin su historial.
+  const r = await conProteccion(() => sql.begin(async (tx) => {
     const p = await preparar(tx, usuarioId, personaId);
-    if (!p.ok) return p;
+    if (!p.ok) throw new Deshacer(p);
     const antes = await resumenPermisos(tx, personaId);
     const r = await aplicar(tx, usuarioId, personaId, cambio);
-    if (!r.ok) return r;
+    if (!r.ok) throw new Deshacer(r);
     await tx`set constraints all immediate`;
     const vista = compararResumen(antes, await resumenPermisos(tx, personaId));
     await historial(tx, usuarioId, personaId, r.accion, r.detalle, cambio.motivo.trim(), {
@@ -647,5 +704,9 @@ export async function aplicarCambio(
       sucursales: { antes: vista.sucursalesAntes, despues: vista.sucursalesDespues },
     });
     return { ok: true as const };
+  }).catch((e) => {
+    if (e instanceof Deshacer) return e.resultado as { ok: false; error: ErrorUsuarios };
+    throw e;
   }));
+  return r;
 }

@@ -53,7 +53,9 @@ Confirmados el 4 nov 2026.
    - **Perfiles como base**; a cada persona se le pueden **sumar permisos** (con límite de monto si son de autorizar) y **quitar permisos aunque vengan en su perfil**. La restricción individual **prevalece** sobre todos sus perfiles y permisos (lo aplica la base en cada comprobación).
    - Sucursales elegidas expresamente: una, varias o «todas», que **incluye las futuras**. **Antes de guardar se muestra cómo quedarán** sus permisos y sucursales.
    - **Autorización personal para revisar lo propio** (solo Dirección): máximo **90 días** (por ejemplo, del 19 nov al 17 feb), renovable, con motivo e historial. Cada revisión hecha así queda marcada «Revisada por quien participó». Aplica a diferencias de efectivo, incidencias del cierre, diferencias de sobres, problemas de llave al recoger y revisiones de retiros. Sin esa autorización expresa, quien participó no revisa, aunque reúna varios perfiles.
-   - **Siempre queda una cuenta activa que administra accesos sin vencimiento**: la base impide desactivarla, quitarle el perfil, restringirla o dejar solo accesos con vencimiento.
+   - **Siempre queda una cuenta activa que administra accesos sin vencimiento**: la base impide desactivarla, quitarle el perfil, restringirla o dejar solo accesos con vencimiento. También ante dos cambios simultáneos: se comprueban uno después del otro (ajuste de las 17:14).
+   - **Todo o nada** (ajuste de las 17:14): un cambio en varias sucursales se valida completo antes de guardar y, si algo falla, se deshace entero; nunca queda un permiso a medias ni sin historial.
+   - La vista previa y el resumen muestran las **excepciones por sucursal** («Todas, excepto Tenango») y el **límite que aplica en cada sucursal** (el mayor vigente que la cubre, igual que al autorizar).
    - Todo cambio de acceso queda en el historial (quién, cuándo, a quién, qué cambió y motivo). Los permisos se comprueban en el servidor al hacer cada operación.
    - **Falta decidir:** si más adelante se editan desde la pantalla los permisos incluidos en cada perfil (hoy son fijos y se ajusta por persona); servicio de correo para invitaciones (puede tener costo).
 

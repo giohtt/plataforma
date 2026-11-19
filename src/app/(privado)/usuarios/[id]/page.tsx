@@ -5,7 +5,7 @@ import {
 } from "@/components/Usuarios";
 import { obtenerBaseDatos } from "@/lib/db";
 import { requerirSesion } from "@/lib/sesion-servidor";
-import { AREAS, pantallaPersona } from "@/lib/usuarios";
+import { AREAS, pantallaPersona, textoDonde } from "@/lib/usuarios";
 
 export const metadata = { title: "Persona · Usuarios, roles y permisos · Fitnessland" };
 
@@ -109,7 +109,9 @@ export default async function Persona({ params, searchParams }: PageProps<"/usua
       <section className="tarjeta" aria-labelledby="t-resumen" data-testid="resumen-permisos">
         <h2 id="t-resumen" className="titulo-seccion">Lo que puede hacer hoy</h2>
         <p className="sub">
-          Sucursales: <strong data-testid="sucursales-resumen">{p.resumen.todasLasSucursales ? "Todas (incluidas las que se abran después)" : p.resumen.sucursales.join(", ") || "Ninguna"}</strong>.
+          Sucursales: <strong data-testid="sucursales-resumen">{p.resumen.todasLasSucursales
+            ? `Todas (incluidas las que se abran después)${p.resumen.exceptoSucursales.length ? `, excepto ${p.resumen.exceptoSucursales.join(", ")}` : ""}`
+            : p.resumen.sucursales.join(", ") || "Ninguna"}</strong>.
           Calculado con sus perfiles, permisos y restricciones vigentes (lo mismo que comprueba el servidor).
         </p>
         {AREAS.map((a) => {
@@ -120,7 +122,7 @@ export default async function Persona({ params, searchParams }: PageProps<"/usua
               <ul className="lista-simple">
                 {xs.map((x) => (
                   <li key={x.clave} data-testid={`puede-${x.clave}`}>
-                    {x.tipo} · {x.descripcion} · <span className="sub">{x.todas ? "todas" : x.sucursales.join(", ")}{x.limite ? ` · límite ${pesos.format(Number(x.limite))}` : ""}</span>
+                    {x.tipo} · {x.descripcion} · <span className="sub">{textoDonde(x)}</span>
                   </li>
                 ))}
               </ul>

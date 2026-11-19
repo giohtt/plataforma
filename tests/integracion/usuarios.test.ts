@@ -4,7 +4,7 @@ import { consultarEnlace, establecerContrasena, solicitarEnlace } from "@/lib/au
 import { tienePermiso } from "@/lib/permisos";
 import {
   aplicarCambio, cambiarEstadoPersona, crearPersona, editarPersona, historialAccesos, invitarPersona, pantallaPersona, pantallaPersonas,
-  previsualizarCambio, type CambioAcceso,
+  previsualizarCambio, resumenPermisos, textoDonde, type CambioAcceso,
 } from "@/lib/usuarios";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
@@ -195,5 +195,127 @@ describe.skipIf(!URL_ADMIN)("usuarios, roles y permisos", () => {
     expect(await cambiar(yo, g, { tipo: "dar_perfil", rol: "direccion", alcance: { todas: true }, hasta: "", motivo: "Se conserva como cuenta de prueba" })).toEqual({ ok: true });
     expect(await previsualizarCambio(sql, yo, yo, { tipo: "restringir", permiso: "usuario.asignar", alcance: { todas: true }, hasta: "", motivo: "Ahora sí" }, PRUEBAS))
       .toMatchObject({ ok: true });
+  });
+
+  it("todo o nada: si falla una de varias sucursales no queda nada guardado ni sin historial", async () => {
+    const yo = u["direccion"];
+    const c = await crearPersona(sql, yo, { nombre: "Persona atómica (prueba)", correo: `atomica${D}`, puesto: "" }, PRUEBAS);
+    if (!c.ok) throw new Error(c.error);
+    const cuenta = async () => (await sql<{ a: number; h: number }[]>`
+      select (select count(*)::int from asignacion where usuario_id = ${c.id}) as a,
+             (select count(*)::int from historial_cambio where entidad = 'usuario' and entidad_id = ${c.id} and accion = 'dar_perfil') as h`)[0];
+    // Ya tiene Recepción en Santiago: pedir Tenango y Santiago no guarda Tenango a medias.
+    expect(await cambiar(yo, c.id, { tipo: "dar_perfil", rol: "recepcion", alcance: { todas: false, sucursales: [s.STG] }, hasta: "", motivo: "Primera sucursal" })).toEqual({ ok: true });
+    expect(await cuenta()).toEqual({ a: 1, h: 1 });
+    expect(await cambiar(yo, c.id, { tipo: "dar_perfil", rol: "recepcion", alcance: { todas: false, sucursales: [s.TEN, s.STG] }, hasta: "", motivo: "Dos sucursales" }))
+      .toEqual({ ok: false, error: "ya_tiene" });
+    expect(await cuenta()).toEqual({ a: 1, h: 1 });
+    // Una falla de la base a la mitad (simulada en la segunda sucursal) deshace también la primera y no deja historial.
+    await sql.unsafe(`create function falla_prueba() returns trigger language plpgsql as $$ begin
+      if new.sucursal_id = '${s.STG}' and new.usuario_id = '${c.id}' then raise exception 'falla simulada'; end if; return new; end; $$`);
+    await sql.unsafe(`create trigger falla_prueba before insert on asignacion for each row execute function falla_prueba()`);
+    try {
+      await expect(cambiar(yo, c.id, { tipo: "dar_perfil", rol: "encargado", alcance: { todas: false, sucursales: [s.TEN, s.STG] }, hasta: "", motivo: "Dos sucursales" }))
+        .rejects.toThrow(/falla simulada/);
+    } finally {
+      await sql.unsafe(`drop trigger falla_prueba on asignacion; drop function falla_prueba()`);
+    }
+    expect(await cuenta()).toEqual({ a: 1, h: 1 });
+    expect(await tienePermiso(sql, c.id, "turno.consultar", s.TEN)).toBe(false);
+    // Igual con restricciones en varias sucursales.
+    expect(await cambiar(yo, c.id, { tipo: "restringir", permiso: "caja.retirar", alcance: { todas: false, sucursales: [s.STG] }, hasta: "", motivo: "Sin retiros" })).toEqual({ ok: true });
+    expect(await cambiar(yo, c.id, { tipo: "restringir", permiso: "caja.retirar", alcance: { todas: false, sucursales: [s.TEN, s.STG] }, hasta: "", motivo: "Sin retiros" }))
+      .toEqual({ ok: false, error: "ya_tiene" });
+    expect((await sql`select 1 from restriccion_permiso where usuario_id = ${c.id}`).length).toBe(1);
+  });
+
+  it("vista previa y resumen muestran las excepciones por sucursal y el límite que aplica en cada una", async () => {
+    const yo = u["direccion"];
+    const c = await crearPersona(sql, yo, { nombre: "Persona por sucursal (prueba)", correo: `por.sucursal${D}`, puesto: "" }, PRUEBAS);
+    if (!c.ok) throw new Error(c.error);
+    expect(await cambiar(yo, c.id, { tipo: "dar_perfil", rol: "administracion", alcance: { todas: true }, hasta: "", motivo: "Todas las sucursales" })).toEqual({ ok: true });
+    // Quitar un permiso solo en Tenango: la vista previa lo dice antes de guardar.
+    const r: CambioAcceso = { tipo: "restringir", permiso: "diferencia.revisar", alcance: { todas: false, sucursales: [s.TEN] }, hasta: "", motivo: "No revisa en Tenango" };
+    const v = await previsualizarCambio(sql, yo, c.id, r, PRUEBAS);
+    if (!v.ok) throw new Error(v.error);
+    expect(v.vista.cambia.find((x) => x.clave === "diferencia.revisar")).toMatchObject({
+      antes: "Todas (incluidas las futuras)", despues: "Todas (incluidas las futuras), excepto Tenango",
+    });
+    expect(await cambiar(yo, c.id, r)).toEqual({ ok: true });
+    // Límites: $1,000 en todas y $1,500 en Tenango; en Santiago no puede (restricción). Se aplica el mayor que cubre cada sucursal.
+    const dar = (alcance: CambioAcceso extends never ? never : { todas: true } | { todas: false; sucursales: string[] }, limite: string): CambioAcceso =>
+      ({ tipo: "dar_permiso", permiso: "autorizacion.devolucion", alcance, limite, hasta: "", motivo: "Autoriza devoluciones" });
+    expect(await cambiar(yo, c.id, dar({ todas: true }, "1000"))).toEqual({ ok: true });
+    const v2 = await previsualizarCambio(sql, yo, c.id, dar({ todas: false, sucursales: [s.TEN] }, "1500"), PRUEBAS);
+    if (!v2.ok) throw new Error(v2.error);
+    const cambio = v2.vista.cambia.find((x) => x.clave === "autorizacion.devolucion")!;
+    expect(cambio.antes).toBe("Todas (incluidas las futuras) · límite $1,000.00 en todas");
+    expect(cambio.despues).toMatch(/^Todas \(incluidas las futuras\) · límite \$1,000\.00 en .*Santiago.* y las futuras · límite \$1,500\.00 en Tenango$/);
+    expect(await cambiar(yo, c.id, dar({ todas: false, sucursales: [s.TEN] }, "1500"))).toEqual({ ok: true });
+    expect(await cambiar(yo, c.id, { tipo: "restringir", permiso: "autorizacion.devolucion", alcance: { todas: false, sucursales: [s.STG] }, hasta: "", motivo: "Sin devoluciones en Santiago" }))
+      .toEqual({ ok: true });
+    const res = await resumenPermisos(sql, c.id);
+    const dev = res.permisos.find((x) => x.clave === "autorizacion.devolucion")!;
+    expect(dev.excepto).toEqual(["Santiago"]);
+    expect(dev.limites.find((l) => l.limite === "1500.00")).toMatchObject({ sucursales: ["Tenango"], futuras: false });
+    expect(dev.limites.find((l) => l.limite === "1000.00")?.sucursales).not.toContain("Santiago");
+    expect(dev.limites.find((l) => l.limite === "1000.00")?.futuras).toBe(true);
+    expect(textoDonde(dev)).toContain("excepto Santiago");
+    const rev = res.permisos.find((x) => x.clave === "diferencia.revisar")!;
+    expect(textoDonde(rev)).toBe("Todas (incluidas las futuras), excepto Tenango");
+    // Lo mismo en la ficha.
+    const ficha = (await pantallaPersona(sql, yo, c.id))!;
+    expect(textoDonde(ficha.resumen.permisos.find((x) => x.clave === "diferencia.revisar"))).toBe("Todas (incluidas las futuras), excepto Tenango");
+  });
+
+  it("dos cambios simultáneos no dejan la plataforma sin quien administre accesos", async () => {
+    // Solo dos cuentas administran de forma permanente: A y B. Cada transacción quita una.
+    const yo = u["direccion"];
+    const a = await crearPersona(sql, yo, { nombre: "Admin A (prueba)", correo: `admin.a${D}`, puesto: "" }, PRUEBAS);
+    const b = await crearPersona(sql, yo, { nombre: "Admin B (prueba)", correo: `admin.b${D}`, puesto: "" }, PRUEBAS);
+    if (!a.ok || !b.ok) throw new Error("crear");
+    for (const x of [a.id, b.id]) {
+      expect(await cambiar(yo, x, { tipo: "dar_perfil", rol: "direccion", alcance: { todas: true }, hasta: "", motivo: "Administra accesos" })).toEqual({ ok: true });
+    }
+    await sql`update alcance_general set revocado_en = now(), revocado_por = ${yo} where rol = 'direccion' and usuario_id not in (${a.id}, ${b.id}) and revocado_en is null`;
+    const otros = await sql`select 1 from usuario u where u.activo and administracion_permanente() and u.id not in (${a.id}, ${b.id})
+                            and permiso_general_permanente(u.id, 'usuario.asignar')`;
+    expect(otros).toHaveLength(0);
+
+    // Intercalado controlado: la primera comprueba (y retiene el candado) antes de confirmar; la segunda intenta mientras tanto.
+    let soltar!: () => void;
+    const espera = new Promise<void>((r) => { soltar = r; });
+    let primeraComprobo!: () => void;
+    const comprobo = new Promise<void>((r) => { primeraComprobo = r; });
+    const primera = sql.begin(async (tx) => {
+      await tx`update alcance_general set revocado_en = now(), revocado_por = ${b.id} where usuario_id = ${a.id} and revocado_en is null`;
+      await tx`set constraints all immediate`;
+      primeraComprobo();
+      await espera;
+    });
+    await comprobo;
+    const segunda = sql.begin(async (tx) => {
+      await tx`update alcance_general set revocado_en = now(), revocado_por = ${a.id} where usuario_id = ${b.id} and revocado_en is null`;
+      await tx`set constraints all immediate`;
+    }).then(() => "ok", (e: Error) => e.message);
+    // La segunda queda esperando el candado; se suelta la primera.
+    await new Promise((r) => setTimeout(r, 300));
+    soltar();
+    await primera;
+    expect(await segunda).toMatch(/al menos una cuenta activa que administre accesos/);
+    const [{ quedan }] = await sql<{ quedan: boolean }[]>`select administracion_permanente() as quedan`;
+    expect(quedan).toBe(true);
+
+    // También por la aplicación: dos cuentas se quitan a la vez el acceso una a la otra; solo una lo consigue.
+    expect(await cambiar(b.id, a.id, { tipo: "dar_perfil", rol: "direccion", alcance: { todas: true }, hasta: "", motivo: "Vuelve a administrar" })).toEqual({ ok: true });
+    const idDe = async (x: string) => (await sql<{ id: string }[]>`select id from alcance_general where usuario_id = ${x} and rol = 'direccion' and revocado_en is null`)[0].id;
+    const [ia, ib] = [await idDe(a.id), await idDe(b.id)];
+    const resultados = await Promise.all([
+      cambiar(a.id, b.id, { tipo: "quitar_perfil", id: ib, general: true, motivo: "Al mismo tiempo" }),
+      cambiar(b.id, a.id, { tipo: "quitar_perfil", id: ia, general: true, motivo: "Al mismo tiempo" }),
+    ]);
+    expect(resultados.filter((x) => x.ok)).toHaveLength(1);
+    expect(resultados.filter((x) => !x.ok).map((x) => (x as { error: string }).error)).toEqual([expect.stringMatching(/ultimo_administrador|sin_permiso/)]);
+    expect((await sql<{ quedan: boolean }[]>`select administracion_permanente() as quedan`)[0].quedan).toBe(true);
   });
 });
