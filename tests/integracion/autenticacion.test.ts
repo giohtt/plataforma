@@ -137,7 +137,7 @@ describe.skipIf(!URL_ADMIN)("inicio de sesión y recuperación de cuenta", () =>
     it("un enlace vencido no sirve", async () => {
       const u = await crearUsuario();
       const token = await obtenerEnlace(u.correo);
-      await sql`update enlace_recuperacion set creado_en = now() - interval '2 hours', expira_en = now() - interval '1 hour'
+      await sql`update enlace_recuperacion set creado_en = now() - interval '2 hours', expira_en = now() - interval '100 minutes'
                 where usuario_id = ${u.id}`;
       expect(await consultarEnlace(sql, token)).toEqual({ estado: "vencido" });
       expect(await establecerContrasena(sql, token, CLAVE, CLAVE)).toMatchObject({ ok: false, estado: "vencido" });

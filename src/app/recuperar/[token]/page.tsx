@@ -7,7 +7,7 @@ import { obtenerBaseDatos } from "@/lib/db";
 export const metadata = { title: "Nueva contraseña · Fitnessland", referrer: "no-referrer" };
 
 const MENSAJES = {
-  vencido: "Este enlace caducó. Los enlaces duran 30 minutos.",
+  vencido: "Este enlace caducó. Las invitaciones duran 48 horas y los enlaces de recuperación, 30 minutos.",
   usado: "Este enlace ya se usó. Cada enlace funciona una sola vez.",
   invalidado: "Este enlace fue reemplazado por uno más reciente. Usa el último que recibiste.",
   inexistente: "Este enlace no es válido.",

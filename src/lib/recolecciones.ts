@@ -63,6 +63,10 @@ export type DevolucionRegistrada = EntregaCancelada;
 export type IncidenciaLlave = {
   id: string; momento: "recoleccion" | "devolucion"; por: string; en: Date; motivo: string;
   estado: "por_revisar" | "aclarada" | "incidencia_confirmada"; revisadaPor: string | null; motivoRevision: string | null; puedeRevisar: boolean;
+  /** Esta cuenta participó y la revisaría con su autorización personal (queda marcada). */
+  revisarasPropia: boolean;
+  /** La revisó quien participó, con su autorización personal. */
+  revisadaPropia: boolean;
 };
 export type EstadoDiferenciaSobre = "por_revisar" | "aclarada" | "faltante_confirmado" | "sobrante_confirmado" | "incidencia_confirmada";
 export type DiferenciaSobre = {
@@ -70,8 +74,10 @@ export type DiferenciaSobre = {
   verificacion: Verificacion | null; estado: EstadoDiferenciaSobre; motivo: string | null; revisadaPor: string | null;
   /** Personas de la cadena del sobre (cerró, custodió, verificó la caja, entregó, recogió). */
   cadena: Cadena;
-  /** Si esta cuenta puede revisarla (Administración que no participó). */
+  /** Si esta cuenta puede revisarla (Administración que no participó, o que participó con autorización personal vigente). */
   puedeRevisar: boolean;
+  revisarasPropia: boolean;
+  revisadaPropia: boolean;
 };
 export type RecoleccionConfirmada = {
   id: string; entregaPor: string | null; recibe: string; recibeId: string; confirmadaEn: Date; buzon: boolean;
@@ -209,16 +215,18 @@ async function entregasCanceladas(tx: Tx | Sql, sucursalId: string, usuarioId: s
 async function incidenciasLlave(tx: Tx | Sql, sucursalId: string, usuarioId: string): Promise<IncidenciaLlave[]> {
   const revisa = await puedeRevisarSucursal(tx, usuarioId, sucursalId);
   const filas = await tx<{ id: string; momento: "recoleccion" | "devolucion"; por: string; en: Date; motivo: string; resultado: "aclarada" | "incidencia_confirmada" | null;
-                           revisada_por: string | null; motivo_revision: string | null; participo: boolean }[]>`
+                           revisada_por: string | null; motivo_revision: string | null; participo: boolean; autorrevision: string | null; propia: boolean }[]>`
     select i.id, r.momento, u.nombre as por, r.en, r.motivo_llave as motivo, v.resultado, vu.nombre as revisada_por, v.motivo as motivo_revision,
-           ${usuarioId}::uuid in (select participantes_recoleccion(i.recoleccion_id)) as participo
+           ${usuarioId}::uuid in (select participantes_recoleccion(i.recoleccion_id)) as participo,
+           autorrevision_vigente(${usuarioId}, x.sucursal_id) as autorrevision, v.autorrevision_id is not null as propia
     from incidencia_llave_recoleccion i join revision_caja r on r.id = i.revision_id join usuario u on u.id = r.por
     join recoleccion x on x.id = i.recoleccion_id
     left join revision_incidencia_llave v on v.incidencia_id = i.id left join usuario vu on vu.id = v.revisada_por
     where x.sucursal_id = ${sucursalId} order by r.en desc limit 30`;
   return filas.map((f) => ({
     id: f.id, momento: f.momento, por: f.por, en: f.en, motivo: f.motivo, estado: f.resultado ?? "por_revisar",
-    revisadaPor: f.revisada_por, motivoRevision: f.motivo_revision, puedeRevisar: !f.resultado && revisa && !f.participo,
+    revisadaPor: f.revisada_por, motivoRevision: f.motivo_revision, puedeRevisar: !f.resultado && revisa && (!f.participo || f.autorrevision !== null),
+    revisarasPropia: !f.resultado && revisa && f.participo && f.autorrevision !== null, revisadaPropia: f.propia,
   }));
 }
 
@@ -309,10 +317,12 @@ async function puedeRevisarSucursal(tx: Tx | Sql, usuarioId: string, sucursalId:
 async function diferenciasDe(tx: Tx | Sql, recoleccionId: string, usuarioId: string, revisa: boolean): Promise<DiferenciaSobre[]> {
     const difs = await tx<{ id: string; sobre_id: string; folio: string; anotado: string; contado: string | null; importe: string;
                             v_estado: Verificacion["estado"] | null; v_folio: string | null; v_motivo: string | null; v_por: string | null; v_en: Date | null;
-                            resultado: EstadoDiferenciaSobre | null; motivo: string | null; revisada_por: string | null; participo: boolean }[]>`
+                            resultado: EstadoDiferenciaSobre | null; motivo: string | null; revisada_por: string | null; participo: boolean;
+                            autorrevision: string | null; propia: boolean }[]>`
       select d.id, d.sobre_id, s.folio, s.importe::text as anotado, x.contado::text as contado, d.importe::text as importe,
              v.estado as v_estado, v.folio_visto as v_folio, v.motivo as v_motivo, vu.nombre as v_por, v.en as v_en,
-             rv.resultado, rv.motivo, ru.nombre as revisada_por, ${usuarioId}::uuid in (select participantes_sobre(d.sobre_id)) as participo
+             rv.resultado, rv.motivo, ru.nombre as revisada_por, ${usuarioId}::uuid in (select participantes_sobre(d.sobre_id)) as participo,
+             autorrevision_vigente(${usuarioId}, s.sucursal_id) as autorrevision, rv.autorrevision_id is not null as propia
       from diferencia_sobre d join sobre_cierre s on s.id = d.sobre_id join recoleccion_sobre x on x.recoleccion_id = d.recoleccion_id and x.sobre_id = d.sobre_id
       left join verificacion_sobre v on v.id = d.verificacion_id left join usuario vu on vu.id = v.verificado_por
       left join revision_diferencia_sobre rv on rv.diferencia_id = d.id left join usuario ru on ru.id = rv.revisada_por
@@ -323,7 +333,8 @@ async function diferenciasDe(tx: Tx | Sql, recoleccionId: string, usuarioId: str
         id: d.id, folio: d.folio, anotado: d.anotado, contado: d.contado, importe: d.importe,
         verificacion: d.v_estado ? { estado: d.v_estado, folioVisto: d.v_folio, motivo: d.v_motivo, por: d.v_por!, en: d.v_en! } : null,
         estado: d.resultado ?? "por_revisar", motivo: d.motivo, revisadaPor: d.revisada_por,
-        cadena: await cadenaSobre(tx, d.sobre_id), puedeRevisar: !d.resultado && revisa && !d.participo,
+        cadena: await cadenaSobre(tx, d.sobre_id), puedeRevisar: !d.resultado && revisa && (!d.participo || d.autorrevision !== null),
+        revisarasPropia: !d.resultado && revisa && d.participo && d.autorrevision !== null, revisadaPropia: d.propia,
       });
     }
     return diferencias;
@@ -770,19 +781,23 @@ export async function revisarDiferenciaSobre(
     const s = await sucursalRecoleccion(tx, usuarioId, codigo);
     if (!s) return { ok: false as const, error: "no_encontrada" as const };
     if (!s.revisa) return { ok: false as const, error: "sin_permiso" as const };
-    const [d] = await tx<{ id: string; importe: string; participo: boolean; revisada: boolean }[]>`
+    const [d] = await tx<{ id: string; importe: string; participo: boolean; revisada: boolean; autorrevision: string | null }[]>`
       select d.id, d.importe::text as importe, ${usuarioId}::uuid in (select participantes_sobre(d.sobre_id)) as participo,
+             autorrevision_vigente(${usuarioId}, s.sucursal_id) as autorrevision,
              exists (select 1 from revision_diferencia_sobre r where r.diferencia_id = d.id) as revisada
       from diferencia_sobre d join sobre_cierre s on s.id = d.sobre_id
       where d.id = ${datos.diferenciaId} and s.sucursal_id = ${s.id} for update of d`;
     if (!d || d.revisada) return { ok: false as const, error: "no_encontrada" as const };
-    if (d.participo) return { ok: false as const, error: "participaste" as const };
+    // Quien participó solo revisa con su autorización personal vigente, y la revisión queda marcada.
+    if (d.participo && !d.autorrevision) return { ok: false as const, error: "participaste" as const };
+    const autorrevision = d.participo ? d.autorrevision : null;
     const c = cent(d.importe);
     const permitido = c < 0 ? ["aclarada", "faltante_confirmado"] : c > 0 ? ["aclarada", "sobrante_confirmado"] : ["aclarada", "incidencia_confirmada"];
     if (!permitido.includes(datos.resultado)) return { ok: false as const, error: "resultado" as const };
-    await tx`insert into revision_diferencia_sobre (diferencia_id, resultado, motivo, revisada_por) values (${d.id}, ${datos.resultado}, ${motivo}, ${usuarioId})`;
+    await tx`insert into revision_diferencia_sobre (diferencia_id, resultado, motivo, revisada_por, autorrevision_id)
+             values (${d.id}, ${datos.resultado}, ${motivo}, ${usuarioId}, ${autorrevision})`;
     await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, motivo, usuario_id)
-             values ('diferencia_sobre', ${d.id}, 'revisar', ${tx.json({ sucursal: codigo, resultado: datos.resultado })}, ${motivo}, ${usuarioId})`;
+             values ('diferencia_sobre', ${d.id}, 'revisar', ${tx.json({ sucursal: codigo, resultado: datos.resultado, revisada_por_quien_participo: autorrevision !== null })}, ${motivo}, ${usuarioId})`;
     return { ok: true as const };
   });
 }
@@ -800,16 +815,19 @@ export async function revisarIncidenciaLlave(
     const s = await sucursalRecoleccion(tx, usuarioId, codigo);
     if (!s) return { ok: false as const, error: "no_encontrada" as const };
     if (!s.revisa) return { ok: false as const, error: "sin_permiso" as const };
-    const [i] = await tx<{ id: string; participo: boolean; revisada: boolean }[]>`
+    const [i] = await tx<{ id: string; participo: boolean; revisada: boolean; autorrevision: string | null }[]>`
       select i.id, ${usuarioId}::uuid in (select participantes_recoleccion(i.recoleccion_id)) as participo,
+             autorrevision_vigente(${usuarioId}, r.sucursal_id) as autorrevision,
              exists (select 1 from revision_incidencia_llave v where v.incidencia_id = i.id) as revisada
       from incidencia_llave_recoleccion i join recoleccion r on r.id = i.recoleccion_id
       where i.id = ${datos.incidenciaId} and r.sucursal_id = ${s.id} for update of i`;
     if (!i || i.revisada) return { ok: false as const, error: "no_encontrada" as const };
-    if (i.participo) return { ok: false as const, error: "participaste" as const };
-    await tx`insert into revision_incidencia_llave (incidencia_id, resultado, motivo, revisada_por) values (${i.id}, ${datos.resultado}, ${motivo}, ${usuarioId})`;
+    if (i.participo && !i.autorrevision) return { ok: false as const, error: "participaste" as const };
+    const autorrevision = i.participo ? i.autorrevision : null;
+    await tx`insert into revision_incidencia_llave (incidencia_id, resultado, motivo, revisada_por, autorrevision_id)
+             values (${i.id}, ${datos.resultado}, ${motivo}, ${usuarioId}, ${autorrevision})`;
     await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, motivo, usuario_id)
-             values ('incidencia_llave_recoleccion', ${i.id}, 'revisar', ${tx.json({ sucursal: codigo, resultado: datos.resultado })}, ${motivo}, ${usuarioId})`;
+             values ('incidencia_llave_recoleccion', ${i.id}, 'revisar', ${tx.json({ sucursal: codigo, resultado: datos.resultado, revisada_por_quien_participo: autorrevision !== null })}, ${motivo}, ${usuarioId})`;
     return { ok: true as const };
   });
 }

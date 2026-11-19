@@ -47,6 +47,15 @@ Confirmados el 4 nov 2026.
 6. ~~Pruebas de acceso permitido y denegado.~~ Hecho. Cobertura en el [plan del bloque 1](plan-entrega-1.md); comprobado en el sitio de pruebas el 4 nov 2026.
 7. ~~Reporte básico: usuarios y sus asignaciones por sucursal.~~ Hecho (`/reportes/usuarios`). Probado en el sitio de pruebas el 4 nov 2026.
 - **Decisiones que necesita:** ninguna nueva.
+8. **Sección «Usuarios, roles y permisos»** (aprobada el 19 nov 2026, 16:22; programada en pruebas, en revisión):
+   - La administra desde su cuenta **Dirección (prueba)**, con el puesto «Dirección Administrativa y Financiera» y acceso expreso a todas las sucursales (Dirección y Administración). «Dirección general (prueba)» se conserva como cuenta de prueba.
+   - Crear cuentas, invitar (enlace de un solo uso por **48 horas**; generar otro invalida el anterior; la recuperación sigue en 30 minutos), activar y desactivar con motivo. No se envían correos: el enlace se copia o se comparte por WhatsApp.
+   - **Perfiles como base**; a cada persona se le pueden **sumar permisos** (con límite de monto si son de autorizar) y **quitar permisos aunque vengan en su perfil**. La restricción individual **prevalece** sobre todos sus perfiles y permisos (lo aplica la base en cada comprobación).
+   - Sucursales elegidas expresamente: una, varias o «todas», que **incluye las futuras**. **Antes de guardar se muestra cómo quedarán** sus permisos y sucursales.
+   - **Autorización personal para revisar lo propio** (solo Dirección): máximo **90 días** (por ejemplo, del 19 nov al 17 feb), renovable, con motivo e historial. Cada revisión hecha así queda marcada «Revisada por quien participó». Aplica a diferencias de efectivo, incidencias del cierre, diferencias de sobres, problemas de llave al recoger y revisiones de retiros. Sin esa autorización expresa, quien participó no revisa, aunque reúna varios perfiles.
+   - **Siempre queda una cuenta activa que administra accesos sin vencimiento**: la base impide desactivarla, quitarle el perfil, restringirla o dejar solo accesos con vencimiento.
+   - Todo cambio de acceso queda en el historial (quién, cuándo, a quién, qué cambió y motivo). Los permisos se comprueban en el servidor al hacer cada operación.
+   - **Falta decidir:** si más adelante se editan desde la pantalla los permisos incluidos en cada perfil (hoy son fijos y se ajusta por persona); servicio de correo para invitaciones (puede tener costo).
 
 ### Bloque 2. Expedientes de visitantes y búsqueda (cerrado para el entorno de pruebas el 4 nov 2026)
 1. Expediente: alta, corrección con historial y motivo, búsqueda por nombre o teléfono. Pruebas con homónimos, errores de escritura y teléfono compartido.

@@ -189,7 +189,9 @@ async function limiteDeFacultad(tx: Tx | Sql, usuarioId: string, sucursalId: str
     select max(f.limite_monto)::text as limite from facultad_otorgada f join usuario u on u.id = f.usuario_id and u.activo
     where f.usuario_id = ${usuarioId} and f.permiso = 'autorizacion.devolucion'
       and (f.sucursal_id = ${sucursalId} or f.todas_las_sucursales)
-      and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en)`;
+      and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en)
+      -- Una restricción individual prevalece sobre la facultad.
+      and tiene_permiso(${usuarioId}, 'autorizacion.devolucion', ${sucursalId})`;
   return f?.limite == null ? null : Number(f.limite);
 }
 

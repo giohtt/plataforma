@@ -44,7 +44,9 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
       {aviso === "revisada" ? <p className="aviso aviso-ok" role="status">Revisión registrada. Los importes no cambiaron.</p> : null}
       {aviso === "resuelta" ? <p className="aviso aviso-ok" role="status">Decisión de Dirección registrada. Los importes no cambiaron.</p> : null}
       {aviso === "corregida" ? <p className="aviso aviso-ok" role="status">Corrección registrada. El caso quedó cerrado.</p> : null}
-      {c.participaste ? (
+      {c.revisarasPropia ? (
+        <p className="aviso aviso-info" data-testid="revisaras-propia">Participaste en esta entrega. Con tu autorización personal vigente puedes revisarla; quedará marcada «Revisada por quien participó».</p>
+      ) : c.participaste ? (
         <p className="aviso aviso-info" data-testid="participaste">Participaste en esta entrega: su revisión le corresponde a otra persona.</p>
       ) : null}
       <p className="sub" data-testid="nivel-revision">
@@ -178,7 +180,7 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
               </p>
               <p className="sub">{i.detalle}</p>
               {i.revision ? (
-                <p className="sub">Revisó {i.revision.revisadaPor} ({NOMBRE_NIVEL[i.revision.nivel]}) · {hora.format(i.revision.en)} · «{i.revision.motivo}»</p>
+                <p className="sub">Revisó {i.revision.revisadaPor} ({NOMBRE_NIVEL[i.revision.nivel]}) · {hora.format(i.revision.en)} · «{i.revision.motivo}»{i.revision.propia ? <strong className="marca-propia" data-testid="revisada-propia"> · Revisada por quien participó</strong> : null}</p>
               ) : c.puedeRevisar ? (
                 <FormularioRevisionIncidencia codigo={codigo} incidenciaId={i.id} />
               ) : (
@@ -206,6 +208,7 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
                 <>
                   <p className="sub" data-testid="revision">
                     Revisó <strong>{d.revision.revisadaPor}</strong> ({NOMBRE_NIVEL[d.revision.nivel]}) · {hora.format(d.revision.en)} · Motivo: «{d.revision.motivo}»
+                    {d.revision.propia ? <strong className="marca-propia" data-testid="revisada-propia"> · Revisada por quien participó</strong> : null}
                   </p>
                   {/* El tiempo cuenta desde que se confirmó el faltante o sobrante; con la corrección pendiente, el caso sigue abierto. */}
                   {d.pendienteDireccionDesde ? (() => {

@@ -629,11 +629,11 @@ async function accesoSucursal(sql: Tx | Sql, usuarioId: string, codigo: string) 
   return s && (s.consulta || s.revisa || s.confirma) ? s : null;
 }
 
-/** ¿Le toca revisar este retiro? Tiene el perfil del nivel y no participó. */
+/** ¿Le toca revisar este retiro? Tiene el perfil del nivel y no participó (o participó con autorización personal vigente). */
 const LE_TOCA = (sql: Tx | Sql, usuarioId: string) => sql`
   (r.discrepancia is not null and tiene_permiso(${usuarioId}, 'retiro.revisar', r.sucursal_id)
    and exists (select 1 from perfiles_en_sucursal(${usuarioId}, r.sucursal_id) p where p = nivel_revision_retiro(r.id))
-   and not (${usuarioId}::uuid in (select participantes_retiro(r.id))))`;
+   and (not (${usuarioId}::uuid in (select participantes_retiro(r.id))) or autorrevision_vigente(${usuarioId}, r.sucursal_id) is not null))`;
 
 export type ListaRetiros = {
   sucursal: string;
@@ -696,6 +696,8 @@ export type DetalleRetiro = {
   revision: {
     resultado: "aclarada" | "faltante_confirmado"; motivo: string; montoVerificado: string; folioVerificado: string | null;
     nivel: NivelRetiro; revisadaPor: string; en: Date;
+    /** La revisó quien participó, con su autorización personal. */
+    propia: boolean;
   } | null;
   /** Folio que trae el sobre, si se reportó que no coincide. */
   folioEnSobre: string | null;
@@ -738,8 +740,9 @@ export async function detalleRetiro(sql: Sql, usuarioId: string, codigo: string,
   const ya = (await sql`select 1 from retiro_revision where retiro_id = ${f.id} and revisada_por = ${usuarioId}`).length > 0;
   if (!s.consulta && !esSuyo && !(s.revisa && (p.toca || ya))) return null;
 
-  const [rv] = await sql<{ resultado: "aclarada" | "faltante_confirmado"; motivo: string; monto_verificado: string; nivel: NivelRetiro; revisada_por: string; en: Date }[]>`
-    select x.resultado, x.motivo, x.monto_verificado::text, x.nivel, u.nombre as revisada_por, x.en
+  const [rv] = await sql<{ resultado: "aclarada" | "faltante_confirmado"; motivo: string; monto_verificado: string; nivel: NivelRetiro; revisada_por: string; en: Date;
+                           propia: boolean }[]>`
+    select x.resultado, x.motivo, x.monto_verificado::text, x.nivel, u.nombre as revisada_por, x.en, x.autorrevision_id is not null as propia
     from retiro_revision x join usuario u on u.id = x.revisada_por where x.retiro_id = ${f.id}`;
   const depositos = await sql<Deposito[]>`
     select d.id, d.importe::text, d.depositado_en as "depositadoEn", d.referencia, u.nombre as "registradoPor", d.en,
@@ -821,7 +824,7 @@ export async function detalleRetiro(sql: Sql, usuarioId: string, codigo: string,
     motivo: f.motivo, reportadoEn: f.reportado_en, habilitadoEn: f.habilitado_en,
     revision: rv ? {
       resultado: rv.resultado, motivo: rv.motivo, montoVerificado: rv.monto_verificado, folioVerificado: f.folio_verificado,
-      nivel: rv.nivel, revisadaPor: rv.revisada_por, en: rv.en,
+      nivel: rv.nivel, revisadaPor: rv.revisada_por, en: rv.en, propia: rv.propia,
     } : null,
     folioEnSobre: f.folio_en_sobre,
     diferenciaEsperado: ciega || f.dif_esperado === null ? null : {
@@ -865,13 +868,16 @@ export async function revisarRetiro(
       select r.id, r.sucursal_id, s.codigo, r.importe::text, r.estado, r.version, r.folio, r.discrepancia
       from retiro r join sucursal s on s.id = r.sucursal_id where r.id = ${datos.retiroId} for update of r`;
     if (!r || r.codigo !== codigo) return { ok: false as const, error: "no_encontrado" as const };
-    const [p] = await tx<{ revisa: boolean; nivel: NivelRetiro; tiene_nivel: boolean; participo: boolean }[]>`
+    const [p] = await tx<{ revisa: boolean; nivel: NivelRetiro; tiene_nivel: boolean; participo: boolean; autorrevision: string | null }[]>`
       select tiene_permiso(${usuarioId}, 'retiro.revisar', ${r.sucursal_id}) as revisa, nivel_revision_retiro(${r.id}) as nivel,
+             autorrevision_vigente(${usuarioId}, ${r.sucursal_id}) as autorrevision,
              exists (select 1 from perfiles_en_sucursal(${usuarioId}, ${r.sucursal_id}) x where x = nivel_revision_retiro(${r.id})) as tiene_nivel,
              ${usuarioId}::uuid in (select participantes_retiro(${r.id})) as participo`;
     if (!p.revisa) return { ok: false as const, error: "sin_permiso" as const };
-    if (p.participo) return { ok: false as const, error: "participaste" as const };
+    // Quien participó solo revisa con su autorización personal vigente (la revisión queda marcada).
+    if (p.participo && !p.autorrevision) return { ok: false as const, error: "participaste" as const };
     if (!p.tiene_nivel) return { ok: false as const, error: "otro_nivel" as const };
+    const autorrevision = p.participo ? p.autorrevision : null;
     if (r.estado !== "por_revisar" || r.version !== datos.version) return { ok: false as const, error: "cambio" as const };
     // Con el folio en duda, se habilita solo al verificar que el efectivo corresponde al sobre de este retiro.
     const folioVerificado = r.discrepancia === "folio" ? leerFolio(datos.folioVerificado ?? "") : null;
@@ -879,12 +885,12 @@ export async function revisarRetiro(
     if (datos.resultado === "faltante_confirmado" && cent(datos.montoVerificado) >= cent(r.importe)) {
       return { ok: false as const, error: "monto" as const };
     }
-    await tx`insert into retiro_revision (retiro_id, resultado, motivo, monto_verificado, nivel, revisada_por, folio_verificado)
-             values (${r.id}, ${datos.resultado}, ${motivo}, ${datos.montoVerificado}, ${p.nivel}, ${usuarioId}, ${folioVerificado})`;
+    await tx`insert into retiro_revision (retiro_id, resultado, motivo, monto_verificado, nivel, revisada_por, folio_verificado, autorrevision_id)
+             values (${r.id}, ${datos.resultado}, ${motivo}, ${datos.montoVerificado}, ${p.nivel}, ${usuarioId}, ${folioVerificado}, ${autorrevision})`;
     await tx`update retiro set estado = 'revisado', monto_habilitado = ${datos.montoVerificado}, habilitado_en = now(), version = version + 1
              where id = ${r.id}`;
     await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, motivo, usuario_id)
-             values ('retiro', ${r.id}, 'revisar', ${tx.json({ resultado: datos.resultado, monto_verificado: datos.montoVerificado, nivel: p.nivel, folio_verificado: folioVerificado })},
+             values ('retiro', ${r.id}, 'revisar', ${tx.json({ resultado: datos.resultado, monto_verificado: datos.montoVerificado, nivel: p.nivel, folio_verificado: folioVerificado, revisada_por_quien_participo: autorrevision !== null })},
                      ${motivo}, ${usuarioId})`;
     return { ok: true as const };
   });

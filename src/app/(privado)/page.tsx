@@ -3,6 +3,7 @@ import { CabeceraMarca } from "@/components/CabeceraMarca";
 import { obtenerBaseDatos } from "@/lib/db";
 import { NOMBRE_PERFIL, resumenAccesos, sucursalesAccesibles, tienePermiso } from "@/lib/permisos";
 import { requerirSesion } from "@/lib/sesion-servidor";
+import { facultadesAdministrar } from "@/lib/usuarios";
 
 const ESTADO: Record<string, string> = { activa: "Activa", proxima: "Próxima apertura", inactiva: "Inactiva" };
 const fecha = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium" });
@@ -11,10 +12,11 @@ const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN
 export default async function Inicio({ searchParams }: PageProps<"/">) {
   const sesion = await requerirSesion();
   const sql = obtenerBaseDatos()!;
-  const [sucursales, accesos, puedeCrear] = await Promise.all([
+  const [sucursales, accesos, puedeCrear, administra] = await Promise.all([
     sucursalesAccesibles(sql, sesion.usuarioId),
     resumenAccesos(sql, sesion.usuarioId),
     tienePermiso(sql, sesion.usuarioId, "sucursal.crear"),
+    facultadesAdministrar(sql, sesion.usuarioId),
   ]);
   const { aviso } = await searchParams;
 
@@ -23,6 +25,12 @@ export default async function Inicio({ searchParams }: PageProps<"/">) {
       <CabeceraMarca titulo="Plataforma administrativa" subtitulo={sesion.nombre} />
       {aviso === "creada" ? (
         <p className="aviso aviso-ok" role="status">Sucursal creada. No se asignó a nadie, por eso no aparece en tu lista.</p>
+      ) : null}
+
+      {administra.crear || administra.editar || administra.asignar || administra.restablecer ? (
+        <p className="fila-acciones">
+          <Link className="boton" href="/usuarios" data-testid="ir-usuarios">Usuarios, roles y permisos</Link>
+        </p>
       ) : null}
 
       {sucursales.length === 0 ? (

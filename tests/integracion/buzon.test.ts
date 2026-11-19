@@ -11,6 +11,7 @@ import {
   revisarIncidenciaLlave,
 } from "@/lib/recolecciones";
 import { abrirTurno } from "@/lib/turnos";
+import { aplicarCambio } from "@/lib/usuarios";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
 
@@ -390,5 +391,47 @@ describe.skipIf(!URL_ADMIN)("buzón de depósito con llave solo de Dirección", 
     const d = await pantallaRecoleccion(sql, e.dir, e.codigo, "pruebas");
     if (!d.ok) throw new Error(d.error);
     expect(d.recolecciones[0].sobres.map((x) => x.anotado)).toEqual(["420.00", "3050.00"]);
+  });
+
+  it("Dirección con Administración revisa lo que recogió solo con su autorización personal vigente, y queda marcado", async () => {
+    const e = await escenario();
+    await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${e.dir}, 'administracion', ${e.sucursalId}, 'Dirección con Administración')`;
+    const c = await cerrarYo(e, e.vespertina);
+    const r = await recogerBuzon(sql, e.dir, e.codigo, {
+      sobres: c.usados.map((s, i) => ({ sobreId: s.id, estado: "correcto", folioVisto: "", motivo: "", contado: i === 0 ? "400" : "3050" })),
+      llave: { estado: "incidencia", motivo: "La cerradura del buzón estaba dura" },
+    }, PRUEBAS);
+    expect(r).toMatchObject({ ok: true, diferencias: 1 });
+    const ver = async () => {
+      const p = await pantallaRecoleccion(sql, e.dir, e.codigo, "pruebas");
+      if (!p.ok) throw new Error(p.error);
+      return p;
+    };
+    let p = await ver();
+    const dif = p.recolecciones[0].diferencias[0];
+    expect(dif).toMatchObject({ puedeRevisar: false, revisarasPropia: false });
+    expect(await revisarDiferenciaSobre(sql, e.dir, e.codigo, { diferenciaId: dif.id, resultado: "faltante_confirmado", motivo: "Faltan $20" }, PRUEBAS))
+      .toEqual({ ok: false, error: "participaste" });
+    // Sin autorización, ni reuniendo Dirección y Administración: la base también lo rechaza.
+    await expect(sql`insert into revision_diferencia_sobre (diferencia_id, resultado, motivo, revisada_por) values (${dif.id}, 'faltante_confirmado', 'Directo', ${e.dir})`)
+      .rejects.toThrow(/no revisa su diferencia/);
+    // Quien administra accesos le da la autorización personal (máximo 90 días) en esta sucursal.
+    const general = (await sql<{ id: string }[]>`select id from usuario where correo = 'direccion.general@prueba.fitnessland.invalid'`)[0].id;
+    const hasta = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date(Date.now() + 30 * 86_400_000));
+    expect(await aplicarCambio(sql, general, e.dir, { tipo: "autorrevision", alcance: { todas: false, sucursales: [e.sucursalId] }, hasta, motivo: "Aún no hay personal de Administración" }, PRUEBAS))
+      .toEqual({ ok: true });
+    p = await ver();
+    expect(p.recolecciones[0].diferencias[0]).toMatchObject({ puedeRevisar: true, revisarasPropia: true });
+    expect(p.incidenciasLlave[0]).toMatchObject({ puedeRevisar: true, revisarasPropia: true });
+    expect(await revisarDiferenciaSobre(sql, e.dir, e.codigo, { diferenciaId: dif.id, resultado: "faltante_confirmado", motivo: "Faltan $20 en el sobre" }, PRUEBAS))
+      .toEqual({ ok: true });
+    expect(await revisarIncidenciaLlave(sql, e.dir, e.codigo, { incidenciaId: p.incidenciasLlave[0].id, resultado: "aclarada", motivo: "Se lubricó la cerradura" }, PRUEBAS))
+      .toEqual({ ok: true });
+    p = await ver();
+    expect(p.recolecciones[0].diferencias[0]).toMatchObject({ estado: "faltante_confirmado", revisadaPropia: true });
+    expect(p.incidenciasLlave[0]).toMatchObject({ estado: "aclarada", revisadaPropia: true });
+    // La revisión guarda con qué autorización se hizo.
+    const [rev] = await sql<{ autorrevision_id: string | null }[]>`select autorrevision_id from revision_diferencia_sobre where diferencia_id = ${dif.id}`;
+    expect(rev.autorrevision_id).not.toBeNull();
   });
 });

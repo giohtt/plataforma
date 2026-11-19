@@ -39,8 +39,12 @@ function TarjetaDiferencia({ d, codigo, devolucion = false }: { d: DiferenciaSob
         {d.contado !== null ? <> · anotado {pesos.format(Number(d.anotado))} · contado {pesos.format(Number(d.contado))} · diferencia <strong>{firmado(d.importe)}</strong></> : null}
         {d.verificacion ? <> · {devolucion && d.verificacion.estado === "falta" ? "no regresó en la devolución" : `${devolucion ? "volvió" : "llegó"} ${COMO[d.verificacion.estado]}`}{d.verificacion.folioVisto ? ` (${d.verificacion.folioVisto})` : ""}: «{d.verificacion.motivo}»</> : null}
       </p>
-      <p className="sub" data-testid="estado-diferencia">{ESTADO_DIF[d.estado]}{d.revisadaPor ? ` · ${d.revisadaPor}: «${d.motivo}»` : ""}</p>
+      <p className="sub" data-testid="estado-diferencia">
+        {ESTADO_DIF[d.estado]}{d.revisadaPor ? ` · ${d.revisadaPor}: «${d.motivo}»` : ""}
+        {d.revisadaPropia ? <strong className="marca-propia" data-testid="revisada-propia"> · Revisada por quien participó</strong> : null}
+      </p>
       <ListaCadena cadena={d.cadena} />
+      {d.revisarasPropia ? <p className="aviso aviso-info" data-testid="revisaras-propia">Participaste en la cadena de este sobre. Con tu autorización personal vigente puedes revisarla; quedará marcada «Revisada por quien participó».</p> : null}
       {d.puedeRevisar ? <FormularioRevisarDiferenciaSobre codigo={codigo} diferenciaId={d.id} importe={d.importe} /> : null}
     </div>
   );
@@ -327,7 +331,9 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
               <p className="sub" data-testid="estado-incidencia-llave">
                 {i.estado === "por_revisar" ? "Por revisar (Administración que no participó)" : i.estado === "aclarada" ? "Aclarada" : "Incidencia confirmada"}
                 {i.revisadaPor ? ` · ${i.revisadaPor}: «${i.motivoRevision}»` : ""}
+                {i.revisadaPropia ? <strong className="marca-propia" data-testid="revisada-propia"> · Revisada por quien participó</strong> : null}
               </p>
+              {i.revisarasPropia ? <p className="aviso aviso-info" data-testid="revisaras-propia">Participaste. Con tu autorización personal vigente puedes revisarla; quedará marcada «Revisada por quien participó».</p> : null}
               {i.puedeRevisar ? <FormularioRevisarIncidenciaLlave codigo={codigo} incidenciaId={i.id} /> : null}
             </div>
           ))}
