@@ -11,7 +11,7 @@ import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { leerLlaveFormulario, leerVerificacionSobres, MENSAJES_VERIFICACION } from "@/lib/formulario-conteo";
 import {
-  cancelarEntregaSobres, confirmarRecoleccion, recogerBuzon, registrarDepositoRecoleccion, registrarDevolucion, registrarEntregaSobres, revisarDiferenciaSobre,
+  cancelarEntregaSobres, confirmarRecoleccion, recogerBuzon, registrarTrasladoBuzon, registrarDepositoRecoleccion, registrarDevolucion, registrarEntregaSobres, revisarDiferenciaSobre,
   revisarIncidenciaLlave,
   type ErrorRecoleccion,
 } from "@/lib/recolecciones";
@@ -113,6 +113,20 @@ export async function accionConfirmarRecoleccion(previo: EstadoFormularioEntrega
   }
   if (r.error === "motivo" && r.sobreId) return { error: MARCADOS, errores: { [`sobre-${r.sobreId}`]: MENSAJES.motivo }, valores, intento };
   if (r.error === "motivo_llave") return { error: MARCADOS, errores: { motivo_llave_caja: MENSAJES.motivo_llave }, valores, intento };
+  return { error: MENSAJES[r.error], valores, intento };
+}
+
+/** La responsable en turno registra qué sobres de la caja anterior trasladó al buzón. */
+export async function accionTrasladarAlBuzon(previo: EstadoFormularioEntrega, datos: FormData): Promise<EstadoFormularioEntrega> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 10);
+  const sobres = datos.getAll("trasladar").filter((s): s is string => typeof s === "string").slice(0, 60).map((s) => s.slice(0, 40));
+  const valores = { trasladar: sobres.join(",") };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await registrarTrasladoBuzon(sql, sesion.usuarioId, codigo, { sobres }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/recoleccion?aviso=trasladados&pendientes=${r.pendientes}`);
+  if (r.error === "sobres") return { error: MARCADOS, errores: { trasladar: "Elige los sobres que trasladaste al buzón." }, valores, intento };
   return { error: MENSAJES[r.error], valores, intento };
 }
 

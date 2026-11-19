@@ -88,6 +88,9 @@ export type InvestigacionSobre = {
   recogio: string; en: Date; motivo: string | null; cadena: Cadena;
 };
 
+/** Traslado físico de sobres de la caja anterior al buzón: quién, cuándo y qué folios. */
+export type TrasladoBuzon = { id: string; por: string; en: Date; folios: string[] };
+
 export type PantallaRecoleccion =
   | {
       ok: true; sucursal: string; turnoId: string | null;
@@ -109,6 +112,11 @@ export type PantallaRecoleccion =
       /** Dirección con la llave del buzón puede recogerlo (los sobres registrados están en «caja», sin lo anotado). */
       puedeRecogerBuzon: boolean;
       investigaciones: InvestigacionSobre[];
+      /** Con buzón: sobres guardados antes del buzón que siguen en la caja anterior hasta registrar su traslado. */
+      porTrasladar: SobreCaja[];
+      /** La responsable en turno registra el traslado físico de esos sobres al buzón. */
+      puedeTrasladar: boolean;
+      traslados: TrasladoBuzon[];
     }
   | { ok: false; error: "no_encontrada" | "bloqueado_produccion" };
 
@@ -133,8 +141,8 @@ async function direccionSucursal(tx: Tx | Sql, sucursalId: string): Promise<Rece
 }
 
 /** Sobres físicamente en la caja, con su aviso (desde los 8 días de guardado). */
-async function caja(tx: Tx | Sql, sucursalId: string, verImporte: boolean): Promise<SobreCaja[]> {
-  const sobres = await sobresEnCaja(tx, sucursalId);
+async function caja(tx: Tx | Sql, sucursalId: string, verImporte: boolean, donde: "todos" | "buzon" | "por_trasladar" = "todos"): Promise<SobreCaja[]> {
+  const sobres = await sobresEnCaja(tx, sucursalId, null, donde);
   if (!sobres.length) return [];
   const extra = await tx<{ id: string; importe: string }[]>`
     select s.id, s.importe::text as importe from sobre_cierre s where s.id in ${tx(sobres.map((x) => x.id))}`;
@@ -231,7 +239,7 @@ const MOMENTO: Record<string, string> = {
   recoleccion: "Recogió (Dirección)", entrega: "Entregó a Dirección", caja_cierre: "Recibió la llave al cerrar",
   entrega_pendiente: "Entregó a Dirección (por confirmar)", cancelada: "Entrega cancelada (por devolver)",
   devolucion: "Revisó la devolución", devuelto: "Volvió a la caja (devolución)",
-  depositado: "Registró que lo depositó en el buzón", investigar: "No estaba en el buzón al recoger: por investigar, sin responsable asignado",
+  depositado: "Registró que lo depositó en el buzón", trasladado: "Lo trasladó de la caja anterior al buzón", investigar: "No estaba en el buzón al recoger: por investigar, sin responsable asignado",
 };
 
 /** Cadena de custodia de un sobre: quién lo cerró, cada revisión de la caja, quién lo entregó y quién lo recogió. */
@@ -254,6 +262,9 @@ async function cadenaSobre(tx: Tx | Sql, sobreId: string) {
     join usuario u on u.id = d.recibida_por where x.sobre_id = ${sobreId}
     union all
     select 'depositado', u.nombre, d.en, null from sobre_depositado d join usuario u on u.id = d.depositado_por where d.sobre_id = ${sobreId}
+    union all
+    select 'trasladado', u.nombre, t.en, null from traslado_sobre x join traslado_buzon t on t.id = x.traslado_id
+    join usuario u on u.id = t.por where x.sobre_id = ${sobreId}
     union all
     select 'investigar', u.nombre, i.creada_en, null from investigacion_sobre i join recoleccion r on r.id = i.recoleccion_id
     join usuario u on u.id = r.recibe where i.sobre_id = ${sobreId}
@@ -328,13 +339,17 @@ export async function pantallaRecoleccion(sql: Sql, usuarioId: string, codigo: s
       from turno t where t.sucursal_id = ${s.id} and t.cerrado_en is null`;
     const pendiente = await pendienteDe(tx, s.id);
     const porDevolver = await entregasCanceladas(tx, s.id, usuarioId, true);
-    // Quien recibe en Dirección cuenta a ciegas: no ve lo anotado de los sobres hasta confirmar.
-    const ciega = s.recoge && !s.entrega;
+    // Quien puede recoger (Dirección) cuenta a ciegas: no ve lo anotado de los sobres hasta confirmar su conteo, aunque su
+    // cuenta también pueda entregar sobres.
+    const ciega = s.recoge;
     const config = await configuracionVigente(tx, s.id);
     const buzon = await infoBuzon(tx, s.id, config);
     return {
       ok: true, sucursal: s.nombre, turnoId: t?.id ?? null,
-      caja: await caja(tx, s.id, !ciega), custodia: await custodiaActual(tx, s.id), diasAviso: DIAS_AVISO_SOBRE,
+      caja: await caja(tx, s.id, !ciega, buzon ? "buzon" : "todos"),
+      porTrasladar: buzon ? await caja(tx, s.id, !ciega, "por_trasladar") : [],
+      puedeTrasladar: Boolean(buzon && t?.responsable && s.entrega),
+      traslados: await traslados(tx, s.id), custodia: await custodiaActual(tx, s.id), diasAviso: DIAS_AVISO_SOBRE,
       fuera: await sobresFueraDeCaja(tx, s.id),
       pendiente, porDevolver,
       // Un sobre que no regresa no impide entregar los que sí están en la caja.
@@ -347,6 +362,48 @@ export async function pantallaRecoleccion(sql: Sql, usuarioId: string, codigo: s
       buzon, puedeRecogerBuzon: Boolean(buzon && s.recoge && buzon.llave.some((x) => x.id === usuarioId)),
       investigaciones: await investigaciones(tx, s.id),
     };
+  });
+}
+
+async function traslados(tx: Tx | Sql, sucursalId: string): Promise<TrasladoBuzon[]> {
+  return [...(await tx<TrasladoBuzon[]>`
+    select t.id, u.nombre as por, t.en,
+           array(select s.folio from traslado_sobre x join sobre_cierre s on s.id = x.sobre_id where x.traslado_id = t.id order by s.resuelto_en, s.folio) as folios
+    from traslado_buzon t join usuario u on u.id = t.por where t.sucursal_id = ${sucursalId} order by t.en desc limit 20`)];
+}
+
+/**
+ * La responsable en turno (que tiene la llave de la caja anterior) registra el traslado físico al buzón de los sobres
+ * guardados antes del buzón: qué folios trasladó. Guardar la configuración no los da por trasladados; los que no elija
+ * siguen en la caja anterior, por trasladar. Primero el turno.
+ */
+export async function registrarTrasladoBuzon(
+  sql: Sql, usuarioId: string, codigo: string, datos: { sobres: string[] }, { entorno }: { entorno: Entorno },
+): Promise<{ ok: true; trasladados: string[]; pendientes: number } | { ok: false; error: ErrorRecoleccion }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  const ids = [...new Set(datos.sobres)];
+  if (!ids.length || ids.length > 60 || !ids.every(esIdentificadorValido)) return { ok: false, error: "sobres" };
+  return sql.begin(async (tx) => {
+    const s = await sucursalRecoleccion(tx, usuarioId, codigo);
+    if (!s) return { ok: false as const, error: "no_encontrada" as const };
+    if (!s.entrega) return { ok: false as const, error: "sin_permiso" as const };
+    const [t] = await tx<{ id: string }[]>`select id from turno where sucursal_id = ${s.id} and cerrado_en is null for update`;
+    if (!t) return { ok: false as const, error: "sin_turno" as const };
+    await tx`select pg_advisory_xact_lock(hashtext(${"buzon:" + s.id}))`;
+    if (!(await configuracionVigente(tx, s.id))?.buzon) return { ok: false as const, error: "sin_permiso" as const };
+    const [{ responsable }] = await tx<{ responsable: boolean }[]>`
+      select exists (select 1 from responsable_lugar where turno_id = ${t.id} and hasta is null and usuario_id = ${usuarioId}) as responsable`;
+    if (!responsable) return { ok: false as const, error: "no_responsable" as const };
+    const pendientes = await sobresEnCaja(tx, s.id, null, "por_trasladar");
+    if (!ids.every((id) => pendientes.some((p) => p.id === id))) return { ok: false as const, error: "sobres" as const };
+    const [x] = await tx<{ id: string }[]>`
+      insert into traslado_buzon (sucursal_id, por, turno_id) values (${s.id}, ${usuarioId}, ${t.id}) returning id`;
+    for (const id of ids) await tx`insert into traslado_sobre (traslado_id, sobre_id) values (${x.id}, ${id})`;
+    const folios = pendientes.filter((p) => ids.includes(p.id)).map((p) => p.folio);
+    await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
+             values ('traslado_buzon', ${x.id}, 'trasladar',
+                     ${tx.json({ sucursal: codigo, folios, siguen_en_la_caja: pendientes.filter((p) => !ids.includes(p.id)).map((p) => p.folio) })}, ${usuarioId})`;
+    return { ok: true as const, trasladados: folios, pendientes: pendientes.length - ids.length };
   });
 }
 
@@ -548,7 +605,8 @@ export async function recogerBuzon(
     const config = await configuracionVigente(tx, s.id);
     if (!config?.buzon) return { ok: false as const, error: "sin_permiso" as const };
     if (!s.recoge || !config.acceso.some((a) => a.id === usuarioId)) return { ok: false as const, error: "sin_llave_buzon" as const };
-    const registrados = await sobresEnCaja(tx, s.id);
+    // Solo lo que está en el buzón: depositado al cerrar o con su traslado registrado.
+    const registrados = await sobresEnCaja(tx, s.id, null, "buzon");
     if (!registrados.length) return { ok: false as const, error: "buzon_vacio" as const };
     const v = leerVerificaciones(registrados, datos.sobres.filter((x) => registrados.some((y) => y.id === x.sobreId)));
     if (!v.ok) return v.error === "sobres" ? { ok: false as const, error: "cambio" as const } : v;
@@ -763,12 +821,12 @@ export async function revisarIncidenciaLlave(
 export async function accesoRecoleccion(sql: Sql, usuarioId: string, sucursalId: string): Promise<{ sobres: number; conAviso: number; porRecoger: number; buzon: boolean } | null> {
   const [s] = await sql<{ codigo: string }[]>`select codigo from sucursal where id = ${sucursalId}`;
   if (!s || !(await sucursalRecoleccion(sql, usuarioId, s.codigo))) return null;
-  const sobres = await sobresEnCaja(sql, sucursalId);
   const [{ n }] = await sql<{ n: number }[]>`
     select count(*)::int as n from recoleccion_sobre x join recoleccion r on r.id = x.recoleccion_id
     where r.sucursal_id = ${sucursalId} and r.estado = 'pendiente' and r.recibe = ${usuarioId}`;
   // Con buzón, Dirección con su llave tiene por recoger todos los sobres registrados como depositados.
   const config = await configuracionVigente(sql, sucursalId);
+  const sobres = await sobresEnCaja(sql, sucursalId, null, config?.buzon ? "buzon" : "todos");
   const conLlave = Boolean(config?.buzon && config.acceso.some((a) => a.id === usuarioId))
     && (await sql<{ ok: boolean }[]>`select tiene_permiso(${usuarioId}, 'sobre.recoger', ${sucursalId}) as ok`)[0].ok;
   return {
@@ -779,11 +837,13 @@ export async function accesoRecoleccion(sql: Sql, usuarioId: string, sucursalId:
 
 /** Resumen para la tarjeta de la caja en la pantalla del turno y de la sucursal. */
 export async function resumenCaja(sql: Sql, sucursalId: string): Promise<{
-  sobres: number; conAviso: number; masAntiguo: number | null; porConfirmar: number; porDevolver: number; porInvestigar: number;
+  sobres: number; conAviso: number; masAntiguo: number | null; porConfirmar: number; porDevolver: number; porInvestigar: number; porTrasladar: number;
   /** Con buzón: los sobres están registrados como depositados (no en una caja con llave que pase con el turno). */
   buzon: boolean;
 }> {
-  const sobres = await sobresEnCaja(sql, sucursalId);
+  const buzon = (await configuracionVigente(sql, sucursalId))?.buzon === true;
+  const sobres = await sobresEnCaja(sql, sucursalId, null, buzon ? "buzon" : "todos");
+  const porTrasladar = buzon ? (await sobresEnCaja(sql, sucursalId, null, "por_trasladar")).length : 0;
   const fuera = await sobresFueraDeCaja(sql, sucursalId);
   return {
     sobres: sobres.length, conAviso: sobres.filter((s) => s.dias >= DIAS_AVISO_SOBRE).length,
@@ -791,6 +851,6 @@ export async function resumenCaja(sql: Sql, sucursalId: string): Promise<{
     porConfirmar: fuera.filter((f) => f.estado === "por_confirmar").length, porDevolver: fuera.filter((f) => f.estado === "por_devolver").length,
     porInvestigar: (await sql<{ n: number }[]>`
       select count(*)::int as n from investigacion_sobre i join sobre_cierre s on s.id = i.sobre_id where s.sucursal_id = ${sucursalId}`)[0].n,
-    buzon: (await configuracionVigente(sql, sucursalId))?.buzon === true,
+    buzon, porTrasladar,
   };
 }

@@ -3,7 +3,7 @@
 import { useActionState, useState } from "react";
 import type { EstadoFormularioEntrega } from "@/app/acciones-entrega";
 import {
-  accionCancelarEntregaSobres, accionConfirmarRecoleccion, accionEntregarSobres, accionRecogerBuzon, accionRegistrarDeposito, accionRegistrarDevolucion,
+  accionCancelarEntregaSobres, accionConfirmarRecoleccion, accionEntregarSobres, accionRecogerBuzon, accionTrasladarAlBuzon, accionRegistrarDeposito, accionRegistrarDevolucion,
   accionRevisarDiferenciaSobre, accionRevisarIncidenciaLlave,
 } from "@/app/acciones-recoleccion";
 import { Llave, VerificarSobres } from "@/components/Caja";
@@ -118,6 +118,33 @@ export function FormularioConfirmarRecoleccion({ codigo, recoleccionId, version,
       </fieldset>
       <p className="sub">Desde que confirmes, lo recogido queda bajo tu responsabilidad hasta depositarlo.</p>
       <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Confirmando…" : "Confirmar lo que recojo"}</button>
+    </form>
+  );
+}
+
+/**
+ * La responsable en turno abre la caja anterior y registra qué sobres depositó en el buzón. Nada se marca por omisión:
+ * los que no elija siguen en la caja anterior, por trasladar.
+ */
+export function FormularioTrasladoBuzon({ codigo, sobres }: { codigo: string; sobres: SobreCaja[] }) {
+  const [estado, accion, enviando] = useActionState(accionTrasladarAlBuzon, null);
+  const marcados = (estado?.valores?.trasladar ?? "").split(",").filter(Boolean);
+  return (
+    <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate data-testid="formulario-traslado">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <fieldset className="campo campo-grupo" aria-invalid={estado?.errores?.trasladar ? true : undefined}>
+        <legend>Sobres que trasladaste al buzón</legend>
+        {sobres.map((s) => (
+          <label key={s.id} className="opcion-revision" data-testid={`trasladar-${s.folio}`}>
+            <input type="checkbox" name="trasladar" value={s.id} defaultChecked={marcados.includes(s.id)} />
+            <span>Trasladé el sobre <span className="mono">{s.folio}</span> ({LUGAR[s.lugar]}) de la caja anterior al buzón</span>
+          </label>
+        ))}
+        <span className="sub">Queda registrado con tu nombre y la hora. Los que no marques siguen en la caja anterior.</span>
+        {estado?.errores?.trasladar ? <span className="campo-error">{estado.errores.trasladar}</span> : null}
+      </fieldset>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Registrando…" : "Registrar el traslado al buzón"}</button>
     </form>
   );
 }

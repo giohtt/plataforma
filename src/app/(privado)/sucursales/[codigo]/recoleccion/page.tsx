@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   FormularioCancelarEntregaSobres, FormularioConfirmarRecoleccion, FormularioDeposito, FormularioDevolucion, FormularioEntregarSobres,
-  FormularioRecogerBuzon, FormularioRevisarDiferenciaSobre, FormularioRevisarIncidenciaLlave,
+  FormularioRecogerBuzon, FormularioRevisarDiferenciaSobre, FormularioTrasladoBuzon, FormularioRevisarIncidenciaLlave,
 } from "@/components/Recoleccion";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
@@ -26,6 +26,7 @@ const AVISO: Record<string, string> = {
   cancelada: "Entrega cancelada. Los sobres quedan por devolver: vuelven a la caja cuando la responsable en turno registre que los recibe.",
   devuelta: "Devolución registrada: los sobres recibidos están otra vez en la caja.",
   deposito: "Depósito registrado.",
+  trasladados: "Traslado al buzón registrado.",
   revisada: "Revisión guardada.",
 };
 
@@ -155,6 +156,34 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
           </table>
         ) : <p className="sub">{b ? "No hay sobres registrados en el buzón." : "No hay sobres guardados."}</p>}
       </section>
+
+      {b && (p.porTrasladar.length || p.traslados.length) ? (
+        <section className="tarjeta" aria-labelledby="t-trasladar" data-testid="por-trasladar">
+          <h2 id="t-trasladar" className="titulo-seccion">En la caja anterior, por trasladar al buzón ({p.porTrasladar.length})</h2>
+          <p className="sub">
+            Sobres guardados antes del buzón. Siguen en la caja anterior hasta que se registre su traslado físico al buzón (quién, cuándo
+            y qué folios); guardar la configuración no los da por trasladados. Dirección no los recoge del buzón mientras tanto.
+          </p>
+          {p.porTrasladar.length ? (
+            <ul className="lista-simple">
+              {p.porTrasladar.map((s) => (
+                <li key={s.id} data-testid={`por-trasladar-${s.folio}`}>
+                  Sobre <span className="mono">{s.folio}</span> · {LUGAR[s.lugar]} · guardado {hora.format(s.guardadoEn)} · {s.dias} {s.dias === 1 ? "día" : "días"}
+                  {s.importe ? ` · anotado ${pesos.format(Number(s.importe))}` : ""}
+                  {s.aviso ? <strong className="campo-error"> · aviso: {p.diasAviso} días o más</strong> : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {p.puedeTrasladar && p.porTrasladar.length ? <FormularioTrasladoBuzon codigo={codigo} sobres={p.porTrasladar} />
+            : p.porTrasladar.length ? <p className="sub">Registra el traslado la responsable en turno, que tiene la llave de la caja anterior.</p> : null}
+          {p.traslados.length ? (
+            <ul className="lista-simple" data-testid="traslados">
+              {p.traslados.map((t) => <li key={t.id}>{hora.format(t.en)} · trasladó <strong>{t.por}</strong> · {t.folios.join(", ")}</li>)}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
 
       {b && p.puedeRecogerBuzon && p.caja.length ? (
         <section className="tarjeta" aria-labelledby="t-recoger" data-testid="recoger-buzon">

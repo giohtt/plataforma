@@ -99,12 +99,13 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
       ) : null}
       {aviso === "abierto-cierre" && recibida ? <p className="aviso aviso-ok" role="status">Turno abierto desde el cierre. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
       {aviso === "recibido" && recibida ? <p className="aviso aviso-ok" role="status">Turno recibido. Desde ahora eres la responsable de la bolsa y del cajón.</p> : null}
-      {caja.buzon && (caja.sobres || caja.porInvestigar) ? (
+      {caja.buzon && (caja.sobres || caja.porInvestigar || caja.porTrasladar) ? (
         <p className={caja.conAviso ? "aviso aviso-error" : "aviso aviso-info"} data-testid="resumen-caja">
           Buzón de sobres: {caja.sobres} {caja.sobres === 1 ? "sobre registrado" : "sobres registrados"} como depositados
           {caja.masAntiguo !== null ? ` · el más antiguo lleva ${caja.masAntiguo} ${caja.masAntiguo === 1 ? "día" : "días"}` : ""}
           {caja.conAviso ? ` · ${caja.conAviso} con 8 días o más: avisa a Dirección para recogerlos` : ""}
-          {caja.porInvestigar ? ` · ${caja.porInvestigar} por investigar` : ""}. Solo Dirección abre el buzón.{" "}
+          {caja.porInvestigar ? ` · ${caja.porInvestigar} por investigar` : ""}
+          {caja.porTrasladar ? ` · ${caja.porTrasladar} en la caja anterior, por trasladar al buzón` : ""}. Solo Dirección abre el buzón.{" "}
           <Link href={`/sucursales/${codigo}/recoleccion`} data-testid="ir-recoleccion">Ver el buzón</Link>
         </p>
       ) : !caja.buzon && (caja.sobres || caja.porConfirmar || caja.porDevolver) ? (

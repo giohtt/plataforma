@@ -140,7 +140,7 @@ export function FormularioRecepcion({ codigo, entregaId, version, recuento, apoy
   /** Sobres que no están en la caja (entregados a Dirección sin confirmar o por devolver). */
   fuera?: { id: string; lugar: "bolsa_visitas" | "cajon_mensualidades"; folio: string; estado: "por_confirmar" | "por_devolver"; entrego: string; recibe: string }[];
   /** Con buzón: se cuenta todo el efectivo de cada lugar y se recibe solo la llave del cajón; los sobres están en el buzón. */
-  buzon?: { lugar: string; llave: { id: string; nombre: string }[]; sobres: number; conAviso: number; masAntiguo: number | null } | null;
+  buzon?: { lugar: string; llave: { id: string; nombre: string }[]; sobres: number; conAviso: number; masAntiguo: number | null; porTrasladar: number } | null;
 }) {
   const [estado, accion, enviando] = useActionState(accionRecibirTurno, null);
   return (

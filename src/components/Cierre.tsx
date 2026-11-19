@@ -323,7 +323,7 @@ export function FormularioAperturaCierre({ codigo, entregaId, version, sobres, f
 }
 
 type Fuera = Sobre & { estado: "por_confirmar" | "por_devolver"; entrego: string; recibe: string };
-type InfoBuzon = { lugar: string; llave: Persona[]; sobres: number; conAviso: number; masAntiguo: number | null };
+type InfoBuzon = { lugar: string; llave: Persona[]; sobres: number; conAviso: number; masAntiguo: number | null; porTrasladar: number };
 /** Buzón: sobres registrados como depositados. No se verifican en el turno; solo Dirección lo abre. */
 export function BuzonInfo({ buzon }: { buzon: InfoBuzon }) {
   return (
@@ -333,6 +333,12 @@ export function BuzonInfo({ buzon }: { buzon: InfoBuzon }) {
         {buzon.masAntiguo !== null ? ` · el más antiguo de hace ${buzon.masAntiguo} ${buzon.masAntiguo === 1 ? "día" : "días"}` : ""}
         {buzon.conAviso ? <strong> · {buzon.conAviso} con aviso (8 días o más)</strong> : null}.
       </p>
+      {buzon.porTrasladar ? (
+        <p data-testid="buzon-por-trasladar">
+          <strong>{buzon.porTrasladar} {buzon.porTrasladar === 1 ? "sobre guardado" : "sobres guardados"} antes del buzón {buzon.porTrasladar === 1 ? "sigue" : "siguen"} en la caja anterior</strong>:
+          registra su traslado en «Buzón de sobres».
+        </p>
+      ) : null}
       <p className="sub">Solo Dirección tiene la llave del buzón ({buzon.llave.map((p) => p.nombre).join(" · ")}): no se abre ni se verifica en el turno.</p>
     </div>
   );

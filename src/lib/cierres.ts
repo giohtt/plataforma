@@ -204,13 +204,18 @@ export function leerLlaveRequerida(d: LlaveDatos | undefined) {
 
 export type SobreEnCaja = Sobre & { entregaId: string; guardadoEn: Date; cerro: string; dias: number };
 /** Sobres guardados en la caja de la sucursal (sin recoger), del más antiguo al más reciente. */
-export async function sobresEnCaja(tx: Tx | Sql, sucursalId: string, excluirEntrega: string | null = null): Promise<SobreEnCaja[]> {
+export async function sobresEnCaja(
+  tx: Tx | Sql, sucursalId: string, excluirEntrega: string | null = null,
+  /** Con buzón: «buzon» = depositados al cerrar o ya trasladados; «por_trasladar» = siguen en la caja anterior. */
+  donde: "todos" | "buzon" | "por_trasladar" = "todos",
+): Promise<SobreEnCaja[]> {
   return [...(await tx<SobreEnCaja[]>`
     select s.id, l.tipo as lugar, s.folio, s.entrega_id as "entregaId", s.resuelto_en as "guardadoEn", u.nombre as cerro,
            floor(extract(epoch from now() - s.resuelto_en) / 86400)::int as dias
     from sobre_cierre s join lugar_efectivo l on l.id = s.lugar_id join entrega_turno e on e.id = s.entrega_id join usuario u on u.id = e.entrega_por
     where s.sucursal_id = ${sucursalId} and s.estado = 'usado' and s.importe is not null and sobre_en_caja(s.id)
       and s.entrega_id is distinct from ${excluirEntrega}
+      and (${donde} = 'todos' or sobre_en_buzon(s.id) = (${donde} = 'buzon'))
     order by s.resuelto_en, s.folio`)];
 }
 
@@ -239,13 +244,18 @@ export const DIAS_AVISO_SOBRE = 8;
  * Buzón de depósito: los sobres «registrados como depositados» (no se verifican en los turnos; solo Dirección abre el
  * buzón). null si la configuración vigente no es de buzón.
  */
-export type InfoBuzon = { lugar: string; llave: Receptor[]; sobres: number; conAviso: number; masAntiguo: number | null };
+export type InfoBuzon = {
+  lugar: string; llave: Receptor[]; sobres: number; conAviso: number; masAntiguo: number | null;
+  /** Sobres guardados antes del buzón que siguen en la caja anterior (su traslado no se ha registrado). */
+  porTrasladar: number;
+};
 export async function infoBuzon(tx: Tx | Sql, sucursalId: string, config?: ConfiguracionCustodia | null): Promise<InfoBuzon | null> {
   const c = config === undefined ? await configuracionVigente(tx, sucursalId) : config;
   if (!c?.buzon) return null;
-  const sobres = await sobresEnCaja(tx, sucursalId);
+  const sobres = await sobresEnCaja(tx, sucursalId, null, "buzon");
+  const porTrasladar = await sobresEnCaja(tx, sucursalId, null, "por_trasladar");
   return {
-    lugar: c.lugar, llave: c.acceso, sobres: sobres.length, conAviso: sobres.filter((s) => s.dias >= DIAS_AVISO_SOBRE).length,
+    lugar: c.lugar, llave: c.acceso, sobres: sobres.length, porTrasladar: porTrasladar.length, conAviso: sobres.filter((s) => s.dias >= DIAS_AVISO_SOBRE).length,
     masAntiguo: sobres.length ? Math.max(...sobres.map((s) => s.dias)) : null,
   };
 }

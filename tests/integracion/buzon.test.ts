@@ -7,7 +7,7 @@ import {
 import { pantallaRecepcion, recibirTurno, registrarEntrega } from "@/lib/entregas";
 import { cambiarMontoFondo, confirmarEntradaFondo } from "@/lib/fondos";
 import {
-  accesoRecoleccion, pantallaRecoleccion, recogerBuzon, registrarDepositoRecoleccion, registrarEntregaSobres, resumenCaja, revisarDiferenciaSobre,
+  accesoRecoleccion, pantallaRecoleccion, recogerBuzon, registrarDepositoRecoleccion, registrarEntregaSobres, registrarTrasladoBuzon, resumenCaja, revisarDiferenciaSobre,
   revisarIncidenciaLlave,
 } from "@/lib/recolecciones";
 import { abrirTurno } from "@/lib/turnos";
@@ -38,7 +38,7 @@ async function cuenta(asignaciones: [string, string][], nombre: string) {
 }
 
 /** Sucursal como Tenango con buzón: fondos de $300 y $300; la vespertina abre con $720 y $3,350. */
-async function escenario() {
+async function escenario({ buzon = true } = {}) {
   k++;
   const codigo = `B${k}`;
   const [s] = await sql<{ id: string }[]>`insert into sucursal (nombre, codigo) values (${"Sucursal buzón " + k}, ${codigo}) returning id`;
@@ -52,7 +52,7 @@ async function escenario() {
   if (!t.ok) throw new Error(t.error);
   const c = await configurarCustodia(sql, dir, codigo, {
     lugar: "Buzón de recepción", acceso: [dir], lugarFondos: "Cajón con llave de recepción",
-    accesoCajon: [matutina, vespertina], custodias: [matutina, vespertina], buzon: true,
+    accesoCajon: [matutina, vespertina], custodias: [matutina, vespertina], buzon,
   }, PRUEBAS);
   if (!c.ok) throw new Error(c.error);
   for (const lugar of ["bolsa_visitas", "cajon_mensualidades"]) {
@@ -294,5 +294,101 @@ describe.skipIf(!URL_ADMIN)("buzón de depósito con llave solo de Dirección", 
     expect(pd.incidenciasLlave[0].puedeRevisar).toBe(false);
     expect(await revisarIncidenciaLlave(sql, e.admin, e.codigo, { incidenciaId: p.incidenciasLlave[0].id, resultado: "incidencia_confirmada", motivo: "Se cambia la cerradura" }, PRUEBAS))
       .toEqual({ ok: true });
+  });
+
+  it("los sobres de la caja anterior no se dan por trasladados al guardar el buzón: se registra quién, cuándo y qué folios", async () => {
+    // Configuración anterior (caja con llave): la vespertina cierra y se queda con las dos llaves; la matutina abre.
+    const e = await escenario({ buzon: false });
+    const p = await prepararCierre(sql, e.vespertina, e.codigo, { turnoId: e.turnoId }, PRUEBAS);
+    if (!p.ok) throw new Error(p.error);
+    const ok = (xs: { id: string }[]) => xs.map((x) => ({ sobreId: x.id, estado: "correcto", folioVisto: "", motivo: "" }));
+    const c = await cerrarDia(sql, e.vespertina, e.codigo, {
+      turnoId: e.turnoId, conteo: { bolsa: "720", cajon: "3350" }, fondos: { bolsa: "300", cajon: "300" }, custodio: e.vespertina, nota: "", apoyo: NADIE,
+      custodia: { ubicacion: "Caja con llave de recepción", sobres: ok(p.sobres), llave: LLAVE, llaveCaja: LLAVE },
+    }, PRUEBAS);
+    if (!c.ok) throw new Error(c.error);
+    const cp = (await cierrePendiente(sql, e.sucursalId))!;
+    const a = await abrirDesdeCierre(sql, e.matutina, e.codigo, {
+      entregaId: cp.entregaId, version: cp.version, sobres: ok(await sobresEnCaja(sql, e.sucursalId)), conteo: { bolsa: "300", cajon: "300" },
+      apoyo: NADIE, llave: LLAVE, llaveCaja: LLAVE,
+    }, PRUEBAS);
+    if (!a.ok || a.resultado !== "abierto") throw new Error("no abrió");
+    const [bolsa, cajon] = await sobresEnCaja(sql, e.sucursalId);
+
+    // Dirección guarda la configuración con buzón: los sobres siguen en la caja anterior, por trasladar.
+    const g = await configurarCustodia(sql, e.dir, e.codigo, {
+      lugar: "Buzón de recepción", acceso: [e.dir], lugarFondos: "Cajón con llave de recepción",
+      accesoCajon: [e.matutina, e.vespertina], custodias: [e.matutina, e.vespertina], buzon: true,
+    }, PRUEBAS);
+    expect(g).toEqual({ ok: true });
+    expect(await infoBuzon(sql, e.sucursalId)).toMatchObject({ sobres: 0, porTrasladar: 2 });
+    const vd = await pantallaRecoleccion(sql, e.dir, e.codigo, "pruebas");
+    if (!vd.ok) throw new Error(vd.error);
+    expect(vd.caja).toEqual([]);
+    expect(vd.porTrasladar.map((x) => x.folio)).toEqual([bolsa.folio, cajon.folio]);
+    expect(vd.puedeTrasladar).toBe(false);
+    expect(await recogerBuzon(sql, e.dir, e.codigo, { sobres: [], llave: LLAVE }, PRUEBAS)).toEqual({ ok: false, error: "buzon_vacio" });
+    expect(await sql`select 1 from traslado_sobre x join sobre_cierre s on s.id = x.sobre_id where s.sucursal_id = ${e.sucursalId}`).toHaveLength(0);
+
+    // Solo la responsable en turno registra el traslado (tiene la llave de la caja anterior); Dirección no.
+    expect(await registrarTrasladoBuzon(sql, e.vespertina, e.codigo, { sobres: [bolsa.id] }, PRUEBAS)).toEqual({ ok: false, error: "no_responsable" });
+    expect(await registrarTrasladoBuzon(sql, e.dir, e.codigo, { sobres: [bolsa.id] }, PRUEBAS)).toEqual({ ok: false, error: "sin_permiso" });
+    expect(await registrarTrasladoBuzon(sql, e.matutina, e.codigo, { sobres: [] }, PRUEBAS)).toEqual({ ok: false, error: "sobres" });
+    const vm = await pantallaRecoleccion(sql, e.matutina, e.codigo, "pruebas");
+    if (!vm.ok) throw new Error(vm.error);
+    expect(vm.puedeTrasladar).toBe(true);
+    // Traslada solo la bolsa: el cajón sigue en la caja anterior.
+    expect(await registrarTrasladoBuzon(sql, e.matutina, e.codigo, { sobres: [bolsa.id] }, PRUEBAS))
+      .toEqual({ ok: true, trasladados: [bolsa.folio], pendientes: 1 });
+    expect(await registrarTrasladoBuzon(sql, e.matutina, e.codigo, { sobres: [bolsa.id] }, PRUEBAS)).toEqual({ ok: false, error: "sobres" });
+    const v2 = await pantallaRecoleccion(sql, e.dir, e.codigo, "pruebas");
+    if (!v2.ok) throw new Error(v2.error);
+    expect(v2.caja.map((x) => x.folio)).toEqual([bolsa.folio]);
+    expect(v2.porTrasladar.map((x) => x.folio)).toEqual([cajon.folio]);
+    expect(v2.traslados).toHaveLength(1);
+    expect(v2.traslados[0]).toMatchObject({ por: expect.stringContaining("Recepción matutina"), folios: [bolsa.folio] });
+    expect(v2.traslados[0].en).toBeInstanceOf(Date);
+    expect(await resumenCaja(sql, e.sucursalId)).toMatchObject({ sobres: 1, porTrasladar: 1, buzon: true });
+    // En la base: traslada la responsable en turno, y un sobre una sola vez.
+    await expect(sql`insert into traslado_buzon (sucursal_id, por, turno_id) values (${e.sucursalId}, ${e.vespertina}, ${e.turnoId})`)
+      .rejects.toThrow(/responsable en turno/);
+
+    // Dirección recoge del buzón solo lo trasladado; el cajón no se pide ni se da por faltante.
+    const r = await recogerBuzon(sql, e.dir, e.codigo, {
+      sobres: [{ sobreId: bolsa.id, estado: "correcto", folioVisto: "", motivo: "", contado: "420" }], llave: LLAVE,
+    }, PRUEBAS);
+    expect(r).toEqual({ ok: true, recogido: "420.00", diferencias: 0, investigar: 0 });
+    const v3 = await pantallaRecoleccion(sql, e.dir, e.codigo, "pruebas");
+    if (!v3.ok) throw new Error(v3.error);
+    expect(v3.investigaciones).toEqual([]);
+    expect(v3.porTrasladar.map((x) => x.folio)).toEqual([cajon.folio]);
+    const cadena = await sql<{ n: number }[]>`select count(*)::int as n from participantes_sobre(${bolsa.id}) u where u = ${e.matutina}`;
+    expect(cadena[0].n).toBe(1);
+  });
+
+  it("Dirección cuenta a ciegas aunque su cuenta también pueda entregar sobres", async () => {
+    const e = await escenario();
+    await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${e.dir}, 'recepcion', ${e.sucursalId}, 'Prueba: Dirección con Recepción')`;
+    const c = await cerrarYo(e, e.vespertina);
+    const [{ entrega, recoge }] = await sql<{ entrega: boolean; recoge: boolean }[]>`
+      select tiene_permiso(${e.dir}, 'sobre.entregar', ${e.sucursalId}) as entrega, tiene_permiso(${e.dir}, 'sobre.recoger', ${e.sucursalId}) as recoge`;
+    expect({ entrega, recoge }).toEqual({ entrega: true, recoge: true });
+    const p = await pantallaRecoleccion(sql, e.dir, e.codigo, "pruebas");
+    if (!p.ok) throw new Error(p.error);
+    expect(p.puedeRecogerBuzon).toBe(true);
+    expect(p.caja.map((x) => x.folio)).toEqual(c.usados.map((x) => x.folio));
+    expect(p.caja.map((x) => x.importe)).toEqual([null, null]);
+    expect(JSON.stringify(p)).not.toContain("3050.00");
+    // La recepcionista (no recoge) sí ve lo anotado.
+    const pr = await pantallaRecoleccion(sql, e.vespertina, e.codigo, "pruebas");
+    if (!pr.ok) throw new Error(pr.error);
+    expect(pr.caja.map((x) => x.importe)).toEqual(["420.00", "3050.00"]);
+    // Después de confirmar su conteo, ya ve lo anotado en lo recogido.
+    await recogerBuzon(sql, e.dir, e.codigo, {
+      sobres: c.usados.map((s, i) => ({ sobreId: s.id, estado: "correcto", folioVisto: "", motivo: "", contado: i === 0 ? "420" : "3050" })), llave: LLAVE,
+    }, PRUEBAS);
+    const d = await pantallaRecoleccion(sql, e.dir, e.codigo, "pruebas");
+    if (!d.ok) throw new Error(d.error);
+    expect(d.recolecciones[0].sobres.map((x) => x.anotado)).toEqual(["420.00", "3050.00"]);
   });
 });
