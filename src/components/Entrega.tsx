@@ -4,7 +4,8 @@ import { useActionState, useState } from "react";
 import {
   accionCancelarEntrega, accionEntregarTurno, accionRecibirTurno, type EstadoFormularioEntrega,
 } from "@/app/acciones-entrega";
-import { Llaves, SobresFuera, VerificarSobres } from "@/components/Caja";
+import { Llave, Llaves, SobresFuera, VerificarSobres } from "@/components/Caja";
+import { BuzonInfo } from "@/components/Cierre";
 import { leerImporte } from "@/lib/datos-turno";
 
 const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
@@ -130,7 +131,7 @@ export function FormularioEntrega({ codigo, turnoId, esperadoBolsa, contadoCajon
  * La entrante cuenta y confirma. En «pendiente» no recibe el conteo de la saliente; en «recuento» ve ambos,
  * recuentan juntas y confirma un importe con aclaración.
  */
-export function FormularioRecepcion({ codigo, entregaId, version, recuento, apoyos, caja = null, fuera = [] }: {
+export function FormularioRecepcion({ codigo, entregaId, version, recuento, apoyos, caja = null, fuera = [], buzon = null }: {
   codigo: string; entregaId: string; version: number;
   recuento: { entregado: { bolsa: string; cajon: string }; inicial: { bolsa: string; cajon: string } } | null;
   apoyos: { id: string; nombre: string }[];
@@ -138,6 +139,8 @@ export function FormularioRecepcion({ codigo, entregaId, version, recuento, apoy
   caja?: { id: string; lugar: "bolsa_visitas" | "cajon_mensualidades"; folio: string }[] | null;
   /** Sobres que no están en la caja (entregados a Dirección sin confirmar o por devolver). */
   fuera?: { id: string; lugar: "bolsa_visitas" | "cajon_mensualidades"; folio: string; estado: "por_confirmar" | "por_devolver"; entrego: string; recibe: string }[];
+  /** Con buzón: se cuenta todo el efectivo de cada lugar y se recibe solo la llave del cajón; los sobres están en el buzón. */
+  buzon?: { lugar: string; llave: { id: string; nombre: string }[]; sobres: number; conAviso: number; masAntiguo: number | null; porTrasladar: number } | null;
 }) {
   const [estado, accion, enviando] = useActionState(accionRecibirTurno, null);
   return (
@@ -175,7 +178,16 @@ export function FormularioRecepcion({ codigo, entregaId, version, recuento, apoy
           <Importe estado={estado} campo="cajon" etiqueta={recuento ? "Total que confirmas tras recontar" : "Total que recibes"} />
         </fieldset>
       </div>
-      {caja ? (
+      {buzon && !recuento ? (
+        <fieldset className="campo campo-grupo" data-testid="caja-recepcion">
+          <legend>Llave del cajón de los fondos</legend>
+          <input type="hidden" name="caja" value="si" />
+          <input type="hidden" name="buzon" value="si" />
+          <span className="sub">Cuenta todo el efectivo de cada lugar (fondo y cobros). Con el turno recibes la llave del cajón de los fondos.</span>
+          <BuzonInfo buzon={buzon} />
+          <Llave estado={estado} />
+        </fieldset>
+      ) : caja ? (
         <fieldset className="campo campo-grupo" data-testid="caja-recepcion">
           <legend>Caja de sobres y llaves</legend>
           <input type="hidden" name="caja" value="si" />

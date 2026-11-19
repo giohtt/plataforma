@@ -107,7 +107,8 @@ export async function accionRecibirTurno(previo: EstadoFormularioEntrega, datos:
   const a = leerApoyo(datos);
   const elegida = (l: { estado: string }) => l.estado === "correcta" || l.estado === "incidencia";
   const sinLlave = conCaja && !elegida(llave);
-  const sinLlaveCaja = conCaja && !elegida(llaveCaja);
+  // Con buzón no hay llave de la caja de sobres en el turno (solo la del cajón).
+  const sinLlaveCaja = conCaja && leer("buzon") !== "si" && !elegida(llaveCaja);
   if (!i.ok || !a.ok || sinLlave || sinLlaveCaja) {
     return {
       error: "Revisa los campos marcados.",

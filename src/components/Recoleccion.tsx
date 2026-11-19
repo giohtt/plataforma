@@ -3,7 +3,7 @@
 import { useActionState, useState } from "react";
 import type { EstadoFormularioEntrega } from "@/app/acciones-entrega";
 import {
-  accionCancelarEntregaSobres, accionConfirmarRecoleccion, accionEntregarSobres, accionRegistrarDeposito, accionRegistrarDevolucion,
+  accionCancelarEntregaSobres, accionConfirmarRecoleccion, accionEntregarSobres, accionRecogerBuzon, accionTrasladarAlBuzon, accionRegistrarDeposito, accionRegistrarDevolucion,
   accionRevisarDiferenciaSobre, accionRevisarIncidenciaLlave,
 } from "@/app/acciones-recoleccion";
 import { Llave, VerificarSobres } from "@/components/Caja";
@@ -118,6 +118,79 @@ export function FormularioConfirmarRecoleccion({ codigo, recoleccionId, version,
       </fieldset>
       <p className="sub">Desde que confirmes, lo recogido queda bajo tu responsabilidad hasta depositarlo.</p>
       <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Confirmando…" : "Confirmar lo que recojo"}</button>
+    </form>
+  );
+}
+
+/**
+ * La responsable en turno abre la caja anterior y registra qué sobres depositó en el buzón. Nada se marca por omisión:
+ * los que no elija siguen en la caja anterior, por trasladar.
+ */
+export function FormularioTrasladoBuzon({ codigo, sobres }: { codigo: string; sobres: SobreCaja[] }) {
+  const [estado, accion, enviando] = useActionState(accionTrasladarAlBuzon, null);
+  const marcados = (estado?.valores?.trasladar ?? "").split(",").filter(Boolean);
+  return (
+    <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate data-testid="formulario-traslado">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <fieldset className="campo campo-grupo" aria-invalid={estado?.errores?.trasladar ? true : undefined}>
+        <legend>Sobres que trasladaste al buzón</legend>
+        {sobres.map((s) => (
+          <label key={s.id} className="opcion-revision" data-testid={`trasladar-${s.folio}`}>
+            <input type="checkbox" name="trasladar" value={s.id} defaultChecked={marcados.includes(s.id)} />
+            <span>Trasladé el sobre <span className="mono">{s.folio}</span> ({LUGAR[s.lugar]}) de la caja anterior al buzón</span>
+          </label>
+        ))}
+        <span className="sub">Queda registrado con tu nombre y la hora. Los que no marques siguen en la caja anterior.</span>
+        {estado?.errores?.trasladar ? <span className="campo-error">{estado.errores.trasladar}</span> : null}
+      </fieldset>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Registrando…" : "Registrar el traslado al buzón"}</button>
+    </form>
+  );
+}
+
+/**
+ * Dirección abre el buzón: verifica sello y folio de cada sobre registrado como depositado y lo cuenta a ciegas. Si un
+ * sobre no está, no se cuenta: queda por investigar, sin responsable asignado.
+ */
+export function FormularioRecogerBuzon({ codigo, sobres }: { codigo: string; sobres: Sobre[] }) {
+  const [estado, accion, enviando] = useActionState(accionRecogerBuzon, null);
+  const [llave, setLlave] = useState(estado?.valores?.llave_caja ?? "");
+  return (
+    <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate data-testid="formulario-recoger-buzon">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <fieldset className="campo campo-grupo" data-testid="llave-buzon" aria-invalid={estado?.errores?.motivo_llave_caja ? true : undefined}>
+        <legend>Buzón y su llave</legend>
+        <label className="opcion-revision">
+          <input type="radio" name="llave_caja" value="correcta" checked={llave === "correcta"} onChange={() => setLlave("correcta")} />
+          <span>El buzón estaba cerrado con llave y sin señales de apertura; lo abrí con mi llave</span>
+        </label>
+        <label className="opcion-revision">
+          <input type="radio" name="llave_caja" value="incidencia" checked={llave === "incidencia"} onChange={() => setLlave("incidencia")} />
+          <span>Hubo un problema con el buzón o su llave</span>
+        </label>
+        {llave === "incidencia" ? (
+          <div className="campo">
+            <label htmlFor="motivo_llave_caja">Motivo</label>
+            <textarea id="motivo_llave_caja" name="motivo_llave_caja" rows={2} maxLength={300} defaultValue={estado?.valores?.motivo_llave_caja ?? ""} />
+          </div>
+        ) : null}
+        {estado?.errores?.motivo_llave_caja ? <span className="campo-error">{estado.errores.motivo_llave_caja}</span> : null}
+      </fieldset>
+      <VerificarSobres estado={estado} sobres={sobres} porFolio pregunta="¿Está en el buzón, cerrado, con el sello intacto y con este folio?" />
+      <fieldset className="campo campo-grupo" data-testid="conteo-ciego">
+        <legend>Conteo a ciegas de cada sobre</legend>
+        <span className="sub">
+          Abre y cuenta cada sobre. No ves lo anotado al cerrar; la diferencia por sobre queda por revisar. Si un sobre no está, deja
+          su conteo vacío: queda por investigar, sin responsable asignado.
+        </span>
+        {sobres.map((s) => (
+          <Importe key={s.id} estado={estado} campo={`contado-${s.id}`} etiqueta={`Sobre ${s.folio} · ${LUGAR[s.lugar]} · contado`} />
+        ))}
+      </fieldset>
+      <p className="sub">Desde que confirmes, lo recogido queda bajo tu responsabilidad hasta depositarlo.</p>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Confirmando…" : "Confirmar lo que recojo del buzón"}</button>
     </form>
   );
 }

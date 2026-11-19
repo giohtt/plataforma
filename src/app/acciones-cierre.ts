@@ -36,6 +36,7 @@ const MENSAJES_CIERRE: Record<ErrorCierre, string> = {
   ubicacion: "Escribe dónde guardas los sobres y la llave (de 5 a 120 caracteres).",
   motivo_llave: "Indica si el cajón de los fondos quedó cerrado y tienes su llave; si hay un problema, escribe el motivo (de 5 a 300 caracteres).",
   motivo_llave_caja: "Indica si la caja de sobres quedó cerrada y tienes su llave; si hay un problema, escribe el motivo (de 5 a 300 caracteres).",
+  depositados: "Confirma que depositaste cada sobre en el buzón.",
   sobres: "Verifica cada sobre.",
   estado: "Indica cómo quedó cada sobre.",
   folio_visto: "Escribe el folio que trae el sobre.",
@@ -143,8 +144,9 @@ export async function accionCerrarDia(previo: EstadoFormularioEntrega, datos: Fo
   const { sobres, valores: vs } = leerSobres(datos);
   const llave = leerLlave(datos);
   const llaveCaja = leerLlaveCaja(datos);
+  const depositados = datos.getAll("depositado").filter((x): x is string => typeof x === "string").slice(0, 4).map((x) => x.slice(0, 40));
   const valores = {
-    ...vs, llave_caja: llaveCaja.estado, motivo_llave_caja: llaveCaja.motivo, bolsa: leer("bolsa"), cajon: leer("cajon"), fondo_bolsa: leer("fondo_bolsa"), fondo_cajon: leer("fondo_cajon"),
+    depositados: depositados.join(","), ...vs, llave_caja: llaveCaja.estado, motivo_llave_caja: llaveCaja.motivo, bolsa: leer("bolsa"), cajon: leer("cajon"), fondo_bolsa: leer("fondo_bolsa"), fondo_cajon: leer("fondo_cajon"),
     custodio: leer("custodio", 40), nota: leer("nota", 400), apoyo: leer("apoyo"), ubicacion: leer("ubicacion", 200), llave: llave.estado, motivo_llave: llave.motivo,
   };
   const intento = (previo?.intento ?? 0) + 1;
@@ -165,6 +167,7 @@ export async function accionCerrarDia(previo: EstadoFormularioEntrega, datos: Fo
   const r = await cerrarDia(sql, sesion.usuarioId, codigo, {
     turnoId: leer("turno", 40), conteo: i.conteo, fondos: f.conteo, custodio: valores.custodio, nota: valores.nota, apoyo: a.apoyo,
     custodia: mismaPersona ? { ubicacion: valores.ubicacion, sobres, llave, llaveCaja } : undefined,
+    depositados,
   }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/turno?aviso=cerrado${mismaPersona ? "-custodia" : ""}`);
   const marcados = "Revisa los campos marcados.";
@@ -174,7 +177,7 @@ export async function accionCerrarDia(previo: EstadoFormularioEntrega, datos: Fo
   if (r.error in MENSAJE_SOBRE) {
     return { error: marcados, errores: { [r.sobreId ? `sobre-${r.sobreId}` : "sobres"]: MENSAJES_CIERRE[r.error] }, valores, personas: a.personas, intento };
   }
-  if (["nota", "custodio", "apoyo", "ubicacion", "motivo_llave", "motivo_llave_caja"].includes(r.error)) {
+  if (["nota", "custodio", "apoyo", "ubicacion", "motivo_llave", "motivo_llave_caja", "depositados"].includes(r.error)) {
     return { error: marcados, errores: { [r.error]: MENSAJES_CIERRE[r.error] }, valores, personas: a.personas, intento };
   }
   return { error: MENSAJES_CIERRE[r.error], valores, personas: a.personas, intento };
@@ -231,7 +234,9 @@ export async function accionAbrirDesdeCierre(previo: EstadoFormularioEntrega, da
   const a = leerApoyo(datos);
   const elegida = (l: { estado: string }) => l.estado === "correcta" || l.estado === "incidencia";
   const sinLlave = guardados && !elegida(llave);
-  const sinLlaveCaja = guardados && !elegida(llaveCaja);
+  // Con buzón no hay llave de la caja de sobres (solo la del cajón).
+  const buzon = leer("buzon") === "si";
+  const sinLlaveCaja = guardados && !buzon && !elegida(llaveCaja);
   if (!i.ok || !a.ok || sinLlave || sinLlaveCaja) {
     return {
       error: "Revisa los campos marcados.",
@@ -245,7 +250,7 @@ export async function accionAbrirDesdeCierre(previo: EstadoFormularioEntrega, da
   const r = await abrirDesdeCierre(sql, sesion.usuarioId, codigo,
     { entregaId: leer("entrega", 40), version: Number(leer("version")), sobres, conteo: i.conteo, fondos: i.fondos, apoyo: a.apoyo,
       sinCustodia: valores.sinCustodia === "si" ? { motivo: valores.motivoSinCustodia } : null,
-      llave: guardados ? llave : undefined, llaveCaja: guardados ? llaveCaja : undefined }, { entorno: leerEntorno() });
+      llave: guardados ? llave : undefined, llaveCaja: guardados && !buzon ? llaveCaja : undefined }, { entorno: leerEntorno() });
   if (r.ok && r.resultado === "abierto") redirect(`/sucursales/${codigo}/turno?aviso=abierto-cierre`);
   if (r.ok) redirect(`/sucursales/${codigo}/turno/apertura?aviso=recuento`);
   if (r.error in MENSAJE_SOBRE) {
@@ -299,10 +304,12 @@ export async function accionConfigurarCustodia(previo: EstadoFormularioEntrega, 
   const valores = { lugar: leer("lugar", 200), lugar_fondos: leer("lugar_fondos", 200), acceso_cajon: accesoCajon.join(","), custodias: custodias.join(",") };
   const intento = (previo?.intento ?? 0) + 1;
   const r = await configurarCustodia(sql, sesion.usuarioId, codigo,
-    { lugar: valores.lugar, acceso, lugarFondos: valores.lugar_fondos, accesoCajon, custodias }, { entorno: leerEntorno() });
+    // Desde el 18 nov 2026 (19:10) la configuración es con buzón: su llave es solo de Dirección.
+    { lugar: valores.lugar, acceso, lugarFondos: valores.lugar_fondos, accesoCajon, custodias, buzon: true }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/custodia/configurar?aviso=guardada`);
   if (r.error === "lugar") return { error: "Revisa los campos marcados.", errores: { lugar: "Escribe el lugar (de 5 a 120 caracteres)." }, valores, personas: acceso, intento };
   if (r.error === "acceso") return { error: "Revisa los campos marcados.", errores: { acceso: "Elige de 1 a 10 personas con asignación en la sucursal." }, valores, personas: acceso, intento };
+  if (r.error === "acceso_buzon") return { error: "Revisa los campos marcados.", errores: { acceso: "La llave del buzón es solo de Dirección: elige únicamente a personas de Dirección." }, valores, personas: acceso, intento };
   if (r.error === "lugar_fondos") return { error: "Revisa los campos marcados.", errores: { lugar_fondos: "Escribe dónde quedan los fondos (de 5 a 120 caracteres)." }, valores, personas: acceso, intento };
   if (r.error === "acceso_cajon") return { error: "Revisa los campos marcados.", errores: { acceso_cajon: "Elige de 1 a 10 personas con asignación en la sucursal." }, valores, personas: acceso, intento };
   if (r.error === "custodias") return { error: "Revisa los campos marcados.", errores: { custodias: "Elige de 1 a 10 custodias con asignación en la sucursal." }, valores, personas: acceso, intento };
