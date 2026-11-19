@@ -153,7 +153,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
           ) : null}
           {caja ? (
             <Link className="boton" href={`/sucursales/${sucursal.codigo}/recoleccion`} data-testid="ir-caja">
-              Caja de sobres{caja.sobres ? ` (${caja.sobres}${caja.conAviso ? ` · ${caja.conAviso} con aviso de 8 días` : ""})` : ""}
+              {caja.buzon ? "Buzón de sobres" : "Caja de sobres"}{caja.sobres ? ` (${caja.sobres}${caja.conAviso ? ` · ${caja.conAviso} con aviso de 8 días` : ""})` : ""}
             </Link>
           ) : null}
           {entradasFondo ? (

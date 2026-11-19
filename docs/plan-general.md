@@ -247,6 +247,20 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
        - **La llave de la caja de sobres y la del cajón de los fondos se registran por separado** en cada cambio de custodia, porque aún no se confirma que sean una sola; cada una con su incidencia por revisar.
        - **Dirección conserva su nombre y perfil.** Desde su misma cuenta consulta saldos, reportes, fondos, retiros, depósitos y lo recogido de sus sucursales asignadas (no de otras). Quien participó en una operación no revisa sus propias diferencias.
      - **Falta decidir:** qué pasa después de revisar una diferencia de sobre (por ejemplo, si un faltante confirmado va a Dirección); si la caja de sobres y el cajón de los fondos usan una sola llave; qué hacer con un sobre que nunca regresa.
+   - **Buzón de depósito con llave solo de Dirección** (aprobado el 18 nov 2026, 19:10; programado en pruebas, en revisión). Sustituye la verificación de sobres en cada turno y la entrega de la responsable en turno:
+     - **Dos sobres al día** (visitas y mensualidades), preparados y sellados **solo al cerrar**. Si un lugar no tiene excedente sobre su fondo, **no se genera sobre** (su folio queda cancelado).
+     - Al cerrar, quien cierra **registra que depositó cada sobre en el buzón**; sin esa confirmación no se cierra, y la base no deja un sobre del cierre sin registrar. Los sobres se muestran como **«registrados como depositados»**.
+     - **El buzón está separado del cajón de los fondos.** En «Custodia de sobres» Dirección indica dónde está el buzón y **quién tiene su llave: solo Dirección** (la base rechaza a cualquier otra persona); nadie queda marcada por omisión. Las custodias que nombra Dirección guardan solo la **llave del cajón de los fondos**, que pasa con el turno y se sigue registrando (con su incidencia por revisar).
+     - **Apertura:** se cuentan **solo los fondos** ($300 y $300 en Tenango) y se recibe la llave del cajón; los sobres no se abren ni se verifican.
+     - **Cambio de turno:** se sigue **contando y confirmando todo el efectivo de cada lugar** (fondo y cobros); se recibe la llave del cajón. El buzón no se verifica.
+     - **Recolección:** solo Dirección con la llave abre el buzón. Verifica sello y folio de cada sobre registrado y **lo cuenta a ciegas**. Un problema con el buzón o su llave queda por revisar (Administración que no participó). Siguen las **diferencias por sobre**, los **depósitos parciales** y el **aviso de ocho días por sobre**.
+     - **Sobre registrado como depositado que no aparece:** queda **«Por investigar · sin responsable asignado»**; no se atribuye a nadie, no se suma a lo recogido y no se vuelve a pedir en el buzón. No hay opción para asignar un responsable.
+     - Las configuraciones anteriores (caja con llave verificada en cada turno, o sobres que se abren al día siguiente) siguen funcionando para lo que ya se cerró con ellas. Para usar el buzón en una sucursal, Dirección vuelve a guardar su «Custodia de sobres». Los sobres que ya estaban guardados en la caja se recogen desde el buzón igual que los demás.
+     - **Falta decidir (sin aprobar):**
+       - **Investigaciones:** cómo se cierra una investigación (por ejemplo «Apareció el sobre» o «Faltante confirmado, sin responsable determinado») y qué pasa si el sobre aparece después, sin duplicar lo recogido. Mientras tanto, la investigación queda abierta y solo se consulta.
+       - **Testigos:** si al abrir el buzón debe estar presente otra persona y cómo se registra.
+       - **Acceso de respaldo:** qué hacer si se pierde la llave del buzón o Dirección no está disponible (segunda llave, quién la guarda).
+       - **Compra e instalación del buzón:** decisión de Dirección (no se contrata nada desde la plataforma).
    - **Para después:** retiro desde la custodia durante la noche; reasignar una apertura que quedó en recuento si quien la empezó no puede terminarla; que un aumento lo entregue una persona distinta de quien lo autoriza.
 5. **Reporte básico:** cierres con efectivo esperado, contado, diferencia y entregas; diferencias pendientes de revisión.
 

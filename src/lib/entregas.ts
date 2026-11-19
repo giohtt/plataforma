@@ -3,8 +3,8 @@ import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
 import { turnoAbiertoDe, type TipoLugar } from "@/lib/turnos";
 import {
-  configuracionVigente, leerCaja, leerLlaveRequerida, registrarIncidenciasCaja, registrarRevisionCaja, sobresEnCaja, sobresFueraDeCaja,
-  type ErrorVerificacion, type LlaveDatos, type SobreEnCaja, type SobreFueraDeCaja, type VerificacionDatos,
+  configuracionVigente, infoBuzon, leerCaja, leerLlaveRequerida, registrarIncidenciasCaja, registrarRevisionCaja, sobresEnCaja, sobresFueraDeCaja,
+  type ErrorVerificacion, type InfoBuzon, type LlaveDatos, type SobreEnCaja, type SobreFueraDeCaja, type VerificacionDatos,
 } from "@/lib/cierres";
 
 /**
@@ -298,6 +298,9 @@ export type PantallaRecepcion =
       /** Sobres que no están en la caja (entregados a Dirección sin confirmar o por devolver): no se verifican; se ve
        *  quién los entregó y quién debe confirmar. */
       fuera: SobreFueraDeCaja[];
+      /** Con buzón: no hay caja que verificar; con el turno recibes solo la llave del cajón (en el primer conteo) y se ven
+       *  los sobres registrados como depositados. */
+      buzon: InfoBuzon | null;
     }
   | { ok: false; error: ErrorEntrega | "sin_entrega" };
 
@@ -332,10 +335,16 @@ export async function pantallaRecepcion(sql: Sql, usuarioId: string, codigo: str
     }
     return {
       ok: true, sucursal: c.s.nombre, entrega: c.e, recuento, apoyos: await candidatosApoyo(tx, c.s.id, [c.e.entregaPorId, c.e.recibeId]),
-      caja: c.e.estado === "pendiente" ? await cajaAlRecibir(tx, c.s.id) : null,
-      fuera: await sobresFueraDeCaja(tx, c.s.id),
+      ...(await cajaYBuzon(tx, c.s.id, c.e.estado === "pendiente")),
     };
   });
+}
+
+/** Con buzón, solo la información del buzón (no se verifica); si no, la caja con llave (en el primer conteo). */
+async function cajaYBuzon(tx: Tx | Sql, sucursalId: string, primerConteo: boolean) {
+  const buzon = await infoBuzon(tx, sucursalId);
+  if (buzon) return { caja: null, fuera: [], buzon };
+  return { caja: primerConteo ? await cajaAlRecibir(tx, sucursalId) : null, fuera: await sobresFueraDeCaja(tx, sucursalId), buzon: null };
 }
 
 /** La llave de la caja pasa con el turno cuando Dirección nombró custodias o hay sobres guardados. */
@@ -382,9 +391,19 @@ export async function recibirTurno(
     // La declaración de apoyo de esta etapa: el primer conteo de la entrante o el recuento.
     const etapa: EtapaApoyo = c.e.estado === "pendiente" ? "conteo_recepcion" : "recuento";
     if (etapa === "recuento" && (aclaracion.length < 5 || aclaracion.length > 300)) return { ok: false, error: "aclaracion" };
+    // Con buzón: se sigue contando todo el efectivo de cada lugar; los sobres están en el buzón (no se verifican) y con el
+    // turno pasa solo la llave del cajón de los fondos.
+    const buzon = c.e.estado === "pendiente" && (await configuracionVigente(tx, c.s.id))?.buzon === true;
     // Caja con llave: quien recibe el turno recibe la llave y verifica cada sobre guardado (todo antes de escribir).
-    const caja = c.e.estado === "pendiente" ? await cajaAlRecibir(tx, c.s.id) : null;
-    let revision = null;
+    const caja = c.e.estado === "pendiente" && !buzon ? await cajaAlRecibir(tx, c.s.id) : null;
+    let revision: { filas: { sobreId: string; estado: string; folioVisto: string | null; motivo: string | null }[];
+                    llaveCaja: { llave: "correcta" | "incidencia"; motivo: string | null } | null;
+                    llaveCajon: { llave: "correcta" | "incidencia"; motivo: string | null } } | null = null;
+    if (buzon) {
+      const llaveCajon = leerLlaveRequerida(datos.caja?.llaveCajon);
+      if (!llaveCajon.ok) return { ok: false, error: "motivo_llave" };
+      revision = { filas: [], llaveCaja: null, llaveCajon };
+    }
     if (caja) {
       const v = leerCaja(caja, datos.caja?.sobres);
       if (!v.ok) return v;

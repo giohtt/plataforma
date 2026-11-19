@@ -32,9 +32,11 @@ export default async function Custodia({ params, searchParams }: PageProps<"/suc
       ) : (
         <section className="tarjeta">
           <p className="sub">Cierre de {conPunto(hora.format(c.cierre.cerradoEn))} Cerró <strong>{c.cierre.cerradoPor}</strong>.</p>
-          <p className="sub">Acceso definido por Dirección: {c.cierre.configuracion.acceso.map((p) => p.nombre).join(" · ")}.</p>
+          {c.cierre.buzon ? (
+            <p className="sub">Los sobres quedaron en el buzón; su llave la tiene solo Dirección ({c.cierre.configuracion.acceso.map((p) => p.nombre).join(" · ")}).</p>
+          ) : <p className="sub">Acceso definido por Dirección: {c.cierre.configuracion.acceso.map((p) => p.nombre).join(" · ")}.</p>}
           <FormularioCustodia codigo={codigo} entregaId={c.cierre.entregaId} sobres={c.cierre.sobres} lugar={c.cierre.configuracion.lugar}
-            caja={c.caja} guardados={c.cierre.sobresGuardados} fuera={c.fuera} />
+            caja={c.caja} guardados={c.cierre.sobresGuardados} fuera={c.fuera} buzon={c.cierre.buzon} />
         </section>
       )}
     </main>

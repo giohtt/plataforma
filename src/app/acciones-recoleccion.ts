@@ -11,7 +11,8 @@ import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import { leerLlaveFormulario, leerVerificacionSobres, MENSAJES_VERIFICACION } from "@/lib/formulario-conteo";
 import {
-  cancelarEntregaSobres, confirmarRecoleccion, registrarDepositoRecoleccion, registrarDevolucion, registrarEntregaSobres, revisarDiferenciaSobre, revisarIncidenciaLlave,
+  cancelarEntregaSobres, confirmarRecoleccion, recogerBuzon, registrarDepositoRecoleccion, registrarDevolucion, registrarEntregaSobres, revisarDiferenciaSobre,
+  revisarIncidenciaLlave,
   type ErrorRecoleccion,
 } from "@/lib/recolecciones";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
@@ -51,6 +52,9 @@ const MENSAJES: Record<ErrorRecoleccion, string> = {
   devolucion_pendiente: "Hay una entrega cancelada por devolver: registra primero que los sobres volvieron a la caja.",
   sin_devolucion: "No hay una devolución pendiente con esos datos.",
   devuelve_misma: "Quien devuelve los sobres no registra que los recibe: lo hace la responsable en turno.",
+  buzon: "Con buzón no hay entrega: Dirección recoge directamente del buzón.",
+  sin_llave_buzon: "Solo Dirección con la llave del buzón lo abre y recoge los sobres.",
+  buzon_vacio: "No hay sobres registrados como depositados en el buzón.",
   estado: MENSAJES_VERIFICACION.estado,
   folio_visto: MENSAJES_VERIFICACION.folio_visto,
   bloqueado_produccion: "La recolección está desactivada fuera del entorno de pruebas.",
@@ -109,6 +113,40 @@ export async function accionConfirmarRecoleccion(previo: EstadoFormularioEntrega
   }
   if (r.error === "motivo" && r.sobreId) return { error: MARCADOS, errores: { [`sobre-${r.sobreId}`]: MENSAJES.motivo }, valores, intento };
   if (r.error === "motivo_llave") return { error: MARCADOS, errores: { motivo_llave_caja: MENSAJES.motivo_llave }, valores, intento };
+  return { error: MENSAJES[r.error], valores, intento };
+}
+
+/** Dirección abre el buzón: verifica y cuenta a ciegas cada sobre registrado como depositado. */
+export async function accionRecogerBuzon(previo: EstadoFormularioEntrega, datos: FormData): Promise<EstadoFormularioEntrega> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 10);
+  const { sobres, valores: vs } = leerVerificacionSobres(datos, 60);
+  const llave = leerLlaveFormulario(datos, "llave_caja");
+  const valores: Record<string, string> = { ...vs, llave_caja: llave.estado, motivo_llave_caja: llave.motivo };
+  const errores: Record<string, string> = {};
+  const conteo = sobres.map((s) => {
+    const contado = leer(`contado-${s.sobreId}`, 30);
+    valores[`contado-${s.sobreId}`] = contado;
+    // Si el sobre no está, no se cuenta.
+    if (s.estado !== "falta") {
+      const i = leerImporte(contado);
+      if (!i.ok) errores[`contado-${s.sobreId}`] = MENSAJES_IMPORTE[i.motivo];
+    }
+    return { ...s, contado };
+  });
+  const intento = (previo?.intento ?? 0) + 1;
+  if (Object.keys(errores).length) return { error: MARCADOS, errores, valores, intento };
+  const r = await recogerBuzon(sql, sesion.usuarioId, codigo, { sobres: conteo, llave }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/recoleccion?aviso=recogida&diferencias=${r.diferencias}&investigar=${r.investigar}`);
+  if (r.error === "contado" && r.sobreId) return { error: MARCADOS, errores: { [`contado-${r.sobreId}`]: MENSAJES.contado }, valores, intento };
+  if (r.error === "motivo" && r.sobreId) return { error: MARCADOS, errores: { [`sobre-${r.sobreId}`]: MENSAJES.motivo }, valores, intento };
+  if (r.error in MENSAJES_VERIFICACION && r.error !== "motivo") {
+    return { error: MARCADOS, errores: { [r.sobreId ? `sobre-${r.sobreId}` : "sobres"]: MENSAJES_VERIFICACION[r.error] }, valores, intento };
+  }
+  if (r.error === "motivo_llave") {
+    return { error: MARCADOS, errores: { motivo_llave_caja: "Indica si el buzón estaba cerrado con llave; si hay un problema, escribe el motivo (de 5 a 300 caracteres)." }, valores, intento };
+  }
   return { error: MENSAJES[r.error], valores, intento };
 }
 

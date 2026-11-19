@@ -115,7 +115,7 @@ export default async function CierreDelDia({ params, searchParams }: PageProps<"
               <FormularioCierre codigo={codigo} turnoId={p.turnoId} usuarioId={sesion.usuarioId} esperadoBolsa={bolsa!.esperado!} contadoCajon={cajon!.contadoAlAbrir}
                 sobres={p.sobres} fondos={p.fondos} custodios={p.custodios} apoyos={p.apoyos}
                 configuracion={{ lugar: p.configuracion.lugar, acceso: p.configuracion.acceso, lugarFondos: p.configuracion.lugarFondos!, accesoCajon: p.configuracion.accesoCajon!,
-                                 guardados: p.configuracion.custodias !== null }}
+                                 guardados: p.configuracion.custodias !== null, buzon: p.configuracion.buzon && p.configuracion.custodias !== null }}
                 caja={p.caja} fuera={p.fuera} />
               <form action={accionCancelarPreparacionCierre} className="fila-acciones">
                 <input type="hidden" name="codigo" value={codigo} />

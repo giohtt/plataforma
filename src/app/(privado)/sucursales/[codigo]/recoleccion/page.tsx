@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   FormularioCancelarEntregaSobres, FormularioConfirmarRecoleccion, FormularioDeposito, FormularioDevolucion, FormularioEntregarSobres,
-  FormularioRevisarDiferenciaSobre, FormularioRevisarIncidenciaLlave,
+  FormularioRecogerBuzon, FormularioRevisarDiferenciaSobre, FormularioRevisarIncidenciaLlave,
 } from "@/components/Recoleccion";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
@@ -80,7 +80,7 @@ function SobresCancelados({ d, codigo }: { d: EntregaCancelada; codigo: string }
 export default async function Recoleccion({ params, searchParams }: PageProps<"/sucursales/[codigo]/recoleccion">) {
   const sesion = await requerirSesion();
   const { codigo } = await params;
-  const { aviso, diferencias, pendientes } = await searchParams;
+  const { aviso, diferencias, pendientes, investigar } = await searchParams;
   const p = await pantallaRecoleccion(obtenerBaseDatos()!, sesion.usuarioId, codigo, leerEntorno());
   if (!p.ok && p.error === "no_encontrada") notFound();
   if (!p.ok) {
@@ -94,18 +94,27 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
   const hoy = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date());
   const esRecibe = p.pendiente?.recibeId === sesion.usuarioId;
   const esEntrega = p.pendiente?.entregaPorId === sesion.usuarioId;
+  const b = p.buzon;
   return (
     <main className="contenedor contenedor-medio">
       <p className="sub"><Link href={`/sucursales/${codigo}`}>← {p.sucursal}</Link></p>
-      <h1 className="cabecera-titulo">Caja de sobres · {p.sucursal}</h1>
-      <p className="sub">
-        Solo datos ficticios. Los sobres se quedan sellados en la caja con llave hasta que Dirección los recoge; la llave pasa con el
-        turno. Aviso a partir de los {p.diasAviso} días de guardado cada sobre.
-      </p>
+      <h1 className="cabecera-titulo">{b ? "Buzón de sobres" : "Caja de sobres"} · {p.sucursal}</h1>
+      {b ? (
+        <p className="sub">
+          Solo datos ficticios. Al cerrar, cada sobre se sella y se deposita en el buzón ({b.lugar}), separado del cajón de los fondos.
+          Solo Dirección tiene la llave del buzón ({b.llave.map((x) => x.nombre).join(" · ")}). Aviso a partir de los {p.diasAviso} días de cada sobre.
+        </p>
+      ) : (
+        <p className="sub">
+          Solo datos ficticios. Los sobres se quedan sellados en la caja con llave hasta que Dirección los recoge; la llave pasa con el
+          turno. Aviso a partir de los {p.diasAviso} días de guardado cada sobre.
+        </p>
+      )}
       {aviso === "recogida" ? (
         <p className="aviso aviso-ok" role="status" data-testid="aviso-recogida">
           Recolección confirmada{diferencias && diferencias !== "0" ? `: ${diferencias} ${diferencias === "1" ? "sobre queda" : "sobres quedan"} por revisar (Administración)` : ""}.
-          Lo recogido queda bajo tu responsabilidad hasta depositarlo.
+          {investigar && investigar !== "0" ? ` ${investigar === "1" ? "Un sobre no estaba en el buzón: queda" : `${investigar} sobres no estaban en el buzón: quedan`} por investigar, sin responsable asignado, y no ${investigar === "1" ? "se suma" : "se suman"} a lo recogido.` : ""}
+          {" "}Lo recogido queda bajo tu responsabilidad hasta depositarlo.
         </p>
       ) : aviso === "devuelta" && pendientes && pendientes !== "0" ? (
         <p className="aviso aviso-info" role="status" data-testid="aviso-devolucion-parcial">
@@ -115,9 +124,9 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
       ) : typeof aviso === "string" && AVISO[aviso] ? <p className="aviso aviso-ok" role="status">{AVISO[aviso]}</p> : null}
 
       <section className="tarjeta" aria-labelledby="t-caja" data-testid="caja-sobres">
-        <h2 id="t-caja" className="titulo-seccion">En la caja ({p.caja.length})</h2>
+        <h2 id="t-caja" className="titulo-seccion">{b ? `Registrados como depositados (${p.caja.length})` : `En la caja (${p.caja.length})`}</h2>
         <p className="sub" data-testid="llave-caja">
-          {p.custodia
+          {b ? <>No se verifican en los turnos: solo Dirección abre el buzón. En los turnos pasa solo la llave del cajón de los fondos.</> : p.custodia
             ? <>
                 Llave de la caja de sobres: <strong>{p.custodia.nombre}</strong> · la recibió {MOMENTO[p.custodia.momento]} · {hora.format(p.custodia.desde)}
                 {p.custodia.llave === "incidencia" ? " · con incidencia" : ""}
@@ -137,15 +146,44 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
                   <td data-etiqueta="Días">{s.dias}</td>
                   {p.caja.some((x) => x.importe) ? <td data-etiqueta="Anotado">{s.importe ? pesos.format(Number(s.importe)) : "—"}</td> : null}
                   <td data-etiqueta="Estado">
-                    En la caja
+                    {b ? "Registrado como depositado" : "En la caja"}
                     {s.aviso ? <strong className="campo-error" data-testid={`aviso-${s.folio}`}> · aviso: {p.diasAviso} días o más</strong> : null}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        ) : <p className="sub">No hay sobres guardados.</p>}
+        ) : <p className="sub">{b ? "No hay sobres registrados en el buzón." : "No hay sobres guardados."}</p>}
       </section>
+
+      {b && p.puedeRecogerBuzon && p.caja.length ? (
+        <section className="tarjeta" aria-labelledby="t-recoger" data-testid="recoger-buzon">
+          <h2 id="t-recoger" className="titulo-seccion">Abrir el buzón y recoger</h2>
+          <FormularioRecogerBuzon codigo={codigo} sobres={p.caja} />
+        </section>
+      ) : b && p.caja.length ? <p className="sub" data-testid="solo-direccion">Solo Dirección con la llave del buzón lo abre y recoge los sobres.</p> : null}
+
+      {p.investigaciones.length ? (
+        <section className="tarjeta" aria-labelledby="t-investigar" data-testid="investigaciones">
+          <h2 id="t-investigar" className="titulo-seccion">Por investigar ({p.investigaciones.length})</h2>
+          <p className="sub">
+            Registrados como depositados que no estaban en el buzón al recoger. No se atribuyen a nadie y no se suman a lo recogido.
+            Cómo se cierra la investigación y qué pasa si el sobre aparece después está pendiente de decidir.
+          </p>
+          {p.investigaciones.map((i) => (
+            <div key={i.id} className="tarjeta" data-testid={`investigar-${i.folio}`}>
+              <p>
+                <strong>Sobre <span className="mono">{i.folio}</span></strong> · {LUGAR[i.lugar]} · anotado al cerrar {pesos.format(Number(i.anotado))}
+                {i.depositadoPor && i.depositadoEn ? <> · registró el depósito {i.depositadoPor} · {hora.format(i.depositadoEn)}</> : null}
+              </p>
+              <p className="sub" data-testid="estado-investigacion">
+                Por investigar · sin responsable asignado · al recoger {hora.format(i.en)} ({i.recogio}){i.motivo ? `: «${i.motivo}»` : ""}
+              </p>
+              <ListaCadena cadena={i.cadena} />
+            </div>
+          ))}
+        </section>
+      ) : null}
 
       {p.fuera.length ? (
         <section className="tarjeta" aria-labelledby="t-fuera" data-testid="fuera-de-caja">
@@ -196,7 +234,7 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
           ) : <p className="sub">{p.pendiente.recibe} confirma desde su cuenta al verificar y contar cada sobre.</p>}
           {esRecibe || esEntrega ? <FormularioCancelarEntregaSobres codigo={codigo} recoleccionId={p.pendiente.id} version={p.pendiente.version} /> : null}
         </section>
-      ) : p.puedeEntregar && p.caja.length ? (
+      ) : !b && p.puedeEntregar && p.caja.length ? (
         <section className="tarjeta" aria-labelledby="t-entregar">
           <h2 id="t-entregar" className="titulo-seccion">Entregar sobres a Dirección</h2>
           <FormularioEntregarSobres codigo={codigo} caja={p.caja} direccion={p.direccion} />
@@ -209,7 +247,7 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
           {p.recolecciones.map((r) => (
             <div key={r.id} className="tarjeta" data-testid="recoleccion">
               <p>
-                <strong>{hora.format(r.confirmadaEn)}</strong> · entregó {r.entregaPor} · recogió {r.recibe}
+                <strong>{hora.format(r.confirmadaEn)}</strong> · {r.buzon ? <>recogió del buzón {r.recibe}</> : <>entregó {r.entregaPor} · recogió {r.recibe}</>}
               </p>
               <dl className="cuentas-lugar">
                 <dt>Recogido</dt><dd data-testid="recogido">{pesos.format(Number(r.recogido))}</dd>
@@ -221,7 +259,7 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
                 <tbody>
                   {r.sobres.map((s) => (
                     <tr key={s.folio}><td data-etiqueta="Sobre" className="mono">{s.folio}</td><td data-etiqueta="Anotado">{pesos.format(Number(s.anotado))}</td>
-                      <td data-etiqueta="Contado">{pesos.format(Number(s.contado))}</td></tr>
+                      <td data-etiqueta="Contado">{s.contado === null ? <strong>No estaba: por investigar</strong> : pesos.format(Number(s.contado))}</td></tr>
                   ))}
                 </tbody>
               </table>
@@ -251,7 +289,7 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
 
       {p.incidenciasLlave.length ? (
         <section className="tarjeta" aria-labelledby="t-llaves" data-testid="incidencias-llave">
-          <h2 id="t-llaves" className="titulo-seccion">Llave de la caja de sobres al recoger o devolver</h2>
+          <h2 id="t-llaves" className="titulo-seccion">{b ? "Buzón o su llave al recoger" : "Llave de la caja de sobres al recoger o devolver"}</h2>
           {p.incidenciasLlave.map((i) => (
             <div key={i.id} className="tarjeta" data-testid="incidencia-llave">
               <p>
