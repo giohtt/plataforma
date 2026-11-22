@@ -66,16 +66,23 @@ export type Deposito = { clase: "recoleccion" | "retiro"; origenId: string; foli
 export type Diferencia = {
   clase: "turno" | "retiro_esperado" | "retiro_importe" | "sobre";
   id: string;
-  /** A qué detalle lleva: el sobre, el retiro o el caso de la entrega (pantalla «Diferencias de efectivo»). */
-  enlace: { tipo: "sobre" | "retiro" | "entrega"; id: string };
+  /** A qué detalle lleva (siempre con el mismo corte): el sobre, el retiro o el caso de la entrega del turno. */
+  enlace: { tipo: "sobre" | "retiro" | "diferencia"; id: string };
   texto: string; lugar: TipoLugar; importe: string; estado: string; abierta: boolean; anterior: boolean; registradaEn: Date;
   /** Entra en el neto de referencia (las diferencias «entre ambas personas» no son dinero faltante ni sobrante). */
   neto: boolean;
+};
+/** Entrada al fondo (aumento o reposición) registrada y aún no confirmada al corte: no se suma a nada hasta recibirse. */
+export type EntradaPendiente = {
+  id: string; tipo: "aumento" | "reposicion"; lugar: TipoLugar; importe: string; origen: string; entrega: string; registro: string;
+  en: Date; intentos: number; anterior: boolean;
 };
 export type PorInvestigar = { sobreId: string; folio: string; lugar: TipoLugar; anotado: string; desde: Date; recoleccionId: string; anterior: boolean };
 export type Grupo = { n: number; importe: string };
 export type Movimientos = {
   cobros: Grupo; cancelaciones: Grupo; recogido: Grupo; depositado: Grupo;
+  /** Entradas al fondo recibidas (confirmadas) dentro del periodo. */
+  entradasFondo: Grupo;
   sellados: { n: number; anotado: string | null; ocultos: number };
   retiros: { n: number; importe: string; ocultos: number; confirmados: number; pendientes: number };
   /** Lo que hay detrás de cada línea, para abrir su detalle. */
@@ -91,9 +98,13 @@ export type CajaSucursal = {
   recogedor: boolean;
   lugares: Lugar[]; sobres: SobrePorRecoger[]; pendientes: Pendiente[]; confirmados: Confirmado[]; depositos: Deposito[];
   diferencias: Diferencia[]; investigar: PorInvestigar[]; movimientos: Movimientos;
-  /** Suma de lo visible en las etapas 1 a 4. Con importes ocultos es un subtotal. */
+  /** Entradas al fondo pendientes de confirmar al corte (aparte: no se suman). */
+  entradas: EntradaPendiente[];
+  /** Suma de lo visible en las etapas 1 a 4. Con importes ocultos o lugares sin datos es un subtotal. */
   visible: string;
   ocultos: number;
+  /** Lugares sin turnos registrados: sin conteo no se sabe cuánto hay (no es cero). */
+  sinDatos: number;
   /** Lleva importes anotados de sobres que aún no se cuentan (quien consulta no los recoge). */
   anotadosSinContar: boolean;
 };
@@ -284,9 +295,9 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
     order by 5`)];
 
   // Aparte: diferencias (del periodo, más las anteriores que siguen abiertas al corte).
-  const difTurno = await tx<{ id: string; entrega_id: string; entrega_tipo: string; al_cerrar: boolean; tipo: string; importe: string; registrada_en: Date; lugar: TipoLugar;
+  const difTurno = await tx<{ id: string; entrega_id: string; entrega_tipo: string; entrega_en: Date; tipo: string; importe: string; registrada_en: Date; lugar: TipoLugar;
                                revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null }[]>`
-    select d.id, d.entrega_id, e.tipo as entrega_tipo, d.registrada_en = e.creada_en as al_cerrar, d.tipo, d.importe::text as importe, d.registrada_en, l.tipo as lugar,
+    select d.id, d.entrega_id, e.tipo as entrega_tipo, e.creada_en as entrega_en, d.tipo, d.importe::text as importe, d.registrada_en, l.tipo as lugar,
            (select v.resultado from revision_diferencia v where v.diferencia_id = d.id and v.en <= ${corte}) as revision,
            x.decision, x.requiere_correccion as requiere, x.correccion_en <= ${corte} as corregida
     from diferencia_efectivo d join entrega_turno e on e.id = d.entrega_id join lugar_efectivo l on l.id = d.lugar_id
@@ -294,16 +305,8 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
     where l.sucursal_id = ${s.id} and d.registrada_en <= ${corte}
     order by d.registrada_en`;
   for (const d of difTurno) {
-    const momento = d.entrega_tipo === "cambio_turno" ? "Cambio de turno" : d.al_cerrar ? "Cierre" : "Apertura";
-    const contra = d.tipo === "contra_esperado" ? (d.entrega_tipo === "cierre" && !d.al_cerrar ? "contra lo cerrado" : "contra el esperado") : "entre ambas personas";
-    let estado: string;
-    let abierta: boolean;
-    if (d.revision === null) [estado, abierta] = ["Por revisar", true];
-    else if (d.revision === "aclarada") [estado, abierta] = ["Aclarada", false];
-    else if (d.decision === null) [estado, abierta] = [`${RESULTADO[d.revision]} · pendiente para Dirección`, true];
-    else if (d.requiere && !d.corregida) [estado, abierta] = ["Resuelta por Dirección · corrección pendiente", true];
-    else [estado, abierta] = ["Resuelta por Dirección", false];
-    diferencias.push({ clase: "turno", id: d.id, enlace: { tipo: "entrega", id: d.entrega_id }, texto: `${momento} del ${dia(d.registrada_en)} · ${contra}`,
+    const { estado, abierta } = estadoDiferencia(d);
+    diferencias.push({ clase: "turno", id: d.id, enlace: { tipo: "diferencia", id: d.id }, texto: textoDiferencia(d),
                        lugar: d.lugar, importe: d.importe, estado, abierta, anterior: anterior(d.registrada_en), registradaEn: d.registrada_en, neto: d.tipo === "contra_esperado" });
   }
   // Diferencias contra el esperado al retirar: mientras no se vinculan a la del cambio de turno (después ya están ahí).
@@ -339,12 +342,22 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
     sobreId: f.sobre_id, folio: f.folio, lugar: f.lugar, anotado: f.anotado, desde: f.creada_en, recoleccionId: f.recoleccion_id, anterior: anterior(f.creada_en),
   }));
 
+  // Aparte: entradas al fondo registradas y aún sin confirmar al corte. El dinero sigue con quien lo entrega.
+  const entradas = (await tx<{ id: string; tipo: "aumento" | "reposicion"; lugar: TipoLugar; importe: string; origen: string; entrega: string; registro: string; en: Date; intentos: number }[]>`
+    select x.id, x.tipo, l.tipo as lugar, x.importe::text as importe, x.origen, a.nombre as entrega, b.nombre as registro, x.registrada_en as en,
+           (select count(*)::int from intento_entrada_fondo i where i.entrada_id = x.id and i.en <= ${corte}) as intentos
+    from entrada_fondo x join lugar_efectivo l on l.id = x.lugar_id join usuario a on a.id = x.entrega join usuario b on b.id = x.registrada_por
+    where x.sucursal_id = ${s.id} and x.registrada_en <= ${corte} and (x.resuelta_en is null or x.resuelta_en > ${corte})
+    order by x.registrada_en`).map((x) => ({ ...x, anterior: anterior(x.en) }));
+
   // Movimientos dentro del periodo (pasos del mismo dinero: no se suman entre sí).
-  const [m] = await tx<{ cobros: string; n_cobros: number; ajustes: string; n_ajustes: number }[]>`
+  const [m] = await tx<{ cobros: string; n_cobros: number; ajustes: string; n_ajustes: number; fondo: string; n_fondo: number }[]>`
     select coalesce(sum(me.importe) filter (where me.tipo = 'entrada_cobro_visita'), 0)::numeric(12, 2)::text as cobros,
            (count(*) filter (where me.tipo = 'entrada_cobro_visita'))::int as n_cobros,
            coalesce(sum(me.importe) filter (where me.tipo = 'ajuste_cancelacion_cobro'), 0)::numeric(12, 2)::text as ajustes,
-           (count(*) filter (where me.tipo = 'ajuste_cancelacion_cobro'))::int as n_ajustes
+           (count(*) filter (where me.tipo = 'ajuste_cancelacion_cobro'))::int as n_ajustes,
+           coalesce(sum(me.importe) filter (where me.tipo = 'entrada_fondo'), 0)::numeric(12, 2)::text as fondo,
+           (count(*) filter (where me.tipo = 'entrada_fondo'))::int as n_fondo
     from movimiento_efectivo me join lugar_efectivo l on l.id = me.lugar_id
     where l.sucursal_id = ${s.id} and me.en >= ${inicio} and me.en <= ${corte}`;
   const selLista = await tx<{ id: string; folio: string; lugar: TipoLugar; en: Date; importe: string; contado_ya: boolean }[]>`
@@ -369,6 +382,7 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
   const movimientos: Movimientos = {
     cobros: { n: m.n_cobros, importe: m.cobros },
     cancelaciones: { n: m.n_ajustes, importe: m.ajustes },
+    entradasFondo: { n: m.n_fondo, importe: m.fondo },
     sellados: { n: sel.n, anotado: recogedor && sel.sin_contar > 0 ? null : sel.anotado, ocultos: recogedor ? sel.sin_contar : 0 },
     recogido: { n: recogidas.length, importe: pesos(recogidas.reduce((n, r) => n + cent(r.recogido), 0)) },
     retiros: {
@@ -391,7 +405,7 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
   const sinContar = sobres.length > 0 || entregasSobres.some((r) => !r.confirmada_ya) || sel.sin_contar > 0;
   return {
     id: s.id, codigo: s.codigo, nombre: s.nombre, recogedor, lugares, sobres, pendientes, confirmados, depositos, diferencias: difVisibles, investigar, movimientos,
-    visible: pesos(visible), ocultos, anotadosSinContar: !recogedor && sinContar,
+    entradas, visible: pesos(visible), ocultos, sinDatos: lugares.filter((l) => l.estado === "sin_datos").length, anotadosSinContar: !recogedor && sinContar,
   };
 }
 
@@ -441,9 +455,11 @@ export async function reporteCaja(
 export type Evento = { en: Date; texto: string; persona: string | null; despues: boolean };
 export type FilaDetalle = { etiqueta: string; valor: string | null; nota?: string };
 export type Detalle = {
-  tipo: "lugar" | "sobre" | "recoleccion" | "retiro";
+  tipo: TipoDetalle;
   titulo: string;
   subtitulo: string;
+  /** Lugar sin turnos registrados: no hay conteo (no es cero). */
+  sinDatos?: boolean;
   /** Dónde estaba al corte (texto) y su importe al corte, si aplica. */
   alCorte: string;
   importeAlCorte: string | null;
@@ -457,7 +473,7 @@ export type Detalle = {
 };
 export type PantallaDetalle = { sucursal: { codigo: string; nombre: string }; desde: string; hasta: string; corte: Date; inicio: Date; detalle: Detalle };
 
-const TIPOS_DETALLE = ["lugar", "sobre", "recoleccion", "retiro"] as const;
+const TIPOS_DETALLE = ["lugar", "sobre", "recoleccion", "retiro", "diferencia", "entrada_fondo"] as const;
 type TipoDetalle = (typeof TIPOS_DETALLE)[number];
 
 export async function detalleCaja(
@@ -512,8 +528,11 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
       filas.push({ etiqueta: `Contado al cerrar (${fechaHora(l.base!.en)}, ${l.base!.por})`, valor: l.importe,
                    nota: "Lo que quedó en este lugar al cerrar (los fondos); los sobres sellados se ven aparte." });
     }
+    if (l.estado === "sin_datos") {
+      filas.push({ etiqueta: "Último conteo", valor: null, nota: "Sin datos: aún no hay turnos ni conteos registrados en este lugar. No tener un conteo no significa que no haya dinero." });
+    }
     return {
-      tipo, titulo: NOMBRE_LUGAR[l.tipo], subtitulo: caja.nombre,
+      tipo, titulo: NOMBRE_LUGAR[l.tipo], subtitulo: caja.nombre, sinDatos: l.estado === "sin_datos",
       alCorte: l.estado === "turno" ? `En el turno abierto${l.responsable ? ` · responsable ${l.responsable}` : ""}` : l.estado === "cerrado" ? "Sucursal cerrada: guardado al cerrar" : "Sin turnos registrados",
       importeAlCorte: l.importe, filas, eventos: ordenar(eventos), anterior: false, oculto: false, anotadosSinContar: false,
     };
@@ -619,7 +638,13 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
     const eventos: Evento[] = [];
     if (!r.buzon) eventos.push(ev(r.creada_en, `Entregó a ${r.recibe} (Dirección): ${sobres.map((x) => x.folio).join(", ")}`, r.entrego));
     if (r.estado === "cancelada" && r.resuelta_en) eventos.push(ev(r.resuelta_en, "Entrega cancelada: los sobres quedan por devolver", r.recibe));
-    if (r.estado === "confirmada" && r.resuelta_en) eventos.push(ev(r.resuelta_en, `${r.buzon ? "Abrió el buzón y recogió" : "Confirmó la recepción"}: ${dinero(pesos(recogido))} contados a ciegas`, r.recibe));
+    if (r.estado === "confirmada" && r.resuelta_en) {
+      eventos.push(ev(r.resuelta_en, `${r.buzon ? "Abrió el buzón y recogió" : "Confirmó la recepción"}: ${dinero(pesos(recogido))} contados a ciegas`, r.recibe));
+      // Cada conteo, también en el historial (si fue después del corte, solo ahí: la tabla queda como estaba al corte).
+      for (const x of sobres) {
+        eventos.push(ev(r.resuelta_en, x.contado === null ? `Sobre ${x.folio}: no estaba · por investigar` : `Sobre ${x.folio}: contó ${dinero(x.contado)}`, r.recibe));
+      }
+    }
     for (const d of depositos) eventos.push(ev(d.en, `Registró un depósito de ${dinero(d.importe)} · ref. ${d.referencia} · fecha ${d.fecha}`, d.por));
     for (const x of await tx<{ folio: string; creada_en: Date; importe: string; resultado: string | null; en: Date | null; por: string | null; propia: boolean }[]>`
       select s.folio, ds.creada_en, ds.importe::text as importe, v.resultado, v.en, u.nombre as por, v.autorrevision_id is not null as propia
@@ -627,7 +652,10 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
       left join usuario u on u.id = v.revisada_por where ds.recoleccion_id = ${id}`) {
       if (x.en) eventos.push(ev(x.en, `Revisó la diferencia de ${x.folio} (${signo(x.importe)}): ${RESULTADO[x.resultado!] ?? x.resultado}${x.propia ? " · Revisada por quien participó" : ""}`, x.por));
     }
-    const filas: FilaDetalle[] = confirmadaAlCorte
+    const existiaAlCorte = r.creada_en <= corte;
+    const filas: FilaDetalle[] = !existiaAlCorte
+      ? []
+      : confirmadaAlCorte
       ? [{ etiqueta: "Recogido (contado a ciegas)", valor: pesos(recogido) }, { etiqueta: "Depositado hasta el corte", valor: pesos(depositadoCorte) },
          { etiqueta: "Por depositar al corte", valor: pesos(recogido - depositadoCorte) }]
       : [{ etiqueta: "Anotado al cerrar (sobres entregados)", valor: oculto ? null : pesos(sobres.reduce((n, x) => n + cent(x.anotado), 0)),
@@ -644,15 +672,83 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
     return {
       tipo, titulo: r.buzon ? `Recolección del buzón · ${dia(r.resuelta_en ?? r.creada_en)}` : `Entrega de sobres a ${r.recibe} · ${dia(r.creada_en)}`,
       subtitulo: `${caja.nombre} · ${r.buzon ? `abrió el buzón ${r.recibe}` : `entregó ${r.entrego}`}`,
-      alCorte: confirmadaAlCorte ? `Bajo la responsabilidad de ${r.recibe} desde el ${dia(r.resuelta_en!)}` : r.creada_en <= corte ? `Entregado a ${r.recibe}, pendiente de confirmar` : "Aún no se registraba al corte",
-      importeAlCorte: confirmadaAlCorte ? pesos(recogido - depositadoCorte) : oculto ? null : pesos(sobres.reduce((n, x) => n + cent(x.anotado), 0)),
+      alCorte: confirmadaAlCorte ? `Bajo la responsabilidad de ${r.recibe} desde el ${dia(r.resuelta_en!)}` : existiaAlCorte ? `Entregado a ${r.recibe}, pendiente de confirmar` : "Aún no se registraba al corte: sus sobres seguían por recoger",
+      importeAlCorte: !existiaAlCorte ? null : confirmadaAlCorte ? pesos(recogido - depositadoCorte) : oculto ? null : pesos(sobres.reduce((n, x) => n + cent(x.anotado), 0)),
       filas,
       tabla: {
-        columnas: ["Sobre", "Lugar", "Anotado al cerrar", "Contado"],
-        filas: sobres.map((x) => ({ celdas: [x.folio, NOMBRE_LUGAR[x.lugar], oculto ? null : x.anotado, x.contado === null ? (contadaYa ? "No estaba · por investigar" : "—") : x.contado],
+        columnas: ["Sobre", "Lugar", "Anotado al cerrar", "Contado al corte"],
+        filas: sobres.map((x) => ({ celdas: [x.folio, NOMBRE_LUGAR[x.lugar], oculto ? null : x.anotado,
+                                             !confirmadaAlCorte ? "Sin contar al corte" : x.contado === null ? "No estaba · por investigar" : x.contado],
                                     enlace: { tipo: "sobre" as const, id: x.id } })),
       },
       eventos: ordenar(eventos), anterior: (r.resuelta_en ?? r.creada_en) < inicio, oculto, anotadosSinContar: !caja.recogedor && !contadaYa,
+    };
+  }
+
+  if (tipo === "diferencia") {
+    // Diferencia de un cambio de turno, cierre o apertura: su estado AL CORTE (revisión, Dirección y corrección).
+    const d = caja.diferencias.find((x) => x.clase === "turno" && x.id === id);
+    const [f] = await tx<{ id: string; entrega_tipo: string; entrega_en: Date; entrego: string; recibe: string | null; tipo: string; importe: string;
+                           registrada_en: Date; lugar: TipoLugar }[]>`
+      select d.id, e.tipo as entrega_tipo, e.creada_en as entrega_en, a.nombre as entrego, b.nombre as recibe,
+             d.tipo, d.importe::text as importe, d.registrada_en, l.tipo as lugar
+      from diferencia_efectivo d join entrega_turno e on e.id = d.entrega_id join lugar_efectivo l on l.id = d.lugar_id
+      join usuario a on a.id = e.entrega_por left join usuario b on b.id = e.recibe
+      where d.id = ${id} and l.sucursal_id = ${sucursalId} and d.registrada_en <= ${corte}`;
+    if (!f) return null;
+    const eventos: Evento[] = [
+      ev(f.entrega_en, f.entrega_tipo === "cambio_turno" ? `Entregó el turno${f.recibe ? ` a ${f.recibe}` : ""}` : "Cerró el día", f.entrego),
+      ev(f.registrada_en, `Diferencia registrada al confirmar la entrega: ${signo(f.importe)}`),
+    ];
+    for (const v of await tx<{ resultado: string; motivo: string; en: Date; por: string; propia: boolean }[]>`
+      select v.resultado, v.motivo, v.en, u.nombre as por, v.autorrevision_id is not null as propia
+      from revision_diferencia v join usuario u on u.id = v.revisada_por where v.diferencia_id = ${id}`) {
+      eventos.push(ev(v.en, `Revisó: ${RESULTADO[v.resultado] ?? v.resultado} · «${v.motivo}»${v.propia ? " · Revisada por quien participó" : ""}`, v.por));
+    }
+    for (const x of await tx<{ decision: string; motivo: string; en: Date; por: string; correccion: string | null; correccion_en: Date | null; corrigio: string | null }[]>`
+      select x.decision, x.motivo, x.en, u.nombre as por, x.correccion, x.correccion_en, w.nombre as corrigio
+      from resolucion_diferencia x join usuario u on u.id = x.resuelta_por left join usuario w on w.id = x.correccion_por where x.diferencia_id = ${id}`) {
+      eventos.push(ev(x.en, `Dirección resolvió: ${DECISION[x.decision] ?? x.decision} · «${x.motivo}»`, x.por));
+      if (x.correccion_en) eventos.push(ev(x.correccion_en, `Registró la corrección: «${x.correccion}»`, x.corrigio));
+    }
+    // Si la diferencia ya no está en la lista al corte (anterior al periodo y cerrada), su estado se calcula igual.
+    const estado = d?.estado ?? (await estadoDiferenciaAlCorte(tx, id, corte));
+    return {
+      tipo, titulo: textoDiferencia(f), subtitulo: `${NOMBRE_LUGAR[f.lugar]} · ${caja.nombre}`,
+      alCorte: `Estado al corte: ${estado}`, importeAlCorte: null,
+      filas: [{ etiqueta: "Diferencia (aparte, no se suma a ninguna etapa)", valor: f.importe, nota: `Estado al corte: ${estado}` }],
+      eventos: ordenar(eventos), anterior: f.registrada_en < inicio, oculto: false, anotadosSinContar: false,
+    };
+  }
+
+  if (tipo === "entrada_fondo") {
+    const [x] = await tx<{ id: string; tipo: string; lugar: TipoLugar; importe: string; origen: string; entrega: string; registro: string; registrada_en: Date;
+                           estado: string; resuelta_en: Date | null; recibio: string | null; motivo: string | null }[]>`
+      select x.id, x.tipo, l.tipo as lugar, x.importe::text as importe, x.origen, a.nombre as entrega, b.nombre as registro, x.registrada_en,
+             x.estado, x.resuelta_en, c.nombre as recibio, x.motivo_cancelacion as motivo
+      from entrada_fondo x join lugar_efectivo l on l.id = x.lugar_id join usuario a on a.id = x.entrega join usuario b on b.id = x.registrada_por
+      left join usuario c on c.id = x.recibida_por
+      where x.id = ${id} and x.sucursal_id = ${sucursalId} and x.registrada_en <= ${corte}`;
+    if (!x) return null;
+    const pendienteAlCorte = x.resuelta_en === null || x.resuelta_en > corte;
+    const eventos: Evento[] = [ev(x.registrada_en, `Registró ${x.tipo === "aumento" ? "un aumento del fondo" : "una reposición"} de ${dinero(x.importe)} · entrega ${x.entrega} · origen: ${x.origen}`, x.registro)];
+    for (const i of await tx<{ en: Date; declarado: string; por: string }[]>`
+      select i.en, i.declarado::text as declarado, u.nombre as por from intento_entrada_fondo i join usuario u on u.id = i.por where i.entrada_id = ${id} order by i.en`) {
+      eventos.push(ev(i.en, `Declaró recibir ${dinero(i.declarado)}: no coincide con lo registrado`, i.por));
+    }
+    if (x.estado === "recibida" && x.resuelta_en) eventos.push(ev(x.resuelta_en, `Confirmó lo recibido: ${dinero(x.importe)} (entra al efectivo del lugar)`, x.recibio));
+    if (x.estado === "cancelada" && x.resuelta_en) eventos.push(ev(x.resuelta_en, `Canceló la entrada · «${x.motivo}»`, x.registro));
+    const estado = pendienteAlCorte ? "Pendiente de confirmar" : x.estado === "recibida" ? "Recibida" : "Cancelada";
+    return {
+      tipo, titulo: `${x.tipo === "aumento" ? "Aumento del fondo" : "Reposición del fondo"} · ${NOMBRE_LUGAR[x.lugar]}`,
+      subtitulo: `${caja.nombre} · registrada el ${dia(x.registrada_en)}`,
+      alCorte: pendienteAlCorte ? `Pendiente de confirmar: la tiene ${x.entrega}; no se suma al efectivo del lugar hasta que se reciba` : `${estado} antes del corte`,
+      importeAlCorte: pendienteAlCorte ? x.importe : null,
+      filas: [
+        { etiqueta: "Importe registrado", valor: x.importe },
+        { etiqueta: `Entrega: ${x.entrega} · registró: ${x.registro}`, valor: null, nota: `Estado al corte: ${estado}` },
+      ],
+      eventos: ordenar(eventos), anterior: x.registrada_en < inicio, oculto: false, anotadosSinContar: false,
     };
   }
 
@@ -702,6 +798,34 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
     alCorte, importeAlCorte: enPendiente ? enPendiente.importe : enConfirmado ? enConfirmado.saldo : null, filas, eventos: ordenar(eventos),
     anterior: r.entregado_en < inicio, oculto, anotadosSinContar: false,
   };
+}
+
+const DECISION: Record<string, string> = { absorbe_sucursal: "Lo absorbe la sucursal", queda_en_bolsa: "Queda en la bolsa", origen_identificado: "Origen identificado" };
+
+/**
+ * Cómo se nombra una diferencia de entrega. Todas se registran al confirmar la entrega: en un cierre, la diferencia
+ * contra el esperado es del cierre (lo que se entregó contra lo esperado al cerrar) y la que hay entre ambas personas es
+ * de la apertura (lo contado al abrir contra lo cerrado).
+ */
+function textoDiferencia(d: { entrega_tipo: string; entrega_en: Date; registrada_en: Date; tipo: string }) {
+  if (d.entrega_tipo === "cambio_turno") return `Cambio de turno del ${dia(d.entrega_en)} · ${d.tipo === "contra_esperado" ? "contra el esperado" : "entre ambas personas"}`;
+  return d.tipo === "contra_esperado" ? `Cierre del ${dia(d.entrega_en)} · contra el esperado` : `Apertura del ${dia(d.registrada_en)} · contra lo cerrado`;
+}
+
+/** Estado al corte de una diferencia de turno (misma regla que la lista del reporte). */
+async function estadoDiferenciaAlCorte(tx: Tx, id: string, corte: Date) {
+  const [d] = await tx<{ revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null }[]>`
+    select (select v.resultado from revision_diferencia v where v.diferencia_id = d.id and v.en <= ${corte}) as revision,
+           x.decision, x.requiere_correccion as requiere, x.correccion_en <= ${corte} as corregida
+    from diferencia_efectivo d left join resolucion_diferencia x on x.diferencia_id = d.id and x.en <= ${corte} where d.id = ${id}`;
+  return estadoDiferencia(d).estado;
+}
+function estadoDiferencia(d: { revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null }) {
+  if (d.revision === null) return { estado: "Por revisar", abierta: true };
+  if (d.revision === "aclarada") return { estado: "Aclarada", abierta: false };
+  if (d.decision === null) return { estado: `${RESULTADO[d.revision]} · pendiente para Dirección`, abierta: true };
+  if (d.requiere && !d.corregida) return { estado: "Resuelta por Dirección · corrección pendiente", abierta: true };
+  return { estado: `Resuelta por Dirección · ${DECISION[d.decision] ?? d.decision}`, abierta: false };
 }
 
 const signo = (v: string) => (Number(v) < 0 ? `−${dinero(String(-Number(v)))}` : `+${dinero(v)}`);
@@ -759,11 +883,13 @@ export async function prepararDescarga(
       if (pedido.contenido === "detalle") {
         const lista: Detalle[] = [];
         const piezas: [TipoDetalle, string][] = [
-          ...caja.lugares.filter((l) => l.estado !== "sin_datos").map((l) => ["lugar", l.lugarId] as [TipoDetalle, string]),
+          ...caja.lugares.map((l) => ["lugar", l.lugarId] as [TipoDetalle, string]),
           ...caja.sobres.map((x) => ["sobre", x.id] as [TipoDetalle, string]),
           ...caja.pendientes.map((p) => [p.clase === "retiro" ? "retiro" : "recoleccion", p.id] as [TipoDetalle, string]),
           ...caja.confirmados.map((c) => [c.clase === "recoleccion" ? "recoleccion" : "retiro", c.id] as [TipoDetalle, string]),
           ...caja.investigar.map((x) => ["sobre", x.sobreId] as [TipoDetalle, string]),
+          ...caja.entradas.map((x) => ["entrada_fondo", x.id] as [TipoDetalle, string]),
+          ...caja.diferencias.filter((x) => x.clase === "turno").map((x) => ["diferencia", x.id] as [TipoDetalle, string]),
         ];
         for (const [tipo, id] of piezas) {
           const d = await armarDetalle(tx, usuarioId, s.id, caja, tipo, id, v.inicio, v.corte);

@@ -9,6 +9,8 @@ import { dinero, nombreLugar, type ArchivoCaja, type CajaSucursal, type Detalle 
  * datos de mensualidades de Open Desk; si lleva importes anotados de sobres sin contar, la leyenda lo dice.
  */
 export const OCULTO = "Oculto: sin contar";
+/** Lugar sin turnos registrados: no hay conteo, lo que no significa que no haya dinero (nunca se muestra como cero). */
+export const SIN_DATOS = "Sin datos";
 export const LEYENDA_ANOTADOS = "Contiene importes anotados de sobres sin contar";
 export const LEYENDA_INCOMPLETO = "Información incompleta: el cajón cuenta con su último conteo; faltan los datos de mensualidades de Open Desk (el cuadre completo queda pendiente).";
 
@@ -25,10 +27,14 @@ const dia = (f: string) => new Intl.DateTimeFormat("es-MX", { timeZone: "UTC", d
 const marca = (anterior: boolean) => (anterior ? " · Anterior al periodo" : "");
 const imp = (v: string | null): Importe => (v === null ? { texto: OCULTO } : v);
 
+/** Por qué no es el total: importes ocultos y lugares sin datos. */
+export function faltantes(c: Pick<CajaSucursal, "ocultos" | "sinDatos">) {
+  return [c.ocultos ? `${c.ocultos} con importe oculto` : "", c.sinDatos ? `${c.sinDatos} ${c.sinDatos === 1 ? "lugar" : "lugares"} sin datos` : ""].filter(Boolean).join(" y ");
+}
 /** Total (o subtotal visible) de una sucursal, con su aviso. */
-export function textoTotal(c: Pick<CajaSucursal, "ocultos">) {
-  return c.ocultos > 0
-    ? `Subtotal visible al corte (no es el total: faltan ${c.ocultos} con importe oculto) · incompleto: faltan mensualidades de Open Desk`
+export function textoTotal(c: Pick<CajaSucursal, "ocultos" | "sinDatos">) {
+  return c.ocultos > 0 || c.sinDatos > 0
+    ? `Subtotal visible al corte (no es el total: faltan ${faltantes(c)}) · incompleto: faltan mensualidades de Open Desk`
     : "Total registrado al corte · incompleto: faltan mensualidades de Open Desk";
 }
 
@@ -38,8 +44,9 @@ function filasSucursal(c: CajaSucursal, detalles: Detalle[] | undefined): Fila[]
   for (const l of c.lugares) {
     const detalle = l.estado === "turno"
       ? `${l.tipo === "bolsa_visitas" ? "Esperado" : "Último conteo"} · contado al abrir ${fechaHora(l.base!.en)} (${l.base!.por}) más movimientos registrados${l.tipo === "cajon_mensualidades" ? " · información incompleta: faltan mensualidades de Open Desk" : ""}`
-      : l.estado === "cerrado" ? `Guardado al cerrar · contado ${fechaHora(l.base!.en)} (${l.base!.por})` : "Sin turnos registrados";
-    f.push({ tipo: "fila", celdas: ["1. En la sucursal", nombreLugar(l.tipo), detalle], importe: l.importe ?? "0.00" });
+      : l.estado === "cerrado" ? `Guardado al cerrar · contado ${fechaHora(l.base!.en)} (${l.base!.por})`
+      : "Sin turnos ni conteos registrados: no se sabe cuánto hay (no es cero)";
+    f.push({ tipo: "fila", celdas: ["1. En la sucursal", nombreLugar(l.tipo), detalle], importe: l.importe === null ? { texto: SIN_DATOS } : l.importe });
   }
   for (const s of c.sobres) {
     const donde = s.donde === "buzon" ? "En el buzón" : s.donde === "caja" ? "En la caja con llave" : "Por devolver a la caja";
@@ -60,6 +67,13 @@ function filasSucursal(c: CajaSucursal, detalles: Detalle[] | undefined): Fila[]
   }
   f.push({ tipo: "total", celdas: [textoTotal(c), "", ""], importe: c.visible });
   if (c.ocultos > 0) f.push({ tipo: "nota", texto: `Más ${c.ocultos} con importe oculto hasta contarlos (conteo a ciegas).` });
+  if (c.sinDatos > 0) f.push({ tipo: "nota", texto: `Más ${c.sinDatos} ${c.sinDatos === 1 ? "lugar" : "lugares"} sin datos (sin turnos ni conteos registrados).` });
+  f.push({ tipo: "seccion", texto: "Aparte: entradas al fondo pendientes de confirmar (no se suman: aún no se reciben)" });
+  if (!c.entradas.length) f.push({ tipo: "nota", texto: "Ninguna." });
+  for (const x of c.entradas) {
+    f.push({ tipo: "fila", celdas: ["Pendiente de confirmar", `${x.tipo === "aumento" ? "Aumento del fondo" : "Reposición"} · ${nombreLugar(x.lugar)}`,
+                                    `Entrega ${x.entrega} · registró ${x.registro} el ${fechaHora(x.en)}${x.intentos ? ` · ${x.intentos} ${x.intentos === 1 ? "intento" : "intentos"} sin coincidir` : ""}${marca(x.anterior)}`], importe: x.importe });
+  }
   f.push({ tipo: "seccion", texto: "5. Depositado en el periodo (ya salió de la custodia: no se suma arriba)" });
   if (!c.depositos.length) f.push({ tipo: "nota", texto: "Sin depósitos en el periodo." });
   for (const d of c.depositos) {
@@ -80,6 +94,7 @@ function filasSucursal(c: CajaSucursal, detalles: Detalle[] | undefined): Fila[]
   f.push({ tipo: "fila", celdas: ["Movimiento", `Cobros de visitas en efectivo (${m.cobros.n})`, ""], importe: m.cobros.importe });
   f.push({ tipo: "fila", celdas: ["Movimiento", `Cancelaciones y devoluciones en efectivo (${m.cancelaciones.n})`, ""], importe: m.cancelaciones.importe });
   f.push({ tipo: "fila", celdas: ["Movimiento", "Mensualidades", "No calculado: faltan datos de Open Desk"], importe: { texto: "No calculado" } });
+  f.push({ tipo: "fila", celdas: ["Movimiento", `Entradas al fondo recibidas (${m.entradasFondo.n})`, ""], importe: m.entradasFondo.importe });
   f.push({ tipo: "fila", celdas: ["Movimiento", `Sobres sellados al cerrar (${m.sellados.n})`, m.sellados.ocultos ? `${m.sellados.ocultos} sin contar: anotado oculto` : "Anotado al cerrar"], importe: imp(m.sellados.anotado) });
   f.push({ tipo: "fila", celdas: ["Movimiento", `Recogido por Dirección, contado (${m.recogido.n})`, ""], importe: m.recogido.importe });
   f.push({ tipo: "fila", celdas: ["Movimiento", `Entregado a Encargada de retiros (${m.retiros.n}: ${m.retiros.confirmados} confirmados, ${m.retiros.pendientes} pendientes de confirmar)`,
@@ -91,7 +106,7 @@ function filasSucursal(c: CajaSucursal, detalles: Detalle[] | undefined): Fila[]
     for (const d of detalles) {
       f.push({ tipo: "titulo", texto: `${d.titulo}${d.anterior ? " · Anterior al periodo" : ""}` });
       f.push({ tipo: "nota", texto: `${d.subtitulo} · Al corte: ${d.alCorte}` });
-      for (const x of d.filas) f.push({ tipo: "fila", celdas: ["", x.etiqueta, x.nota ?? ""], importe: imp(x.valor) });
+      for (const x of d.filas) f.push({ tipo: "fila", celdas: ["", x.etiqueta, x.nota ?? ""], importe: x.valor === null && (d.sinDatos || !d.oculto) ? { texto: d.sinDatos ? SIN_DATOS : "" } : imp(x.valor) });
       if (d.tabla) {
         f.push({ tipo: "encabezado", celdas: d.tabla.columnas.slice(0, 3) });
         for (const t of d.tabla.filas) {
@@ -120,12 +135,13 @@ function filasArchivo(a: ArchivoCaja): Fila[] {
   if (r.filas.length > 1) {
     f.push({ tipo: "seccion", texto: "Resumen por sucursal" }, { tipo: "encabezado", celdas: ["Sucursal", "Importes ocultos", "Diferencias abiertas · por investigar"] });
     for (const c of r.filas) {
-      f.push({ tipo: "fila", celdas: [c.nombre, c.ocultos ? `${c.ocultos} (subtotal visible)` : "Ninguno",
+      f.push({ tipo: "fila", celdas: [c.nombre, c.ocultos || c.sinDatos ? `Subtotal visible: faltan ${faltantes(c)}` : "Ninguno",
                                       `${c.diferencias.filter((d) => d.abierta).length} · ${c.investigar.length}`], importe: c.visible });
     }
     const ocultos = r.filas.reduce((n, c) => n + c.ocultos, 0);
+    const sinDatos = r.filas.reduce((n, c) => n + c.sinDatos, 0);
     const suma = r.filas.reduce((n, c) => n + Math.round(Number(c.visible) * 100), 0);
-    f.push({ tipo: "total", celdas: [textoTotal({ ocultos }), "", ""], importe: (suma / 100).toFixed(2) });
+    f.push({ tipo: "total", celdas: [textoTotal({ ocultos, sinDatos }), "", ""], importe: (suma / 100).toFixed(2) });
   }
   for (const c of r.filas) f.push(...filasSucursal(c, a.detalles.get(c.codigo)));
   f.push({ tipo: "nota", texto: `Descargado por ${a.por} el ${fechaHora(a.en)} · corte ${fechaHora(r.corte)} · Solo datos ficticios` });

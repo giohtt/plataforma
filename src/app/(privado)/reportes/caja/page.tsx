@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { LEYENDA_ANOTADOS, textoTotal } from "@/lib/archivo-caja";
+import { faltantes, LEYENDA_ANOTADOS, SIN_DATOS, textoTotal } from "@/lib/archivo-caja";
 import { obtenerBaseDatos } from "@/lib/db";
 import { historialDescargas, nombreLugar, reporteCaja, type CajaSucursal, type ReporteCaja } from "@/lib/reporte-caja";
 import { requerirSesion } from "@/lib/sesion-servidor";
@@ -33,13 +33,14 @@ function Importe({ v, href, testid }: { v: string | null; href?: string; testid?
 }
 const Anterior = ({ si }: { si: boolean }) => (si ? <> <span className="marca-anterior">Anterior al periodo</span></> : null);
 
-function Total({ c }: { c: Pick<CajaSucursal, "visible" | "ocultos"> }) {
+function Total({ c }: { c: Pick<CajaSucursal, "visible" | "ocultos" | "sinDatos"> }) {
+  const parcial = c.ocultos > 0 || c.sinDatos > 0;
   return (
     <div className="tarjeta tarjeta-oscura total-caja" data-testid="total-caja">
       <div>
-        <strong data-testid="total-etiqueta">{c.ocultos > 0 ? "Subtotal visible al corte" : "Total registrado al corte"}</strong>
+        <strong data-testid="total-etiqueta">{parcial ? "Subtotal visible al corte" : "Total registrado al corte"}</strong>
         <p className="sub">
-          {c.ocultos > 0 ? <><b>No es el total:</b> faltan {c.ocultos} con importe oculto hasta contarlos. </> : null}
+          {parcial ? <><b>No es el total:</b> faltan {faltantes(c)}. </> : null}
           <b>Incompleto:</b> el cajón cuenta con su último conteo; faltan las mensualidades de Open Desk.
         </p>
       </div>
@@ -72,8 +73,10 @@ function Sucursal({ c, ctx }: { c: CajaSucursal; ctx: Ctx }) {
                       <br /><span className="texto-incompleto">Información incompleta: no incluye las mensualidades cobradas después de ese conteo (faltan datos de Open Desk)</span></>
               ) : l.estado === "cerrado" ? (
                 <>guardado al cerrar · contado el {hora.format(l.base!.en)} por {l.base!.por}{l.tipo === "cajon_mensualidades" ? <><br /><span className="texto-incompleto">Información incompleta: faltan datos de mensualidades de Open Desk</span></> : null}</>
-              ) : <>sin turnos registrados</>}
-              {" · "}{l.importe === null ? "—" : <Importe v={l.importe} href={enlace(ctx, "lugar", l.lugarId)} />}
+              ) : <>sin turnos ni conteos registrados: no se sabe cuánto hay</>}
+              {" · "}{l.importe === null
+                ? <Link href={enlace(ctx, "lugar", l.lugarId)} prefetch={false}><span className="importe-oculto" data-testid="sin-datos">{SIN_DATOS}</span></Link>
+                : <Importe v={l.importe} href={enlace(ctx, "lugar", l.lugarId)} />}
             </li>
           ))}
         </ul>
@@ -158,7 +161,7 @@ function Sucursal({ c, ctx }: { c: CajaSucursal; ctx: Ctx }) {
                     <td data-etiqueta="Caso">{d.texto}<Anterior si={d.anterior} /></td>
                     <td data-etiqueta="Lugar">{nombreLugar(d.lugar)}</td>
                     <td data-etiqueta="Importe">
-                      <Link prefetch={false} href={d.enlace.tipo === "entrega" ? `/sucursales/${ctx.codigo}/diferencias/${d.enlace.id}` : enlace(ctx, d.enlace.tipo, d.enlace.id)}>
+                      <Link prefetch={false} href={enlace(ctx, d.enlace.tipo, d.enlace.id)}>
                         <strong>{$(d.importe)}</strong>
                       </Link>
                     </td>
@@ -186,6 +189,23 @@ function Sucursal({ c, ctx }: { c: CajaSucursal; ctx: Ctx }) {
         ) : <p className="sub">Ninguno.</p>}
       </section>
 
+      <section className="tarjeta tarjeta-aparte" aria-labelledby="t-entradas" data-testid="entradas-fondo">
+        <h2 id="t-entradas" className="titulo-seccion">Aparte: entradas al fondo pendientes de confirmar</h2>
+        <p className="sub"><b>No se suman</b> al efectivo del lugar hasta que quien las recibe las confirma: mientras, el dinero sigue con quien lo entrega.</p>
+        {c.entradas.length ? (
+          <ul className="lista-simple">
+            {c.entradas.map((x) => (
+              <li key={x.id} data-testid={`entrada-${x.id}`}>
+                {x.tipo === "aumento" ? "Aumento del fondo" : "Reposición"} · {nombreLugar(x.lugar)} · <span className="chip-estado chip-incompleto">Pendiente de confirmar</span>
+                {" · "}entrega <b>{x.entrega}</b> · registró {x.registro} el {hora.format(x.en)}
+                {x.intentos ? ` · ${x.intentos} ${x.intentos === 1 ? "intento" : "intentos"} sin coincidir` : ""}<Anterior si={x.anterior} />{" · "}
+                <Importe v={x.importe} href={enlace(ctx, "entrada_fondo", x.id)} />
+              </li>
+            ))}
+          </ul>
+        ) : <p className="sub">Ninguna.</p>}
+      </section>
+
       <section className="tarjeta" aria-labelledby="t-movimientos" data-testid="movimientos">
         <h2 id="t-movimientos" className="titulo-seccion">Movimientos del periodo</h2>
         <p className="sub">Son pasos del mismo dinero: <b>no se suman entre sí</b>. Un cobro entra a la bolsa, después va en un sobre, se recoge y se deposita.</p>
@@ -197,6 +217,7 @@ function Sucursal({ c, ctx }: { c: CajaSucursal; ctx: Ctx }) {
           </li>
           <li>Cancelaciones y devoluciones en efectivo ({m.cancelaciones.n}) · <strong>{$(m.cancelaciones.importe)}</strong></li>
           <li>Mensualidades · <span className="importe-oculto">No calculado: faltan datos de Open Desk</span></li>
+          <li>Entradas al fondo recibidas ({m.entradasFondo.n}) · <strong>{$(m.entradasFondo.importe)}</strong></li>
           <li>
             <details>
               <summary>Sobres sellados al cerrar ({m.sellados.n}) · {m.sellados.anotado === null ? <span className="importe-oculto">anotado oculto ({m.sellados.ocultos} sin contar)</span> : <strong>{$(m.sellados.anotado)}</strong>}</summary>
@@ -224,6 +245,7 @@ function Sucursal({ c, ctx }: { c: CajaSucursal; ctx: Ctx }) {
 
 function VariasSucursales({ r }: { r: ReporteCaja }) {
   const ocultos = r.filas.reduce((n, c) => n + c.ocultos, 0);
+  const sinDatos = r.filas.reduce((n, c) => n + c.sinDatos, 0);
   const visible = (r.filas.reduce((n, c) => n + Math.round(Number(c.visible) * 100), 0) / 100).toFixed(2);
   const q = (codigo: string) => `/reportes/caja?${new URLSearchParams({ sucursal: codigo, desde: r.desde, hasta: r.hasta, corte: r.corte.toISOString() })}`;
   const suma = (c: CajaSucursal, f: (c: CajaSucursal) => number) => (f(c) / 100).toFixed(2);
@@ -239,11 +261,14 @@ function VariasSucursales({ r }: { r: ReporteCaja }) {
               {r.filas.map((c) => (
                 <tr key={c.codigo} data-testid={`resumen-${c.codigo}`}>
                   <td data-etiqueta="Sucursal"><Link prefetch={false} href={q(c.codigo)}>{c.nombre}</Link></td>
-                  <td data-etiqueta="1. En la sucursal">{$(suma(c, (x) => x.lugares.reduce((n, l) => n + Math.round(Number(l.importe ?? 0) * 100), 0)))}</td>
+                  <td data-etiqueta="1. En la sucursal">
+                    {c.sinDatos === c.lugares.length ? <span className="importe-oculto">{SIN_DATOS}</span>
+                      : <>{$(suma(c, (x) => x.lugares.reduce((n, l) => n + Math.round(Number(l.importe ?? 0) * 100), 0)))}{c.sinDatos ? <span className="importe-oculto"> + {SIN_DATOS.toLowerCase()}</span> : null}</>}
+                  </td>
                   <td data-etiqueta="2. Sobres por recoger">{c.sobres.some((s) => s.oculto) ? <span className="importe-oculto">{c.sobres.length} sobres · ocultos</span> : $(suma(c, c2))}</td>
                   <td data-etiqueta="3. Pendiente de confirmar">{$(suma(c, (x) => x.pendientes.reduce((n, p) => n + Math.round(Number(p.importe ?? 0) * 100), 0)))}{c.pendientes.some((p) => p.oculto) ? <span className="importe-oculto"> + ocultos</span> : null}</td>
                   <td data-etiqueta="4. Por depositar">{$(suma(c, (x) => x.confirmados.reduce((n, p) => n + Math.round(Number(p.saldo) * 100), 0)))}</td>
-                  <td data-etiqueta="Total o subtotal"><strong>{$(c.visible)}</strong>{c.ocultos ? <span className="importe-oculto"> subtotal visible + {c.ocultos} ocultos</span> : null}</td>
+                  <td data-etiqueta="Total o subtotal"><strong>{$(c.visible)}</strong>{c.ocultos || c.sinDatos ? <span className="importe-oculto"> subtotal visible: faltan {faltantes(c)}</span> : null}</td>
                   <td data-etiqueta="Diferencias abiertas · por investigar">{c.diferencias.filter((d) => d.abierta).length} · {c.investigar.length}</td>
                 </tr>
               ))}
@@ -252,7 +277,7 @@ function VariasSucursales({ r }: { r: ReporteCaja }) {
         </div>
         <p className="sub">Cada sucursal abre su reporte completo, con el mismo periodo y corte.</p>
       </section>
-      <Total c={{ visible, ocultos }} />
+      <Total c={{ visible, ocultos, sinDatos }} />
     </>
   );
 }
@@ -355,7 +380,7 @@ export default async function ReporteCajaPagina({ searchParams }: PageProps<"/re
           </ul>
         ) : <p className="sub">Nadie ha descargado este reporte.</p>}
       </section>
-      <p className="sub">{textoTotal({ ocultos: 0 }).replace("Total registrado al corte · ", "El total está ")}. El cuadre completo queda pendiente de los datos de Open Desk.</p>
+      <p className="sub">{textoTotal({ ocultos: 0, sinDatos: 0 }).replace("Total registrado al corte · ", "El total está ")}. El cuadre completo queda pendiente de los datos de Open Desk.</p>
     </main>
   );
 }

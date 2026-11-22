@@ -46,7 +46,7 @@ export default async function DetalleCaja({ searchParams }: PageProps<"/reportes
         ) : null}
         <ul className="lista-simple" data-testid="filas-detalle">
           {d.filas.map((f, i) => (
-            <li key={i}>{f.etiqueta} · {f.valor === null ? oculto : <strong>{$(f.valor)}</strong>}{f.nota ? <><br /><span className="sub">{f.nota}</span></> : null}</li>
+            <li key={i}>{f.etiqueta}{f.valor === null && !d.oculto && !d.sinDatos ? null : <> · {f.valor === null ? (d.sinDatos ? <span className="importe-oculto" data-testid="sin-datos">Sin datos</span> : oculto) : <strong>{$(f.valor)}</strong>}</>}{f.nota ? <><br /><span className="sub">{f.nota}</span></> : null}</li>
           ))}
         </ul>
         {d.tabla ? (

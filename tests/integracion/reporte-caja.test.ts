@@ -1,11 +1,13 @@
+import { inflateSync } from "node:zlib";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import ExcelJS from "exceljs";
 import { excelCaja, LEYENDA_ANOTADOS, OCULTO, pdfCaja } from "@/lib/archivo-caja";
-import { abrirDesdeCierre, cerrarDia, cierrePendiente, configurarCustodia, prepararCierre } from "@/lib/cierres";
+import { abrirDesdeCierre, cerrarDia, cierrePendiente, configurarCustodia, prepararCierre, sobresEnCaja } from "@/lib/cierres";
+import { revisarDiferencia } from "@/lib/diferencias";
 import { cambiarMontoFondo, confirmarEntradaFondo } from "@/lib/fondos";
-import { recogerBuzon, registrarDepositoRecoleccion } from "@/lib/recolecciones";
-import { detalleCaja, historialDescargas, prepararDescarga, reporteCaja } from "@/lib/reporte-caja";
+import { confirmarRecoleccion, recogerBuzon, registrarDepositoRecoleccion, registrarEntregaSobres } from "@/lib/recolecciones";
+import { detalleCaja, historialDescargas, prepararDescarga, reporteCaja, type ArchivoCaja } from "@/lib/reporte-caja";
 import { confirmarRetiro, generarFolio, registrarRetiro } from "@/lib/retiros";
 import { abrirTurno } from "@/lib/turnos";
 import { aplicarCambio, resumenPermisos, type CambioAcceso } from "@/lib/usuarios";
@@ -43,8 +45,29 @@ async function cuenta(asignaciones: [string, string][], nombre: string) {
   return x.id;
 }
 
-/** Sucursal con buzón, fondos de $300 y $300; la vespertina abre con $420 y $3,050 y recibe los fondos. */
-async function escenario() {
+/** Texto de un Excel del reporte, una fila por línea. */
+async function textoExcel(b: Buffer) {
+  const libro = new ExcelJS.Workbook();
+  await libro.xlsx.load(b as unknown as ArrayBuffer);
+  const filas: string[] = [];
+  libro.worksheets[0].eachRow((r) => filas.push((r.values as unknown[]).slice(1).map((v) => String(v ?? "")).join(" | ")));
+  return filas.join("\n");
+}
+/** Texto de un PDF del reporte: descomprime cada flujo y decodifica los textos (la fuente estándar los escribe en hexadecimal). */
+function textoPdf(b: Buffer) {
+  const crudo = b.toString("latin1");
+  const partes: string[] = [];
+  for (const m of crudo.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+    let flujo: string;
+    try { flujo = inflateSync(Buffer.from(m[1], "latin1")).toString("latin1"); } catch { flujo = m[1]; }
+    for (const t of flujo.matchAll(/<([0-9A-Fa-f]+)> Tj/g)) partes.push(Buffer.from(t[1], "hex").toString("latin1"));
+  }
+  return partes.join("\n");
+}
+const archivos = async (a: ArchivoCaja) => ({ excel: await textoExcel(await excelCaja(a)), pdf: textoPdf(await pdfCaja(a)) });
+
+/** Sucursal con buzón (o con caja de sobres), fondos de $300 y $300; la vespertina abre con $420 y $3,050 y recibe los fondos. */
+async function escenario({ buzon = true } = {}) {
   k++;
   const codigo = `K${k}`;
   const [s] = await sql<{ id: string }[]>`insert into sucursal (nombre, codigo) values (${"Sucursal caja " + k}, ${codigo}) returning id`;
@@ -56,9 +79,10 @@ async function escenario() {
   const encargada = await cuenta([["encargada_retiros", codigo]], "Encargada de retiros");
   const t = await abrirTurno(sql, vespertina, codigo, { bolsa: "420.00", cajon: "3050.00" }, PRUEBAS);
   if (!t.ok) throw new Error(t.error);
-  const c = await configurarCustodia(sql, dir, codigo, {
-    lugar: "Buzón de recepción", acceso: [dir], lugarFondos: "Cajón con llave", accesoCajon: [matutina, vespertina], custodias: [matutina, vespertina], buzon: true,
-  }, PRUEBAS);
+  const c = await configurarCustodia(sql, dir, codigo, buzon
+    ? { lugar: "Buzón de recepción", acceso: [dir], lugarFondos: "Cajón con llave", accesoCajon: [matutina, vespertina], custodias: [matutina, vespertina], buzon: true }
+    : { lugar: "Caja con llave de recepción", acceso: [matutina, vespertina], lugarFondos: "Cajón con llave", accesoCajon: [matutina, vespertina], custodias: [matutina, vespertina] },
+  PRUEBAS);
   if (!c.ok) throw new Error(c.error);
   for (const lugar of ["bolsa_visitas", "cajon_mensualidades"]) {
     const r = await cambiarMontoFondo(sql, dir, codigo,
@@ -74,21 +98,26 @@ async function escenario() {
 }
 type Esc = Awaited<ReturnType<typeof escenario>>;
 
-/** La vespertina cierra: bolsa $720 (sobre de $420) y cajón $3,350 (sobre de $3,050), los deposita en el buzón. */
-async function cerrarDelDia(e: Esc) {
+/** La vespertina cierra: bolsa $720 (sobre de $420) y cajón $3,350 (sobre de $3,050), los deposita en el buzón (o los deja en la caja). */
+async function cerrarDelDia(e: Esc, { conteo = { bolsa: "720", cajon: "3350" }, buzon = true } = {}) {
   const p = await prepararCierre(sql, e.vespertina, e.codigo, { turnoId: e.turnoId }, PRUEBAS);
   if (!p.ok) throw new Error(p.error);
+  const caja = buzon ? [] : await sobresEnCaja(sql, e.sucursalId);
+  const correctos = [...p.sobres, ...caja].map((x) => ({ sobreId: x.id, estado: "correcto", folioVisto: "", motivo: "" }));
   const r = await cerrarDia(sql, e.vespertina, e.codigo, {
-    turnoId: e.turnoId, conteo: { bolsa: "720", cajon: "3350" }, fondos: { bolsa: "300", cajon: "300" }, custodio: e.vespertina, nota: "", apoyo: NADIE,
-    custodia: { ubicacion: "Llavero de recepción", sobres: [], llave: LLAVE }, depositados: p.sobres.map((s) => s.id),
+    turnoId: e.turnoId, conteo, fondos: { bolsa: "300", cajon: "300" }, custodio: e.vespertina, nota: "", apoyo: NADIE,
+    custodia: buzon ? { ubicacion: "Llavero de recepción", sobres: [], llave: LLAVE }
+                    : { ubicacion: "Caja con llave de recepción", sobres: correctos, llave: LLAVE, llaveCaja: LLAVE },
+    ...(buzon ? { depositados: p.sobres.map((s) => s.id) } : {}),
   }, PRUEBAS);
   if (!r.ok) throw new Error(r.error);
   return p.sobres;
 }
-async function abrir(e: Esc) {
+async function abrir(e: Esc, { buzon = true } = {}) {
   const c = (await cierrePendiente(sql, e.sucursalId))!;
+  const sobres = buzon ? [] : (await sobresEnCaja(sql, e.sucursalId)).map((x) => ({ sobreId: x.id, estado: "correcto", folioVisto: "", motivo: "" }));
   const r = await abrirDesdeCierre(sql, e.matutina, e.codigo, {
-    entregaId: c.entregaId, version: c.version, sobres: [], conteo: { bolsa: "300", cajon: "300" }, apoyo: NADIE, llave: LLAVE,
+    entregaId: c.entregaId, version: c.version, sobres, conteo: { bolsa: "300", cajon: "300" }, apoyo: NADIE, llave: LLAVE, ...(buzon ? {} : { llaveCaja: LLAVE }),
   }, PRUEBAS);
   if (!r.ok || r.resultado !== "abierto") throw new Error("no abrió");
   e.turnoId = r.turnoId;
@@ -267,6 +296,140 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
     // Y su resumen ya no muestra la descarga en esa sucursal (sin consulta no tiene efecto).
     const resumen = await resumenPermisos(sql, e.admin);
     expect(resumen.permisos.find((p) => p.clave === "reporte.caja_descargar")).toBeUndefined();
+  });
+
+  it("la diferencia de un cierre muestra su estado AL CORTE en el reporte, su detalle, el Excel y el PDF", async () => {
+    const e = await escenario();
+    // Cierra con $20 menos en la bolsa: diferencia contra lo esperado, por revisar.
+    await cerrarDelDia(e, { conteo: { bolsa: "700", cajon: "3350" } });
+    await abrir(e);
+    const t1 = await reloj();
+    const [dif] = await sql<{ id: string }[]>`select d.id from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id where l.sucursal_id = ${e.sucursalId}`;
+    const encargado = await cuenta([["encargado", e.codigo]], "Encargado");
+    expect(await revisarDiferencia(sql, encargado, e.codigo, { diferenciaId: dif.id, resultado: "faltante_confirmado", motivo: "Prueba: faltan 20 pesos" }, PRUEBAS))
+      .toMatchObject({ ok: true });
+    const antes = await caja(e.admin, e, t1);
+    expect(antes.diferencias.map((d) => [d.clase, d.importe, d.estado, d.enlace.tipo])).toEqual([["turno", "-20.00", "Por revisar", "diferencia"]]);
+    const ahora = await caja(e.admin, e);
+    expect(ahora.diferencias[0].estado).toBe("Faltante confirmado · pendiente para Dirección");
+    const d = (await detalleCaja(sql, e.admin, { codigo: e.codigo, tipo: "diferencia", id: dif.id, corte: t1 }))!;
+    expect(d.detalle.alCorte).toBe("Estado al corte: Por revisar");
+    expect(d.detalle.titulo).toMatch(/^Cierre del .* · contra el esperado$/);
+    expect(d.detalle.eventos.filter((x) => x.despues).map((x) => x.texto)).toEqual([expect.stringMatching(/^Revisó: Faltante confirmado/)]);
+    expect(d.detalle.eventos.filter((x) => !x.despues).map((x) => x.texto).join(" | ")).not.toMatch(/Revisó/);
+    expect(await dar(e.admin, "reporte.caja_descargar", [e.sucursalId])).toEqual({ ok: true });
+    const r = await prepararDescarga(sql, e.admin, { codigo: e.codigo, formato: "xlsx", contenido: "detalle", corte: t1 }, PRUEBAS);
+    if (!r.ok) throw new Error(r.error);
+    const { excel, pdf } = await archivos(r.archivo);
+    for (const t of [excel, pdf]) {
+      expect(t).toContain("Estado al corte: Por revisar");
+      expect(t).not.toContain("Revisó");
+      expect(t).not.toContain("pendiente para Dirección");
+    }
+  });
+
+  it("la recolección confirmada después del corte no muestra conteos en su tabla: solo como información posterior, y fuera del archivo", async () => {
+    const e = await escenario({ buzon: false });
+    const sobres = await cerrarDelDia(e, { buzon: false });
+    await abrir(e, { buzon: false });
+    const en = await registrarEntregaSobres(sql, e.matutina, e.codigo, { sobres: sobres.map((x) => x.id), recibe: e.dir }, PRUEBAS);
+    if (!en.ok) throw new Error(en.error);
+    const t1 = await reloj();
+    const [{ version }] = await sql<{ version: number }[]>`select version from recoleccion where id = ${en.recoleccionId}`;
+    const ok = await confirmarRecoleccion(sql, e.dir, e.codigo, { recoleccionId: en.recoleccionId, version, llave: LLAVE, sobres: [
+      { sobreId: sobres[0].id, estado: "correcto", folioVisto: "", motivo: "", contado: "420" },
+      { sobreId: sobres[1].id, estado: "correcto", folioVisto: "", motivo: "", contado: "3000" },
+    ] }, PRUEBAS);
+    expect(ok).toMatchObject({ ok: true, recogido: "3420.00" });
+    // Al corte t1 la entrega estaba pendiente de confirmar: así aparece en el reporte.
+    const r1 = await caja(e.admin, e, t1);
+    expect(r1.pendientes).toEqual([expect.objectContaining({ clase: "entrega_sobres", importe: "3470.00" })]);
+    expect(r1.confirmados).toEqual([]);
+    const d = (await detalleCaja(sql, e.admin, { codigo: e.codigo, tipo: "recoleccion", id: en.recoleccionId, corte: t1 }))!.detalle;
+    expect(d.alCorte).toMatch(/pendiente de confirmar/);
+    expect(d.tabla!.columnas).toEqual(["Sobre", "Lugar", "Anotado al cerrar", "Contado al corte"]);
+    expect(d.tabla!.filas.map((f) => f.celdas[3])).toEqual(["Sin contar al corte", "Sin contar al corte"]);
+    expect(d.filas.map((f) => f.etiqueta).join(" | ")).not.toMatch(/Recogido|contado/i);
+    expect(d.eventos.filter((x) => x.despues).map((x) => x.texto)).toEqual(expect.arrayContaining([
+      expect.stringMatching(/Confirmó la recepción/), `Sobre ${sobres[1].folio}: contó $3,000.00`,
+    ]));
+    expect(d.eventos.filter((x) => !x.despues).map((x) => x.texto).join(" | ")).not.toMatch(/contó/);
+    // Conteo a ciegas intacto: antes de confirmar, Dirección no veía lo anotado (ni en la tabla).
+    expect(await dar(e.admin, "reporte.caja_descargar", [e.sucursalId])).toEqual({ ok: true });
+    const r = await prepararDescarga(sql, e.admin, { codigo: e.codigo, formato: "pdf", contenido: "detalle", corte: t1 }, PRUEBAS);
+    if (!r.ok) throw new Error(r.error);
+    const { excel, pdf } = await archivos(r.archivo);
+    for (const t of [excel, pdf]) {
+      expect(t).toContain("Sin contar al corte");
+      expect(t).not.toMatch(/contó|3000|3,000/);
+    }
+  });
+
+  it("entradas al fondo pendientes de confirmar: aparte, con estado y personas; no se suman hasta recibirse", async () => {
+    const e = await escenario();
+    const subir = await cambiarMontoFondo(sql, e.dir, e.codigo,
+      { lugar: "bolsa_visitas", monto: "500", origen: "entrega_persona", destino: "", detalleOrigen: "Efectivo ficticio de Dirección", motivo: "Más cambio para el fin de semana" }, PRUEBAS);
+    if (!subir.ok) throw new Error(subir.error);
+    const t1 = await reloj();
+    const pend = await caja(e.admin, e, t1);
+    expect(pend.entradas).toEqual([expect.objectContaining({ id: subir.entradaId, tipo: "aumento", lugar: "bolsa_visitas", importe: "200.00", intentos: 0 })]);
+    expect(pend.entradas[0].entrega).toMatch(/^Dirección/);
+    // No se suma: la bolsa y el total siguen igual.
+    expect(pend.lugares[0].importe).toBe("720.00");
+    expect(pend.visible).toBe("4070.00");
+    // Un intento que no coincide queda a la vista; luego se confirma.
+    expect(await confirmarEntradaFondo(sql, e.vespertina, e.codigo, { entradaId: subir.entradaId!, recibido: "150" }, PRUEBAS)).toEqual({ ok: false, error: "no_coincide" });
+    expect((await caja(e.admin, e)).entradas[0].intentos).toBe(1);
+    expect(await confirmarEntradaFondo(sql, e.vespertina, e.codigo, { entradaId: subir.entradaId!, recibido: "200" }, PRUEBAS)).toEqual({ ok: true });
+    const recibida = await caja(e.admin, e);
+    expect(recibida.entradas).toEqual([]);
+    expect(recibida.lugares[0].importe).toBe("920.00");
+    // Con el corte anterior sigue pendiente (no desaparece) y su detalle deja la confirmación como posterior.
+    expect((await caja(e.admin, e, t1)).entradas).toHaveLength(1);
+    const d = (await detalleCaja(sql, e.admin, { codigo: e.codigo, tipo: "entrada_fondo", id: subir.entradaId!, corte: t1 }))!.detalle;
+    expect(d.alCorte).toMatch(/^Pendiente de confirmar: la tiene Dirección/);
+    expect(d.eventos.filter((x) => x.despues).map((x) => x.texto)).toEqual([expect.stringMatching(/no coincide/), expect.stringMatching(/^Confirmó lo recibido/)]);
+    expect(await dar(e.admin, "reporte.caja_descargar", [e.sucursalId])).toEqual({ ok: true });
+    const r = await prepararDescarga(sql, e.admin, { codigo: e.codigo, formato: "xlsx", contenido: "detalle", corte: t1 }, PRUEBAS);
+    if (!r.ok) throw new Error(r.error);
+    const { excel, pdf } = await archivos(r.archivo);
+    for (const t of [excel, pdf]) {
+      expect(t).toContain("entradas al fondo pendientes de confirmar");
+      expect(t).toMatch(/Pendiente de confirmar/);
+      expect(t).toMatch(/Entrega Dirección/);
+      expect(t).not.toContain("Confirmó lo recibido");
+    }
+  });
+
+  it("un lugar sin turnos registrados dice «Sin datos» (no $0.00) en el reporte, el detalle, el Excel y el PDF", async () => {
+    k++;
+    const codigo = `K${k}`;
+    const [s] = await sql<{ id: string }[]>`insert into sucursal (nombre, codigo) values (${"Sucursal sin datos " + k}, ${codigo}) returning id`;
+    ids[codigo] = s.id;
+    const admin = await cuenta([["administracion", codigo]], "Administración");
+    expect(await dar(admin, "reporte.caja", [s.id])).toEqual({ ok: true });
+    expect(await dar(admin, "reporte.caja_descargar", [s.id])).toEqual({ ok: true });
+    const r = (await reporteCaja(sql, admin, { codigo }))!.filas[0];
+    expect(r.lugares.map((l) => [l.estado, l.importe])).toEqual([["sin_datos", null], ["sin_datos", null]]);
+    expect(r).toMatchObject({ sinDatos: 2, ocultos: 0 });
+    const d = (await detalleCaja(sql, admin, { codigo, tipo: "lugar", id: r.lugares[0].lugarId }))!.detalle;
+    expect(d).toMatchObject({ sinDatos: true, importeAlCorte: null });
+    for (const formato of ["xlsx", "pdf"]) {
+      const a = await prepararDescarga(sql, admin, { codigo, formato, contenido: "detalle" }, PRUEBAS);
+      if (!a.ok) throw new Error(a.error);
+      const t = formato === "xlsx" ? await textoExcel(await excelCaja(a.archivo)) : textoPdf(await pdfCaja(a.archivo));
+      if (formato === "xlsx") {
+        expect(t).toMatch(/Bolsa de visitas[^\n]*\| Sin datos$/m);
+        expect(t).toMatch(/Cajón de mensualidades[^\n]*\| Sin datos$/m);
+      } else {
+        // En el PDF el importe va en su propia columna: dos lugares y sus dos detalles dicen «Sin datos»; el único $0.00 es el subtotal visible.
+        expect(t.split("\n").filter((l) => l === "Sin datos")).toHaveLength(4);
+        expect(t.split("\n").filter((l) => l === "$0.00")).toHaveLength(1 + 7); // subtotal + 7 movimientos del periodo
+      }
+      expect(t).toContain("Subtotal visible al corte (no es el total: faltan 2 lugares sin datos)");
+      expect(t).not.toContain("Total registrado al corte");
+      if (formato === "xlsx") expect(t).not.toMatch(/Bolsa de visitas[^\n]*\| 0$/m);
+    }
   });
 
   it("archivos: quien recoge descarga los importes ocultos y un subtotal; quien no recoge, la leyenda de anotados sin contar", async () => {

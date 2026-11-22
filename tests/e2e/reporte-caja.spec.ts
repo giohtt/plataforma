@@ -4,6 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 import postgres from "postgres";
 import { abrirDesdeCierre, cerrarDia, cierrePendiente, configurarCustodia, prepararCierre } from "../../src/lib/cierres";
 import { cifrarContrasena } from "../../src/lib/contrasena";
+import { revisarDiferencia } from "../../src/lib/diferencias";
 import { cambiarMontoFondo, confirmarEntradaFondo } from "../../src/lib/fondos";
 import { recogerBuzon } from "../../src/lib/recolecciones";
 import { abrirTurno } from "../../src/lib/turnos";
@@ -31,7 +32,11 @@ async function cuenta(nombre: string, rol: string | null, sucursalId: string | n
   return { id: u.id, correo, nombre };
 }
 
-/** Sucursal con buzón: la vespertina cerró con sobres de $420 (bolsa) y $3,050 (cajón) en el buzón; la matutina abrió con los fondos. */
+/**
+ * Sucursal con buzón: la vespertina cerró con $20 menos en la bolsa (diferencia por revisar) y sobres de $400 (bolsa) y
+ * $3,050 (cajón) en el buzón; la matutina abrió con los fondos. Dirección registró un aumento del fondo de $200 que nadie
+ * ha confirmado. La otra sucursal no tiene turnos: sin datos.
+ */
 async function escenario() {
   const codigo = `C${Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789"[Math.floor(Math.random() * 34)]).join("")}`;
   const nombre = `Caja ${codigo}`;
@@ -43,6 +48,7 @@ async function escenario() {
   const vespertina = await cuenta(`Recepción vespertina ${id()}`, "recepcion", s.id);
   const admin = await cuenta(`Administración ${id()}`, "administracion", s.id);
   const dir = await cuenta(`Dirección ${id()}`, "direccion", s.id);
+  const encargado = await cuenta(`Encargado ${id()}`, "encargado", s.id);
   const t = await abrirTurno(sql, vespertina.id, codigo, { bolsa: "420.00", cajon: "3050.00" }, PRUEBAS);
   if (!t.ok) throw new Error(t.error);
   const c = await configurarCustodia(sql, dir.id, codigo, {
@@ -60,7 +66,7 @@ async function escenario() {
   const p = await prepararCierre(sql, vespertina.id, codigo, { turnoId: t.turnoId }, PRUEBAS);
   if (!p.ok) throw new Error(p.error);
   const cierre = await cerrarDia(sql, vespertina.id, codigo, {
-    turnoId: t.turnoId, conteo: { bolsa: "720", cajon: "3350" }, fondos: { bolsa: "300", cajon: "300" }, custodio: vespertina.id, nota: "", apoyo: NADIE,
+    turnoId: t.turnoId, conteo: { bolsa: "700", cajon: "3350" }, fondos: { bolsa: "300", cajon: "300" }, custodio: vespertina.id, nota: "", apoyo: NADIE,
     custodia: { ubicacion: "Llavero de recepción", sobres: [], llave: LLAVE }, depositados: p.sobres.map((x) => x.id),
   }, PRUEBAS);
   if (!cierre.ok) throw new Error(cierre.error);
@@ -69,7 +75,10 @@ async function escenario() {
     entregaId: pend.entregaId, version: pend.version, sobres: [], conteo: { bolsa: "300", cajon: "300" }, apoyo: NADIE, llave: LLAVE,
   }, PRUEBAS);
   if (!a.ok) throw new Error(a.error);
-  return { codigo, nombre, sucursalId: s.id, otraId: otra.id, otraNombre: "Otra " + codigo, general, admin, dir, sobres: p.sobres };
+  const subir = await cambiarMontoFondo(sql, dir.id, codigo,
+    { lugar: "bolsa_visitas", monto: "500", origen: "entrega_persona", destino: "", detalleOrigen: "Efectivo ficticio de Dirección", motivo: "Más cambio para el fin de semana" }, PRUEBAS);
+  if (!subir.ok) throw new Error(subir.error);
+  return { codigo, nombre, sucursalId: s.id, otraId: otra.id, otraNombre: "Otra " + codigo, general, admin, dir, encargado, sobres: p.sobres };
 }
 async function entrar(page: Page, correo: string) {
   await page.context().clearCookies();
@@ -129,11 +138,20 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   await page.getByRole("button", { name: "Ver" }).click();
   await expect(page.getByTestId("lugar-bolsa_visitas")).toContainText("$300.00");
   await expect(page.getByTestId("lugar-cajon_mensualidades")).toContainText("Información incompleta");
-  await expect(page.getByTestId(`sobre-${e.sobres[0].folio}`)).toContainText("$420.00");
+  await expect(page.getByTestId(`sobre-${e.sobres[0].folio}`)).toContainText("$400.00");
   await expect(page.getByTestId("leyenda-anotados")).toContainText("Contiene importes anotados de sobres sin contar");
   await expect(page.getByTestId("total-etiqueta")).toHaveText("Total registrado al corte");
   await expect(page.getByTestId("total-caja")).toContainText("Incompleto");
-  await expect(page.getByTestId("total-importe")).toHaveText("$4,070.00");
+  await expect(page.getByTestId("total-importe")).toHaveText("$4,050.00");
+  // El aumento del fondo sin confirmar va aparte, con su estado y las personas; la bolsa sigue en $300.
+  await expect(page.getByTestId("entradas-fondo")).toContainText("Pendiente de confirmar");
+  await expect(page.getByTestId("entradas-fondo")).toContainText(`entrega ${e.dir.nombre}`);
+  await expect(page.getByTestId("entradas-fondo")).toContainText("$200.00");
+  await expect(page.getByTestId("lugar-bolsa_visitas")).not.toContainText("$500.00");
+  // La diferencia del cierre, por revisar al corte.
+  await expect(page.getByTestId("aparte").getByTestId("diferencia")).toContainText("Por revisar");
+  const enlaceDiferencia = await page.getByTestId("aparte").getByTestId("diferencia").getByRole("link").getAttribute("href");
+  const corteIso = new URL(enlaceDiferencia!, "http://x").searchParams.get("corte")!;
   await capturar(page, "caja-administracion");
 
   // El detalle conserva el corte.
@@ -144,6 +162,19 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   await expect(page.getByTestId("corte-detalle")).toContainText(`Corte: ${corte}`);
   await expect(page.getByTestId("historial-detalle")).toContainText("Registró que lo depositó en el buzón");
   await page.getByRole("link", { name: /← Reporte de caja/ }).click();
+
+  // Después del corte, el Encargado revisa la diferencia: el detalle abierto con ese corte la sigue mostrando por revisar.
+  const [dif] = await sql<{ id: string }[]>`select d.id from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id where l.sucursal_id = ${e.sucursalId}`;
+  expect(await revisarDiferencia(sql, e.encargado.id, e.codigo, { diferenciaId: dif.id, resultado: "faltante_confirmado", motivo: "Prueba: faltan 20 pesos" }, PRUEBAS))
+    .toMatchObject({ ok: true });
+  await page.goto(enlaceDiferencia!);
+  await expect(page.getByTestId("al-corte")).toContainText("Estado al corte: Por revisar");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Cierre del");
+  await expect(page.getByTestId("evento-despues")).toContainText("Después del corte");
+  await expect(page.getByTestId("evento-despues")).toContainText("Revisó: Faltante confirmado");
+  await capturar(page, "caja-diferencia-al-corte");
+  await page.getByRole("link", { name: /← Reporte de caja/ }).click();
+  await expect(page.getByTestId("aparte").getByTestId("diferencia")).toContainText("Por revisar");
 
   // Descargas: Excel y PDF, con el mismo corte; quedan en el historial.
   const descargar = async (formato: string) => {
@@ -168,7 +199,19 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   await page.getByRole("button", { name: "Ver" }).click();
   await expect(page.getByTestId("descarga-incluidas")).toContainText(`Se incluyen: ${e.nombre}`);
   await expect(page.getByTestId("descarga-incluidas")).toContainText(`No se incluyen (sin permiso de descarga): ${e.otraNombre}`);
+  await expect(page.getByTestId(`resumen-${"O" + e.codigo.slice(1)}`)).toContainText("Sin datos");
   await capturar(page, "caja-todas");
+
+  // La otra sucursal no tiene turnos: «Sin datos», nunca $0.00, y el recuadro es un subtotal.
+  await page.getByTestId("filtros").getByLabel("Sucursal").selectOption({ label: e.otraNombre });
+  await page.getByRole("button", { name: "Ver" }).click();
+  await expect(page.getByTestId("etapa-1").getByTestId("sin-datos")).toHaveCount(2);
+  await expect(page.getByTestId("etapa-1")).not.toContainText("$0.00");
+  await expect(page.getByTestId("total-etiqueta")).toHaveText("Subtotal visible al corte");
+  await expect(page.getByTestId("total-caja")).toContainText("faltan 2 lugares sin datos");
+  await page.getByTestId("lugar-bolsa_visitas").getByRole("link").click();
+  await expect(page.getByTestId("filas-detalle").getByTestId("sin-datos")).toBeVisible();
+  await capturar(page, "caja-sin-datos");
 
   // Dirección con la consulta (sin descarga): conteo a ciegas, subtotal visible, sin botón de descargar.
   const r = await aplicarCambio(sql, e.general.id, e.dir.id, {
@@ -189,17 +232,29 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   await page.getByTestId(`sobre-${e.sobres[0].folio}`).getByRole("link").click();
   await expect(page.getByTestId("filas-detalle")).toContainText("Oculto: sin contar");
   await expect(page.getByTestId("historial-detalle")).toContainText("importe oculto hasta contarlo");
-  await expect(page.getByTestId("historial-detalle")).not.toContainText("$420");
+  await expect(page.getByTestId("historial-detalle")).not.toContainText("$400");
 
   // Al recoger, lo contado pasa a «Confirmado, por depositar» y la diferencia va aparte.
   const recogida = await recogerBuzon(sql, e.dir.id, e.codigo, { sobres: [
-    { sobreId: e.sobres[0].id, estado: "correcto", folioVisto: "", motivo: "", contado: "420" },
+    { sobreId: e.sobres[0].id, estado: "correcto", folioVisto: "", motivo: "", contado: "400" },
     { sobreId: e.sobres[1].id, estado: "correcto", folioVisto: "", motivo: "", contado: "3000" },
   ], llave: LLAVE }, PRUEBAS);
   expect(recogida).toMatchObject({ ok: true });
   await page.goto(`/reportes/caja?sucursal=${e.codigo}`);
-  await expect(page.getByTestId("etapa-4")).toContainText("$3,420.00");
+  await expect(page.getByTestId("etapa-4")).toContainText("$3,400.00");
   await expect(page.getByTestId("total-etiqueta")).toHaveText("Total registrado al corte");
-  await expect(page.getByTestId("aparte").getByTestId("diferencia")).toContainText("−$50.00");
+  await expect(page.getByTestId("aparte").getByTestId("diferencia").filter({ hasText: "−$50.00" })).toBeVisible();
   await capturar(page, "caja-direccion-recogido");
+
+  // Con el corte anterior a la recolección, su tabla no muestra conteos: aparecen solo como información posterior.
+  const [rec] = await sql<{ id: string }[]>`select id from recoleccion where sucursal_id = ${e.sucursalId}`;
+  await page.goto(`/reportes/caja/detalle?${new URLSearchParams({ sucursal: e.codigo, corte: corteIso, tipo: "recoleccion", id: rec.id })}`);
+  await expect(page.getByTestId("al-corte")).toContainText("Aún no se registraba al corte: sus sobres seguían por recoger");
+  await expect(page.getByTestId("importe-al-corte")).toHaveCount(0);
+  await expect(page.getByTestId("al-corte").getByRole("table")).toContainText("Contado al corte");
+  await expect(page.getByTestId("al-corte").getByRole("table")).not.toContainText("$3,000.00");
+  await expect(page.getByTestId("al-corte").getByRole("table").getByText("Sin contar al corte")).toHaveCount(2);
+  await expect(page.getByTestId("evento-despues").filter({ hasText: "contó $3,000.00" })).toBeVisible();
+  await expect(page.getByTestId("evento")).toHaveCount(0);
+  await capturar(page, "caja-recoleccion-al-corte");
 });
