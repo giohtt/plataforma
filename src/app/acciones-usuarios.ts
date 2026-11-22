@@ -60,10 +60,11 @@ const MENSAJES_USUARIOS: Record<ErrorUsuarios, string> = {
   ya_autorizada: "Ya hay una autorización vigente: renuévala o termínala.",
   sin_cambio: "No hay cambios que guardar.",
   bloqueado_produccion: "Esta sección está desactivada fuera del entorno de pruebas.",
+  sin_consulta: "Para descargar el reporte de caja ahí, primero dale «Consultar el reporte de caja» en esas mismas sucursales (en todas, si eliges todas).",
 };
 const CAMPO: Partial<Record<ErrorUsuarios, string>> = {
   nombre: "nombre", correo: "correo", correo_repetido: "correo", puesto: "puesto", motivo: "motivo", rol: "rol", permiso: "permiso",
-  alcance: "alcance", sucursales: "alcance", limite: "limite", sin_limite: "limite", hasta: "hasta", no_direccion: "alcance",
+  alcance: "alcance", sucursales: "alcance", sin_consulta: "alcance", limite: "limite", sin_limite: "limite", hasta: "hasta", no_direccion: "alcance",
 };
 function conError(error: ErrorUsuarios, valores: Record<string, string>, intento: number): EstadoUsuarios {
   const campo = CAMPO[error];

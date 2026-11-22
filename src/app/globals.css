@@ -957,3 +957,65 @@ td.mono {
   padding: 0.5rem 0.75rem;
   font-size: 0.95rem;
 }
+
+/* --- Reporte de caja (bloque 5) --- */
+.franja-corte {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 12px;
+  background: var(--demo-bg);
+  color: var(--demo-fg);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+.etapas-caja {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.etapas-caja span {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 3px 8px;
+}
+.total-caja {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.total-caja .cifra-grande {
+  white-space: nowrap;
+}
+.marca-anterior {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 800;
+  border-radius: 6px;
+  padding: 1px 7px;
+  background: #efe9fb;
+  color: #5b3c9b;
+  border: 1px solid #d6c8f2;
+  white-space: nowrap;
+}
+.importe-oculto {
+  font-style: italic;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tarjeta-aparte {
+  border: 2px solid #f0d49e;
+}
+.despues-corte {
+  color: #8a929c;
+}
+.texto-incompleto {
+  color: var(--warn);
+  font-weight: 600;
+}
