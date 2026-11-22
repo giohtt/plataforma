@@ -104,7 +104,9 @@ export async function resumenPermisos(db: Sql | Tx, usuarioId: string): Promise<
     from permiso p order by p.clave`;
   // Cada permiso en cada sucursal, con el límite que aplica ahí (el mismo cálculo que usa la autorización).
   const celdas = await db<{ clave: string; sucursal: string; ok: boolean; limite: string | null }[]>`
-    select p.clave, s.nombre as sucursal, tiene_permiso(${usuarioId}, p.clave, s.id) as ok,
+    -- Descargar el reporte de caja solo tiene efecto donde también puede consultarlo (aprobado el 21 nov 2026).
+    select p.clave, s.nombre as sucursal,
+           tiene_permiso(${usuarioId}, p.clave, s.id) and (p.clave <> 'reporte.caja_descargar' or tiene_permiso(${usuarioId}, 'reporte.caja', s.id)) as ok,
            case when p.es_autorizacion then (select max(f.limite_monto)::text from facultad_otorgada f
                 where f.usuario_id = ${usuarioId} and f.permiso = p.clave and (f.sucursal_id = s.id or f.todas_las_sucursales)
                   and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en)) end as limite
@@ -118,7 +120,9 @@ export async function resumenPermisos(db: Sql | Tx, usuarioId: string): Promise<
              and exists (select 1 from alcance_general g where g.usuario_id = ${usuarioId} and vigente(g.vigente_desde, g.vigente_hasta, g.revocado_en))
              and not permiso_restringido(${usuarioId}, 'sucursal.consultar', null) as todas`;
   const salida: PermisoEfectivo[] = [];
+  const consultaFuturas = permisos.find((p) => p.clave === "reporte.caja")?.futuras ?? false;
   for (const p of permisos) {
+    if (p.clave === "reporte.caja_descargar" && !consultaFuturas) p.futuras = false;
     const cs = de.get(p.clave) ?? [];
     const si = cs.filter((c) => c.ok);
     if (!p.general && !p.futuras && !si.length) continue;
@@ -360,7 +364,7 @@ export async function historialAccesos(db: Sql | Tx, personaId: string | null = 
 export type ErrorUsuarios =
   | "sin_permiso" | "no_encontrada" | "nombre" | "correo" | "correo_repetido" | "puesto" | "motivo" | "propia" | "sin_canal"
   | "ultimo_administrador" | "rol" | "permiso" | "alcance" | "sucursales" | "limite" | "sin_limite" | "hasta" | "ya_tiene"
-  | "no_vigente" | "no_direccion" | "ya_autorizada" | "sin_cambio" | "bloqueado_produccion";
+  | "no_vigente" | "no_direccion" | "ya_autorizada" | "sin_cambio" | "bloqueado_produccion" | "sin_consulta";
 
 const motivoValido = (m: string) => m.trim().length >= 5 && m.trim().length <= 300;
 const ULTIMO = /al menos una cuenta activa que administre accesos/;
@@ -503,6 +507,18 @@ async function sucursalesValidas(tx: Tx, a: Alcance): Promise<{ id: string; nomb
   const filas = await tx<{ id: string; nombre: string }[]>`select id, nombre from sucursal where id in ${tx(ids)} order by nombre`;
   return filas.length === ids.length ? [...filas] : null;
 }
+/** Puede consultar el reporte de caja en esas sucursales (null: en todas, incluidas las que se abran después). */
+async function puedeConsultarCaja(tx: Tx, personaId: string, sucursales: string[] | null): Promise<boolean> {
+  if (sucursales) {
+    const [r] = await tx<{ ok: boolean }[]>`select bool_and(tiene_permiso(${personaId}, 'reporte.caja', x)) as ok from unnest(${sucursales}::uuid[]) x`;
+    return !!r.ok;
+  }
+  const [r] = await tx<{ ok: boolean }[]>`
+    select exists (select 1 from facultad_otorgada f where f.usuario_id = ${personaId} and f.permiso = 'reporte.caja' and f.todas_las_sucursales
+                   and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en))
+       and not exists (select 1 from sucursal x where not tiene_permiso(${personaId}, 'reporte.caja', x.id)) as ok`;
+  return r.ok;
+}
 const textoAlcance = (a: Alcance, s: { nombre: string }[]) => a.todas ? "todas las sucursales (incluidas las que se abran después)" : s.map((x) => x.nombre).join(", ");
 
 /** Aplica el cambio dentro de la transacción. Devuelve el texto para el historial o un error. */
@@ -576,6 +592,11 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
         for (const l of lugares) {
           await tx`insert into facultad_otorgada (usuario_id, permiso, sucursal_id, todas_las_sucursales, limite_monto, vigente_hasta, otorgada_por, motivo)
                    values (${personaId}, ${p.clave}, ${l}, ${l === null}, ${limite}, ${h.valor ? finDelDia(tx, h.valor) : null}, ${actor}, ${motivo})`;
+        }
+        // Descargar el reporte de caja exige poder consultarlo en esa sucursal (aprobado el 21 nov 2026). En «todas»
+        // (incluidas las futuras) se exige también la consulta en todas.
+        if (p.clave === "reporte.caja_descargar" && !(await puedeConsultarCaja(tx, personaId, c.alcance.todas ? null : s.map((x) => x.id)))) {
+          return { ok: false, error: "sin_consulta" };
         }
         return { ok: true, accion: "dar_permiso", detalle: `${p.descripcion} en ${textoAlcance(c.alcance, s)}${limite ? ` · límite $${limite}` : ""}${h.valor ? ` · hasta ${h.valor}` : ""}` };
       }

@@ -65,7 +65,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo, caja] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo, caja, puedeVerReporteCaja] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -93,6 +93,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     tienePermiso(sql, sesion.usuarioId, "fondo.reponer", sucursal.id),
     entradasPorConfirmar(sql, sesion.usuarioId, sucursal.id),
     accesoRecoleccion(sql, sesion.usuarioId, sucursal.id),
+    tienePermiso(sql, sesion.usuarioId, "reporte.caja", sucursal.id),
   ]);
 
   const permisos = await sql<{ clave: string; descripcion: string }[]>`
@@ -202,6 +203,11 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
           {puedeVerReporteTurnos ? (
             <Link className="boton" href={`/reportes/turnos?sucursal=${sucursal.codigo}`} data-testid="reporte-turnos">
               Reporte de turnos
+            </Link>
+          ) : null}
+          {puedeVerReporteCaja ? (
+            <Link className="boton" href={`/reportes/caja?sucursal=${sucursal.codigo}`} data-testid="reporte-caja">
+              Reporte de caja
             </Link>
           ) : null}
           {puedeVerReporteVisitas ? (

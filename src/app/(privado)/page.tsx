@@ -12,11 +12,12 @@ const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN
 export default async function Inicio({ searchParams }: PageProps<"/">) {
   const sesion = await requerirSesion();
   const sql = obtenerBaseDatos()!;
-  const [sucursales, accesos, puedeCrear, administra] = await Promise.all([
+  const [sucursales, accesos, puedeCrear, administra, [reporteCaja]] = await Promise.all([
     sucursalesAccesibles(sql, sesion.usuarioId),
     resumenAccesos(sql, sesion.usuarioId),
     tienePermiso(sql, sesion.usuarioId, "sucursal.crear"),
     facultadesAdministrar(sql, sesion.usuarioId),
+    sql<{ n: number }[]>`select count(*)::int as n from sucursal where tiene_permiso(${sesion.usuarioId}, 'reporte.caja', id)`,
   ]);
   const { aviso } = await searchParams;
 
@@ -27,9 +28,11 @@ export default async function Inicio({ searchParams }: PageProps<"/">) {
         <p className="aviso aviso-ok" role="status">Sucursal creada. No se asignó a nadie, por eso no aparece en tu lista.</p>
       ) : null}
 
-      {administra.crear || administra.editar || administra.asignar || administra.restablecer ? (
+      {administra.crear || administra.editar || administra.asignar || administra.restablecer || reporteCaja.n ? (
         <p className="fila-acciones">
-          <Link className="boton" href="/usuarios" data-testid="ir-usuarios">Usuarios, roles y permisos</Link>
+          {administra.crear || administra.editar || administra.asignar || administra.restablecer
+            ? <Link className="boton" href="/usuarios" data-testid="ir-usuarios">Usuarios, roles y permisos</Link> : null}
+          {reporteCaja.n ? <Link className="boton" href="/reportes/caja" data-testid="ir-reporte-caja">Reporte de caja</Link> : null}
         </p>
       ) : null}
 
