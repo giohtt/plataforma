@@ -14,6 +14,9 @@ export const metadata = { title: "Caja de sobres · Fitnessland" };
 const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
 const firmado = (v: string) => { const c = Math.round(Number(v) * 100); return (c < 0 ? "−" : c > 0 ? "+" : "") + pesos.format(Math.abs(c) / 100); };
 const hora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
+const fecha = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium" });
+/** Fecha sin hora (aaaa-mm-dd) en el mismo formato que las demás: «21 nov 2026». */
+const dia = (f: string) => fecha.format(new Date(`${f}T12:00:00Z`));
 const LUGAR = { bolsa_visitas: "Bolsa de visitas", cajon_mensualidades: "Cajón de mensualidades" } as const;
 const MOMENTO = { cierre: "al cerrar", apertura: "al abrir", cambio_turno: "en el cambio de turno", devolucion: "al recibir una devolución" } as const;
 const ESTADO_DIF = {
@@ -100,6 +103,7 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
   const esRecibe = p.pendiente?.recibeId === sesion.usuarioId;
   const esEntrega = p.pendiente?.entregaPorId === sesion.usuarioId;
   const b = p.buzon;
+  const trasladados = new Set(p.traslados.flatMap((t) => t.folios));
   return (
     <main className="contenedor contenedor-medio">
       <p className="sub"><Link href={`/sucursales/${codigo}`}>← {p.sucursal}</Link></p>
@@ -151,7 +155,7 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
                   <td data-etiqueta="Días">{s.dias}</td>
                   {p.caja.some((x) => x.importe) ? <td data-etiqueta="Anotado">{s.importe ? pesos.format(Number(s.importe)) : "—"}</td> : null}
                   <td data-etiqueta="Estado">
-                    {b ? "Registrado como depositado" : "En la caja"}
+                    {b ? (trasladados.has(s.folio) ? "Trasladado de la caja anterior" : "Registrado como depositado") : "En la caja"}
                     {s.aviso ? <strong className="campo-error" data-testid={`aviso-${s.folio}`}> · aviso: {p.diasAviso} días o más</strong> : null}
                   </td>
                 </tr>
@@ -164,9 +168,11 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
       {b && (p.porTrasladar.length || p.traslados.length) ? (
         <section className="tarjeta" aria-labelledby="t-trasladar" data-testid="por-trasladar">
           <h2 id="t-trasladar" className="titulo-seccion">En la caja anterior, por trasladar al buzón ({p.porTrasladar.length})</h2>
-          <p className="sub">
-            Sobres guardados antes del buzón. Siguen en la caja anterior hasta que se registre su traslado físico al buzón (quién, cuándo
-            y qué folios); guardar la configuración no los da por trasladados. Dirección no los recoge del buzón mientras tanto.
+          <p className="sub" data-testid="texto-trasladar">
+            {p.porTrasladar.length
+              ? <>Sobres guardados antes del buzón. Siguen en la caja anterior hasta que se registre su traslado físico al buzón (quién, cuándo
+                  y qué folios); guardar la configuración no los da por trasladados. Dirección no los recoge del buzón mientras tanto.</>
+              : <>Ya no queda ningún sobre en la caja anterior. Abajo queda la constancia de cada traslado: quién, cuándo y qué folios.</>}
           </p>
           {p.porTrasladar.length ? (
             <ul className="lista-simple">
@@ -298,7 +304,7 @@ export default async function Recoleccion({ params, searchParams }: PageProps<"/
               </table>
               {r.depositos.length ? (
                 <ul className="lista-simple" data-testid="depositos">
-                  {r.depositos.map((d, i) => <li key={i}>{d.fecha} · {pesos.format(Number(d.importe))} · ref. {d.referencia} · registró {d.por}</li>)}
+                  {r.depositos.map((d, i) => <li key={i}>{dia(d.fecha)} · {pesos.format(Number(d.importe))} · ref. {d.referencia} · registró {d.por}</li>)}
                 </ul>
               ) : null}
               {r.recibeId === sesion.usuarioId && Number(r.saldo) > 0 ? <FormularioDeposito codigo={codigo} recoleccionId={r.id} saldo={r.saldo} hoy={hoy} /> : null}

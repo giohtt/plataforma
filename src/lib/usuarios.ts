@@ -339,6 +339,8 @@ const ACCIONES: Record<string, string> = {
   autorrevision: "Autorizó revisar lo propio", renovar_autorrevision: "Renovó la autorización para revisar lo propio",
   terminar_autorrevision: "Terminó la autorización para revisar lo propio", establecer_contrasena: "Fijó su contraseña",
   otorgar_alcance_general: "Dio un perfil en todas las sucursales", asignar: "Dio un perfil", crear: "Creó la cuenta",
+  // Acciones que registraron los datos de prueba antes de esta sección.
+  asignar_perfil: "Dio un perfil", otorgar_facultad: "Dio un permiso",
 };
 export async function historialAccesos(db: Sql | Tx, personaId: string | null = null, limite = 200): Promise<EntradaHistorial[]> {
   const filas = await db<{ id: string; en: Date; por: string | null; persona: string | null; accion: string; cambios: Record<string, unknown>; motivo: string | null }[]>`

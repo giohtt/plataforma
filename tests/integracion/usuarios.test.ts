@@ -31,6 +31,14 @@ describe.skipIf(!URL_ADMIN)("usuarios, roles y permisos", () => {
   });
   afterAll(async () => cerrar?.());
 
+  it("el historial traduce también las acciones que registraron los datos de prueba (sin claves internas)", async () => {
+    const h = await historialAccesos(sql, null, 1000);
+    const acciones = new Set(h.map((x) => x.accion));
+    expect(acciones).toContain("Dio un perfil");
+    expect(acciones).toContain("Dio un permiso");
+    for (const a of acciones) expect(a).not.toMatch(/^[a-z_]+$/);
+  });
+
   it("solo quien administra accesos (con alcance en todas) entra a la sección", async () => {
     expect(await pantallaPersonas(sql, u["recepcion.tenango"], )).toBeNull();
     expect(await pantallaPersonas(sql, u["administracion"])).toBeNull();

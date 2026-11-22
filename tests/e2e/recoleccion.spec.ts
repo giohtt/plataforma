@@ -171,6 +171,10 @@ test("buzón: sobres depositados al cerrar, apertura con solo los fondos, cambio
   await page.getByRole("button", { name: "Registrar el depósito" }).click();
   await expect(page.getByTestId("depositado")).toHaveText("$500.00");
   await expect(page.getByTestId("saldo")).toContainText("$350.00");
+  // La fecha del depósito se muestra como las demás («21 nov 2026»), no como aaaa-mm-dd.
+  const hoyTexto = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium" }).format(new Date());
+  await expect(page.getByTestId("depositos")).toContainText(`${hoyTexto} · $500.00 · ref. DEP-FICTICIO-001`);
+  await expect(page.getByTestId("depositos")).not.toContainText(/\d{4}-\d{2}-\d{2}/);
   await capturar(page, "buzon-investigar");
 
   // Administración (no participó) revisa la diferencia con la cadena completa.
@@ -308,7 +312,8 @@ test("buzón: los sobres de la caja anterior se trasladan con registro (quién, 
   await expect(page.getByTestId("traslados")).toContainText(`trasladó ${e.sofia.nombre} · ${bolsa}`);
   await expect(page.getByTestId(`por-trasladar-${cajon}`)).toBeVisible();
   await expect(page.getByTestId(`por-trasladar-${bolsa}`)).toHaveCount(0);
-  await expect(page.getByTestId(`caja-${bolsa}`)).toContainText("Registrado como depositado");
+  await expect(page.getByTestId(`caja-${bolsa}`)).toContainText("Trasladado de la caja anterior");
+  await expect(page.getByTestId("texto-trasladar")).toContainText("Dirección no los recoge del buzón mientras tanto");
 
   // Dirección recoge del buzón solo lo trasladado, sin ver lo anotado.
   await entrar(page, e.dir.correo);
@@ -323,4 +328,16 @@ test("buzón: los sobres de la caja anterior se trasladan con registro (quién, 
   await expect(page.getByTestId("saldo")).toContainText("$900.00");
   await expect(page.getByTestId(`por-trasladar-${cajon}`)).toBeVisible();
   await expect(page.getByTestId("investigaciones")).toHaveCount(0);
+
+  // Sofía traslada el último: ya no queda nada en la caja anterior y el aviso de «mientras tanto» desaparece.
+  await entrar(page, e.sofia.correo);
+  await page.goto(`/sucursales/${e.codigo}/recoleccion`);
+  await page.getByTestId(`trasladar-${cajon}`).getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Registrar el traslado al buzón" }).click();
+  await expect(page.getByTestId("traslados")).toContainText(`trasladó ${e.sofia.nombre} · ${cajon}`);
+  await expect(page.getByTestId("por-trasladar")).toContainText("por trasladar al buzón (0)");
+  await expect(page.getByTestId("texto-trasladar")).toContainText("Ya no queda ningún sobre en la caja anterior");
+  await expect(page.getByTestId("texto-trasladar")).not.toContainText("mientras tanto");
+  await expect(page.getByTestId(`caja-${cajon}`)).toContainText("Trasladado de la caja anterior");
+  await capturar(page, "buzon-traslado-completo");
 });
