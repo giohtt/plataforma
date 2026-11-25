@@ -30,7 +30,7 @@ export default async function DetalleCaja({ searchParams }: PageProps<"/reportes
 
   return (
     <main className="contenedor contenedor-medio">
-      <p className="sub"><Link href={volver}>← Reporte de caja · {p.sucursal.nombre} · {fecha(p.desde)} al {fecha(p.hasta)} · corte {hora.format(p.corte)}</Link></p>
+      <p className="sub"><Link href={volver}>← Caja y depósitos · {p.sucursal.nombre} · {fecha(p.desde)} al {fecha(p.hasta)} · corte {hora.format(p.corte)}</Link></p>
       <h1 className="cabecera-titulo">{d.titulo}{d.anterior ? <> <span className="marca-anterior">Anterior al periodo</span></> : null}</h1>
       <p className="sub">{d.subtitulo} · Solo datos ficticios.</p>
       <div className="franja-corte" data-testid="corte-detalle">

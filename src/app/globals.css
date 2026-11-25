@@ -986,9 +986,14 @@ td.mono {
 }
 .total-caja {
   display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+}
+.total-caja > div {
+  flex: 1 1 280px;
 }
 .total-caja .cifra-grande {
   white-space: nowrap;
@@ -1018,4 +1023,91 @@ td.mono {
 .texto-incompleto {
   color: var(--warn);
   font-weight: 600;
+}
+
+/* --- Caja y depósitos (rediseño del 25 nov 2026) --- */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 10px 0;
+}
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.kpi-fuera {
+  background: var(--surface-2);
+  border-style: dashed;
+}
+.kpi-etiqueta {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.kpi-cifra {
+  font-size: 24px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-cifra .importe-oculto {
+  font-size: 20px;
+}
+.kpi-nota {
+  font-size: 13px;
+  color: var(--muted);
+}
+.atencion {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+.atencion-caso {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid #f0d49e;
+  background: var(--warn-soft);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.atencion-caso b {
+  font-size: 22px;
+}
+.atencion-ok {
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+.pestanas-caja {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.pestanas-caja a {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+}
+.pestanas-caja a.sel {
+  background: var(--demo-bg);
+  color: var(--demo-fg);
+}
+.fila-aparte td {
+  background: #fff8ea;
+}
+.atajos {
+  margin-top: -4px;
+}
+.sin-corte {
+  white-space: nowrap;
 }

@@ -63,14 +63,40 @@ export type Confirmado =
   | { clase: "retiro"; id: string; folio: string; lugar: TipoLugar; encargada: string; desde: Date; habilitado: string; depositado: string; saldo: string; aviso: boolean; anterior: boolean }
   | { clase: "retiro_pausa"; id: string; folio: string; lugar: TipoLugar; encargada: string; desde: Date; saldo: string; anterior: boolean };
 export type Deposito = { clase: "recoleccion" | "retiro"; origenId: string; folio: string | null; por: string; en: Date; fecha: string; referencia: string; importe: string };
+type Dif = Omit<Diferencia, "clave" | "referencia">;
 export type Diferencia = {
   clase: "turno" | "retiro_esperado" | "retiro_importe" | "sobre";
   id: string;
   /** A qué detalle lleva (siempre con el mismo corte): el sobre, el retiro o el caso de la entrega del turno. */
   enlace: { tipo: "sobre" | "retiro" | "diferencia"; id: string };
   texto: string; lugar: TipoLugar; importe: string; estado: string; abierta: boolean; anterior: boolean; registradaEn: Date;
-  /** Entra en el neto de referencia (las diferencias «entre ambas personas» no son dinero faltante ni sobrante). */
+  /**
+   * Entra en el neto de referencia del periodo (las diferencias «entre ambas personas» no son dinero faltante ni
+   * sobrante, y las anteriores ya cerradas que solo se listan por su origen tampoco).
+   */
   neto: boolean;
+  /** Clave dentro de la sucursal (D-1, D-2…, por fecha de registro) para ligarla con su origen sin repetir importes. */
+  clave: string;
+  /** Origen del dinero al que pertenece (retiro o recolección), si lo tiene. */
+  origen: { clase: "retiro" | "recoleccion"; id: string } | null;
+  /** Anterior al periodo y ya cerrada al corte: se lista solo porque su origen aparece en «Origen y destino». */
+  referencia: boolean;
+  /** De qué paso viene (cambio de turno, cierre, apertura, retiro, sobre en recolección). */
+  tipoTexto: string;
+  folio: string | null;
+};
+/**
+ * De dónde salió y a dónde fue el dinero confirmado: cada origen (recolección o retiro) con lo anotado o registrado, su
+ * diferencia, lo contado y cómo se repartió lo contado al corte: depositado antes del periodo, depositado durante el
+ * periodo y saldo al corte (contado = antes + durante + saldo). Solo los orígenes con depósitos durante el periodo o con
+ * saldo al corte.
+ */
+export type OrigenDestino = {
+  clase: "recoleccion" | "retiro"; id: string; texto: string; folios: string[]; persona: string; desde: Date; anterior: boolean;
+  /** Retiro en pausa por revisión: aún no se deposita. */
+  pausa: boolean;
+  registrado: string; diferencia: string; claves: string[]; contado: string; antes: string; durante: string; saldo: string;
+  depositos: { en: Date; fecha: string; referencia: string; importe: string; antes: boolean }[];
 };
 /** Entrada al fondo (aumento o reposición) registrada y aún no confirmada al corte: no se suma a nada hasta recibirse. */
 export type EntradaPendiente = {
@@ -100,6 +126,8 @@ export type CajaSucursal = {
   diferencias: Diferencia[]; investigar: PorInvestigar[]; movimientos: Movimientos;
   /** Entradas al fondo pendientes de confirmar al corte (aparte: no se suman). */
   entradas: EntradaPendiente[];
+  /** Origen y destino del dinero confirmado (depositado antes, durante y saldo al corte). */
+  origenes: OrigenDestino[];
   /** Suma de lo visible en las etapas 1 a 4. Con importes ocultos o lugares sin datos es un subtotal. */
   visible: string;
   ocultos: number;
@@ -116,6 +144,14 @@ export type ReporteCaja = {
   filas: CajaSucursal[];
   generadoEn: Date;
 };
+
+/**
+ * El corte se conserva con milésimas de segundo (así viaja en los enlaces y así se ven las fechas en JavaScript), pero la
+ * base guarda microsegundos. En la base se compara «hasta el final de esa milésima»: lo que la base pone antes del corte
+ * es exactamente lo que JavaScript, con sus fechas en milésimas, también ve antes o en el corte. Viaja como texto
+ * (`::text::timestamptz`): como fecha, el cliente la recortaría otra vez a milésimas.
+ */
+const hastaElCorte = (corte: Date) => corte.toISOString().replace(/Z$/, "999Z");
 
 /** Fecha y hora válidas del corte pedido, o null. */
 function leerCorte(v: string | undefined): Date | null {
@@ -138,20 +174,21 @@ async function ventana(tx: Tx, filtros: { desde?: string; hasta?: string; corte?
 }
 
 async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codigo: string; nombre: string }, inicio: Date, corte: Date): Promise<CajaSucursal> {
+  const corteBd = hastaElCorte(corte);
   const [{ recogedor }] = await tx<{ recogedor: boolean }[]>`select tiene_permiso(${usuarioId}, 'sobre.recoger', ${s.id}) as recogedor`;
   const anterior = (d: Date) => d < inicio;
 
   // 1. Bolsa y cajón al corte.
   const lugares: Lugar[] = [];
   const [t] = await tx<{ id: string; cerrado_en: Date | null }[]>`
-    select id, cerrado_en from turno where sucursal_id = ${s.id} and abierto_en <= ${corte} order by abierto_en desc limit 1`;
+    select id, cerrado_en from turno where sucursal_id = ${s.id} and abierto_en <= ${corteBd}::text::timestamptz order by abierto_en desc limit 1`;
   if (t && (t.cerrado_en === null || t.cerrado_en > corte)) {
     const filas = await tx<{ lugar_id: string; tipo: TipoLugar; base: string; en: Date; por: string; movimientos: string; cuantos: number; responsable: string | null }[]>`
       select l.id as lugar_id, l.tipo, c.importe::text as base, c.en, u.nombre as por,
-             coalesce((select sum(me.importe) from movimiento_efectivo me where me.turno_id = ${t.id} and me.lugar_id = l.id and me.en <= ${corte}), 0)::numeric(12, 2)::text as movimientos,
-             (select count(*)::int from movimiento_efectivo me where me.turno_id = ${t.id} and me.lugar_id = l.id and me.en <= ${corte}) as cuantos,
+             coalesce((select sum(me.importe) from movimiento_efectivo me where me.turno_id = ${t.id} and me.lugar_id = l.id and me.en <= ${corteBd}::text::timestamptz), 0)::numeric(12, 2)::text as movimientos,
+             (select count(*)::int from movimiento_efectivo me where me.turno_id = ${t.id} and me.lugar_id = l.id and me.en <= ${corteBd}::text::timestamptz) as cuantos,
              (select x.nombre from responsable_lugar r join usuario x on x.id = r.usuario_id
-              where r.turno_id = ${t.id} and r.lugar_id = l.id and r.desde <= ${corte} and (r.hasta is null or r.hasta > ${corte})
+              where r.turno_id = ${t.id} and r.lugar_id = l.id and r.desde <= ${corteBd}::text::timestamptz and (r.hasta is null or r.hasta > ${corteBd}::text::timestamptz)
               order by r.desde desc limit 1) as responsable
       from lugar_efectivo l join conteo_efectivo c on c.lugar_id = l.id and c.turno_id = ${t.id} and c.momento = 'apertura'
       join usuario u on u.id = c.contado_por
@@ -166,7 +203,7 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
       from entrega_turno e join entrega_conteo ec on ec.entrega_id = e.id and ec.tipo = 'entregado'
       join lugar_efectivo l on l.id = ec.lugar_id join usuario u on u.id = ec.contado_por
       where e.id = (select e2.id from entrega_turno e2 where e2.turno_id = ${t.id} and e2.tipo = 'cierre' and e2.estado <> 'cancelada'
-                    and e2.creada_en <= ${corte} order by e2.creada_en desc limit 1)
+                    and e2.creada_en <= ${corteBd}::text::timestamptz order by e2.creada_en desc limit 1)
       order by case l.tipo when 'bolsa_visitas' then 0 else 1 end`;
     for (const f of filas) {
       lugares.push({ lugarId: f.lugar_id, tipo: f.tipo, estado: "cerrado", importe: f.importe,
@@ -183,22 +220,22 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
   // 2. Sobres sellados al corte que aún no se recogían, no estaban entregados ni por investigar.
   const sobresFilas = await tx<{ id: string; folio: string; lugar: TipoLugar; guardado_en: Date; cerro: string; importe: string; en_buzon: boolean; por_devolver: boolean; contado_ya: boolean; dias: number }[]>`
     select s.id, s.folio, l.tipo as lugar, s.resuelto_en as guardado_en, u.nombre as cerro, s.importe::text as importe,
-           (exists (select 1 from sobre_depositado d where d.sobre_id = s.id and d.en <= ${corte})
-            or exists (select 1 from traslado_sobre x join traslado_buzon tb on tb.id = x.traslado_id where x.sobre_id = s.id and tb.en <= ${corte})) as en_buzon,
+           (exists (select 1 from sobre_depositado d where d.sobre_id = s.id and d.en <= ${corteBd}::text::timestamptz)
+            or exists (select 1 from traslado_sobre x join traslado_buzon tb on tb.id = x.traslado_id where x.sobre_id = s.id and tb.en <= ${corteBd}::text::timestamptz)) as en_buzon,
            exists (select 1 from recoleccion r join recoleccion_sobre x on x.recoleccion_id = r.id
-                   where x.sobre_id = s.id and r.estado = 'cancelada' and r.resuelta_en <= ${corte}
+                   where x.sobre_id = s.id and r.estado = 'cancelada' and r.resuelta_en <= ${corteBd}::text::timestamptz
                      and not exists (select 1 from devolucion_sobre ds join devolucion_recoleccion dr on dr.id = ds.devolucion_id
-                                     where ds.sobre_id = s.id and ds.recoleccion_id = r.id and dr.en <= ${corte})) as por_devolver,
+                                     where ds.sobre_id = s.id and ds.recoleccion_id = r.id and dr.en <= ${corteBd}::text::timestamptz)) as por_devolver,
            exists (select 1 from recoleccion r join recoleccion_sobre x on x.recoleccion_id = r.id
                    where x.sobre_id = s.id and r.estado = 'confirmada' and x.contado is not null) as contado_ya,
-           floor(extract(epoch from ${corte}::timestamptz - s.resuelto_en) / 86400)::int as dias
+           floor(extract(epoch from ${corteBd}::text::timestamptz - s.resuelto_en) / 86400)::int as dias
     from sobre_cierre s join lugar_efectivo l on l.id = s.lugar_id join entrega_turno e on e.id = s.entrega_id join usuario u on u.id = e.entrega_por
-    where s.sucursal_id = ${s.id} and s.importe is not null and s.estado in ('usado', 'recogido') and s.resuelto_en <= ${corte}
+    where s.sucursal_id = ${s.id} and s.importe is not null and s.estado in ('usado', 'recogido') and s.resuelto_en <= ${corteBd}::text::timestamptz
       and not exists (select 1 from recoleccion r join recoleccion_sobre x on x.recoleccion_id = r.id
-                      where x.sobre_id = s.id and r.estado = 'confirmada' and r.resuelta_en <= ${corte} and x.contado is not null)
-      and not exists (select 1 from investigacion_sobre i where i.sobre_id = s.id and i.creada_en <= ${corte})
+                      where x.sobre_id = s.id and r.estado = 'confirmada' and r.resuelta_en <= ${corteBd}::text::timestamptz and x.contado is not null)
+      and not exists (select 1 from investigacion_sobre i where i.sobre_id = s.id and i.creada_en <= ${corteBd}::text::timestamptz)
       and not exists (select 1 from recoleccion r join recoleccion_sobre x on x.recoleccion_id = r.id
-                      where x.sobre_id = s.id and r.creada_en <= ${corte} and (r.resuelta_en is null or r.resuelta_en > ${corte}))
+                      where x.sobre_id = s.id and r.creada_en <= ${corteBd}::text::timestamptz and (r.resuelta_en is null or r.resuelta_en > ${corteBd}::text::timestamptz))
     order by s.resuelto_en, s.folio`;
   const sobres: SobrePorRecoger[] = sobresFilas.map((f) => {
     const oculto = recogedor && !f.contado_ya;
@@ -213,18 +250,18 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
   }[]>`
     select r.id, r.folio, l.tipo as lugar, r.importe::text as importe, r.entregado_en, r.encargada_id, a.nombre as entrego, b.nombre as encargada, r.estado,
            r.habilitado_en, r.reportado_en, r.monto_habilitado::text as monto_habilitado, r.discrepancia,
-           (select c.importe::text from retiro_conteo c where c.retiro_id = r.id and c.en <= ${corte} order by (c.tipo = 'recuento') desc, c.en desc limit 1) as contado,
-           coalesce((select sum(d.importe) from deposito_retiro d where d.retiro_id = r.id and d.en <= ${corte}
-                     and not exists (select 1 from deposito_retiro c where c.corrige_id = d.id and c.en <= ${corte})), 0)::numeric(12, 2)::text as depositado,
-           (select v.resultado from retiro_revision v where v.retiro_id = r.id and v.en <= ${corte}) as revision
+           (select c.importe::text from retiro_conteo c where c.retiro_id = r.id and c.en <= ${corteBd}::text::timestamptz order by (c.tipo = 'recuento') desc, c.en desc limit 1) as contado,
+           coalesce((select sum(d.importe) from deposito_retiro d where d.retiro_id = r.id and d.en <= ${corteBd}::text::timestamptz
+                     and not exists (select 1 from deposito_retiro c where c.corrige_id = d.id and c.en <= ${corteBd}::text::timestamptz)), 0)::numeric(12, 2)::text as depositado,
+           (select v.resultado from retiro_revision v where v.retiro_id = r.id and v.en <= ${corteBd}::text::timestamptz) as revision
     from retiro r join lugar_efectivo l on l.id = r.lugar_id join usuario a on a.id = r.entregado_por join usuario b on b.id = r.encargada_id
-    where r.sucursal_id = ${s.id} and r.entregado_en <= ${corte}
+    where r.sucursal_id = ${s.id} and r.entregado_en <= ${corteBd}::text::timestamptz
     order by r.entregado_en`;
 
   // 3. Entregado, pendiente de confirmar.
   const pendientes: Pendiente[] = [];
   const confirmados: Confirmado[] = [];
-  const diferencias: Diferencia[] = [];
+  const diferencias: Dif[] = [];
   for (const r of retiros) {
     const confirmacion = [r.habilitado_en, r.reportado_en].filter((x): x is Date => !!x).sort((a, b) => a.getTime() - b.getTime())[0];
     if (!confirmacion || confirmacion > corte) {
@@ -249,7 +286,8 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
       diferencias.push({ clase: "retiro_importe", id: r.id, enlace: { tipo: "retiro", id: r.id },
                          texto: `Retiro ${r.folio} · registrado ${dinero(r.importe)} · contado ${dinero(r.contado)}`, lugar: r.lugar,
                          importe: pesos(cent(r.contado) - cent(r.importe)), estado: abierta ? "Por revisar" : RESULTADO[r.revision!] ?? r.revision!,
-                         abierta, anterior: anterior(r.reportado_en), registradaEn: r.reportado_en, neto: true });
+                         abierta, anterior: anterior(r.reportado_en), registradaEn: r.reportado_en, neto: true,
+                         origen: { clase: "retiro", id: r.id }, tipoTexto: "Retiro", folio: r.folio });
     }
   }
   const entregasSobres = await tx<{ id: string; creada_en: Date; entrego: string; recibe: string; folios: string[]; importe: string; confirmada_ya: boolean }[]>`
@@ -257,7 +295,7 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
            sum(s.importe)::numeric(12, 2)::text as importe, r.estado = 'confirmada' as confirmada_ya
     from recoleccion r join recoleccion_sobre x on x.recoleccion_id = r.id join sobre_cierre s on s.id = x.sobre_id
     join usuario a on a.id = r.entrega_por join usuario b on b.id = r.recibe
-    where r.sucursal_id = ${s.id} and not r.buzon and r.creada_en <= ${corte} and (r.resuelta_en is null or r.resuelta_en > ${corte})
+    where r.sucursal_id = ${s.id} and not r.buzon and r.creada_en <= ${corteBd}::text::timestamptz and (r.resuelta_en is null or r.resuelta_en > ${corteBd}::text::timestamptz)
     group by r.id, a.nombre, b.nombre order by r.creada_en`;
   for (const r of entregasSobres) {
     const oculto = recogedor && !r.confirmada_ya;
@@ -270,9 +308,9 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
   const recolecciones = await tx<{ id: string; resuelta_en: Date; buzon: boolean; recibe: string; recogido: string; depositado: string }[]>`
     select r.id, r.resuelta_en, r.buzon, u.nombre as recibe,
            coalesce((select sum(x.contado) from recoleccion_sobre x where x.recoleccion_id = r.id), 0)::numeric(12, 2)::text as recogido,
-           coalesce((select sum(d.importe) from deposito_recoleccion d where d.recoleccion_id = r.id and d.en <= ${corte}), 0)::numeric(12, 2)::text as depositado
+           coalesce((select sum(d.importe) from deposito_recoleccion d where d.recoleccion_id = r.id and d.en <= ${corteBd}::text::timestamptz), 0)::numeric(12, 2)::text as depositado
     from recoleccion r join usuario u on u.id = r.recibe
-    where r.sucursal_id = ${s.id} and r.estado = 'confirmada' and r.resuelta_en <= ${corte}
+    where r.sucursal_id = ${s.id} and r.estado = 'confirmada' and r.resuelta_en <= ${corteBd}::text::timestamptz
     order by r.resuelta_en`;
   for (const r of recolecciones) {
     const saldo = cent(r.recogido) - cent(r.depositado);
@@ -282,72 +320,139 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
     }
   }
 
-  // 5. Depósitos registrados dentro del periodo.
-  const depositos = [...(await tx<Deposito[]>`
+  // Depósitos vigentes hasta el corte (un depósito corregido se sustituye por su corrección). Los del periodo son la etapa 5;
+  // los anteriores solo sirven para «Origen y destino».
+  const todosDepositos = [...(await tx<Deposito[]>`
     select 'recoleccion' as clase, d.recoleccion_id as "origenId", null::text as folio, u.nombre as por, d.en, d.fecha::text as fecha, d.referencia, d.importe::text as importe
     from deposito_recoleccion d join recoleccion r on r.id = d.recoleccion_id join usuario u on u.id = d.registrado_por
-    where r.sucursal_id = ${s.id} and d.en >= ${inicio} and d.en <= ${corte}
+    where r.sucursal_id = ${s.id} and d.en <= ${corteBd}::text::timestamptz
     union all
     select 'retiro', d.retiro_id, r.folio, u.nombre, d.en, (d.depositado_en at time zone ${ZONA})::date::text, d.referencia, d.importe::text
     from deposito_retiro d join retiro r on r.id = d.retiro_id join usuario u on u.id = d.registrado_por
-    where r.sucursal_id = ${s.id} and d.en >= ${inicio} and d.en <= ${corte}
-      and not exists (select 1 from deposito_retiro c where c.corrige_id = d.id and c.en <= ${corte})
+    where r.sucursal_id = ${s.id} and d.en <= ${corteBd}::text::timestamptz
+      and not exists (select 1 from deposito_retiro c where c.corrige_id = d.id and c.en <= ${corteBd}::text::timestamptz)
     order by 5`)];
+  const depositos = todosDepositos.filter((d) => d.en >= inicio && cent(d.importe) > 0);
+
+  // Origen y destino: cada recolección o retiro confirmado al corte con depósitos en el periodo o saldo al corte.
+  const sobresRecogidos = await tx<{ recoleccion_id: string; folio: string; anotado: string; contado: string | null }[]>`
+    select x.recoleccion_id, s.folio, s.importe::text as anotado, x.contado::text as contado
+    from recoleccion_sobre x join sobre_cierre s on s.id = x.sobre_id join recoleccion r on r.id = x.recoleccion_id
+    where r.sucursal_id = ${s.id} and r.estado = 'confirmada' and r.resuelta_en <= ${corteBd}::text::timestamptz
+    order by s.resuelto_en, s.folio`;
+  const origenes: OrigenDestino[] = [];
+  const repartir = (clase: "recoleccion" | "retiro", id: string, contado: number) => {
+    const deps = todosDepositos.filter((d) => d.clase === clase && d.origenId === id && cent(d.importe) > 0)
+      .map((d) => ({ en: d.en, fecha: d.fecha, referencia: d.referencia, importe: d.importe, antes: d.en < inicio }));
+    const antes = deps.filter((d) => d.antes).reduce((n, d) => n + cent(d.importe), 0);
+    const durante = deps.filter((d) => !d.antes).reduce((n, d) => n + cent(d.importe), 0);
+    return { deps, antes, durante, saldo: contado - antes - durante };
+  };
+  for (const r of recolecciones) {
+    const suyos = sobresRecogidos.filter((x) => x.recoleccion_id === r.id && x.contado !== null);
+    const anotado = suyos.reduce((n, x) => n + cent(x.anotado), 0);
+    const contado = cent(r.recogido);
+    const { deps, antes, durante, saldo } = repartir("recoleccion", r.id, contado);
+    if (durante <= 0 && saldo <= 0) continue;
+    origenes.push({
+      clase: "recoleccion", id: r.id, texto: `${r.buzon ? "Recolección del buzón" : "Recolección de sobres"} · ${dia(r.resuelta_en)} · ${r.recibe}`,
+      folios: suyos.map((x) => x.folio), persona: r.recibe, desde: r.resuelta_en, anterior: anterior(r.resuelta_en), pausa: false,
+      registrado: pesos(anotado), diferencia: pesos(contado - anotado), claves: [], contado: pesos(contado), antes: pesos(antes), durante: pesos(durante),
+      saldo: pesos(saldo), depositos: deps,
+    });
+  }
+  for (const x of confirmados) {
+    if (x.clase === "recoleccion") continue;
+    const r = retiros.find((y) => y.id === x.id)!;
+    const contado = cent(x.clase === "retiro" ? x.habilitado : x.saldo);
+    const { deps, antes, durante, saldo } = repartir("retiro", r.id, contado);
+    origenes.push({
+      clase: "retiro", id: r.id, texto: `Retiro ${r.folio} · ${r.encargada}`, folios: [r.folio], persona: r.encargada, desde: x.desde,
+      anterior: anterior(r.entregado_en), pausa: x.clase === "retiro_pausa", registrado: r.importe, diferencia: pesos(contado - cent(r.importe)), claves: [],
+      contado: pesos(contado), antes: pesos(antes), durante: pesos(durante), saldo: pesos(saldo), depositos: deps,
+    });
+  }
+  // Retiros ya depositados por completo al corte, pero con depósitos dentro del periodo.
+  for (const r of retiros) {
+    if (origenes.some((o) => o.clase === "retiro" && o.id === r.id) || !r.habilitado_en || r.habilitado_en > corte) continue;
+    const contado = cent(r.monto_habilitado);
+    const { deps, antes, durante, saldo } = repartir("retiro", r.id, contado);
+    if (durante <= 0) continue;
+    origenes.push({
+      clase: "retiro", id: r.id, texto: `Retiro ${r.folio} · ${r.encargada}`, folios: [r.folio], persona: r.encargada, desde: r.habilitado_en,
+      anterior: anterior(r.entregado_en), pausa: false, registrado: r.importe, diferencia: pesos(contado - cent(r.importe)), claves: [],
+      contado: pesos(contado), antes: pesos(antes), durante: pesos(durante), saldo: pesos(saldo), depositos: deps,
+    });
+  }
+  origenes.sort((a, b) => a.desde.getTime() - b.desde.getTime());
 
   // Aparte: diferencias (del periodo, más las anteriores que siguen abiertas al corte).
   const difTurno = await tx<{ id: string; entrega_id: string; entrega_tipo: string; entrega_en: Date; tipo: string; importe: string; registrada_en: Date; lugar: TipoLugar;
                                revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null }[]>`
     select d.id, d.entrega_id, e.tipo as entrega_tipo, e.creada_en as entrega_en, d.tipo, d.importe::text as importe, d.registrada_en, l.tipo as lugar,
-           (select v.resultado from revision_diferencia v where v.diferencia_id = d.id and v.en <= ${corte}) as revision,
-           x.decision, x.requiere_correccion as requiere, x.correccion_en <= ${corte} as corregida
+           (select v.resultado from revision_diferencia v where v.diferencia_id = d.id and v.en <= ${corteBd}::text::timestamptz) as revision,
+           x.decision, x.requiere_correccion as requiere, x.correccion_en <= ${corteBd}::text::timestamptz as corregida
     from diferencia_efectivo d join entrega_turno e on e.id = d.entrega_id join lugar_efectivo l on l.id = d.lugar_id
-    left join resolucion_diferencia x on x.diferencia_id = d.id and x.en <= ${corte}
-    where l.sucursal_id = ${s.id} and d.registrada_en <= ${corte}
+    left join resolucion_diferencia x on x.diferencia_id = d.id and x.en <= ${corteBd}::text::timestamptz
+    where l.sucursal_id = ${s.id} and d.registrada_en <= ${corteBd}::text::timestamptz
     order by d.registrada_en`;
   for (const d of difTurno) {
     const { estado, abierta } = estadoDiferencia(d);
     diferencias.push({ clase: "turno", id: d.id, enlace: { tipo: "diferencia", id: d.id }, texto: textoDiferencia(d),
-                       lugar: d.lugar, importe: d.importe, estado, abierta, anterior: anterior(d.registrada_en), registradaEn: d.registrada_en, neto: d.tipo === "contra_esperado" });
+                       lugar: d.lugar, importe: d.importe, estado, abierta, anterior: anterior(d.registrada_en), registradaEn: d.registrada_en, neto: d.tipo === "contra_esperado",
+                       origen: null, tipoTexto: tipoDiferencia(d), folio: null });
   }
   // Diferencias contra el esperado al retirar: mientras no se vinculan a la del cambio de turno (después ya están ahí).
   for (const d of await tx<{ id: string; retiro_id: string; folio: string; lugar: TipoLugar; importe: string; registrada_en: Date }[]>`
     select x.id, x.retiro_id, r.folio, l.tipo as lugar, x.importe::text as importe, x.registrada_en
     from diferencia_retiro x join retiro r on r.id = x.retiro_id join lugar_efectivo l on l.id = x.lugar_id
-    where r.sucursal_id = ${s.id} and x.registrada_en <= ${corte}
-      and not exists (select 1 from diferencia_retiro_entrega v where v.diferencia_retiro_id = x.id and v.en <= ${corte})
+    where r.sucursal_id = ${s.id} and x.registrada_en <= ${corteBd}::text::timestamptz
+      and not exists (select 1 from diferencia_retiro_entrega v where v.diferencia_retiro_id = x.id and v.en <= ${corteBd}::text::timestamptz)
     order by x.registrada_en`) {
     diferencias.push({ clase: "retiro_esperado", id: d.id, enlace: { tipo: "retiro", id: d.retiro_id }, texto: `Al retirar ${d.folio} · contra el esperado`,
                        lugar: d.lugar, importe: d.importe, estado: "Se revisa con la entrega del turno", abierta: true, anterior: anterior(d.registrada_en),
-                       registradaEn: d.registrada_en, neto: true });
+                       registradaEn: d.registrada_en, neto: true, origen: null, tipoTexto: "Al retirar (contra el esperado)", folio: d.folio });
   }
-  for (const d of await tx<{ id: string; sobre_id: string; folio: string; lugar: TipoLugar; importe: string; creada_en: Date; incidencia: boolean; revision: string | null; anotado: string; contado: string | null }[]>`
-    select ds.id, ds.sobre_id, s.folio, l.tipo as lugar, ds.importe::text as importe, ds.creada_en, ds.verificacion_id is not null as incidencia,
-           (select v.resultado from revision_diferencia_sobre v where v.diferencia_id = ds.id and v.en <= ${corte}) as revision,
+  for (const d of await tx<{ id: string; sobre_id: string; recoleccion_id: string; folio: string; lugar: TipoLugar; importe: string; creada_en: Date; incidencia: boolean; revision: string | null; anotado: string; contado: string | null }[]>`
+    select ds.id, ds.sobre_id, ds.recoleccion_id, s.folio, l.tipo as lugar, ds.importe::text as importe, ds.creada_en, ds.verificacion_id is not null as incidencia,
+           (select v.resultado from revision_diferencia_sobre v where v.diferencia_id = ds.id and v.en <= ${corteBd}::text::timestamptz) as revision,
            s.importe::text as anotado, (select x.contado::text from recoleccion_sobre x where x.recoleccion_id = ds.recoleccion_id and x.sobre_id = ds.sobre_id) as contado
     from diferencia_sobre ds join sobre_cierre s on s.id = ds.sobre_id join lugar_efectivo l on l.id = s.lugar_id
-    where s.sucursal_id = ${s.id} and ds.creada_en <= ${corte}
+    where s.sucursal_id = ${s.id} and ds.creada_en <= ${corteBd}::text::timestamptz
     order by ds.creada_en`) {
     const abierta = d.revision === null;
     const texto = `Sobre ${d.folio}${d.incidencia ? " · llegó abierto o con otro folio" : ""} · anotado ${dinero(d.anotado)}${d.contado ? ` · contado ${dinero(d.contado)}` : ""}`;
     diferencias.push({ clase: "sobre", id: d.id, enlace: { tipo: "sobre", id: d.sobre_id }, texto, lugar: d.lugar, importe: d.importe,
-                       estado: abierta ? "Por revisar" : RESULTADO[d.revision!] ?? d.revision!, abierta, anterior: anterior(d.creada_en), registradaEn: d.creada_en, neto: true });
+                       estado: abierta ? "Por revisar" : RESULTADO[d.revision!] ?? d.revision!, abierta, anterior: anterior(d.creada_en), registradaEn: d.creada_en, neto: true,
+                       origen: { clase: "recoleccion", id: d.recoleccion_id }, tipoTexto: "Sobre en recolección", folio: d.folio });
   }
-  const difVisibles = diferencias.filter((d) => !d.anterior || d.abierta).sort((a, b) => a.registradaEn.getTime() - b.registradaEn.getTime());
+  // Del periodo, las anteriores abiertas al corte y, solo como referencia, las anteriores ya cerradas de un origen que
+  // aparece en «Origen y destino» (no entran en el neto del periodo). Cada una con su clave D-1, D-2…
+  const enOrigen = (d: Dif) => !!d.origen && origenes.some((o) => o.clase === d.origen!.clase && o.id === d.origen!.id);
+  const difVisibles: Diferencia[] = diferencias.filter((d) => !d.anterior || d.abierta || enOrigen(d))
+    .sort((a, b) => a.registradaEn.getTime() - b.registradaEn.getTime())
+    .map((d, i) => {
+      const referencia = d.anterior && !d.abierta;
+      return { ...d, clave: `D-${i + 1}`, referencia, neto: d.neto && !referencia };
+    });
+  for (const o of origenes) {
+    o.claves = difVisibles.filter((d) => d.origen?.clase === o.clase && d.origen.id === o.id).map((d) => d.clave);
+  }
 
   // Aparte: sobres por investigar (registrados como depositados que no estaban al recoger). No se suman a nada.
   const investigar = (await tx<{ sobre_id: string; folio: string; lugar: TipoLugar; anotado: string; creada_en: Date; recoleccion_id: string }[]>`
     select i.sobre_id, s.folio, l.tipo as lugar, s.importe::text as anotado, i.creada_en, i.recoleccion_id
     from investigacion_sobre i join sobre_cierre s on s.id = i.sobre_id join lugar_efectivo l on l.id = s.lugar_id
-    where s.sucursal_id = ${s.id} and i.creada_en <= ${corte} order by i.creada_en`).map((f) => ({
+    where s.sucursal_id = ${s.id} and i.creada_en <= ${corteBd}::text::timestamptz order by i.creada_en`).map((f) => ({
     sobreId: f.sobre_id, folio: f.folio, lugar: f.lugar, anotado: f.anotado, desde: f.creada_en, recoleccionId: f.recoleccion_id, anterior: anterior(f.creada_en),
   }));
 
   // Aparte: entradas al fondo registradas y aún sin confirmar al corte. El dinero sigue con quien lo entrega.
   const entradas = (await tx<{ id: string; tipo: "aumento" | "reposicion"; lugar: TipoLugar; importe: string; origen: string; entrega: string; registro: string; en: Date; intentos: number }[]>`
     select x.id, x.tipo, l.tipo as lugar, x.importe::text as importe, x.origen, a.nombre as entrega, b.nombre as registro, x.registrada_en as en,
-           (select count(*)::int from intento_entrada_fondo i where i.entrada_id = x.id and i.en <= ${corte}) as intentos
+           (select count(*)::int from intento_entrada_fondo i where i.entrada_id = x.id and i.en <= ${corteBd}::text::timestamptz) as intentos
     from entrada_fondo x join lugar_efectivo l on l.id = x.lugar_id join usuario a on a.id = x.entrega join usuario b on b.id = x.registrada_por
-    where x.sucursal_id = ${s.id} and x.registrada_en <= ${corte} and (x.resuelta_en is null or x.resuelta_en > ${corte})
+    where x.sucursal_id = ${s.id} and x.registrada_en <= ${corteBd}::text::timestamptz and (x.resuelta_en is null or x.resuelta_en > ${corteBd}::text::timestamptz)
     order by x.registrada_en`).map((x) => ({ ...x, anterior: anterior(x.en) }));
 
   // Movimientos dentro del periodo (pasos del mismo dinero: no se suman entre sí).
@@ -359,14 +464,14 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
            coalesce(sum(me.importe) filter (where me.tipo = 'entrada_fondo'), 0)::numeric(12, 2)::text as fondo,
            (count(*) filter (where me.tipo = 'entrada_fondo'))::int as n_fondo
     from movimiento_efectivo me join lugar_efectivo l on l.id = me.lugar_id
-    where l.sucursal_id = ${s.id} and me.en >= ${inicio} and me.en <= ${corte}`;
+    where l.sucursal_id = ${s.id} and me.en >= ${inicio} and me.en <= ${corteBd}::text::timestamptz`;
   const selLista = await tx<{ id: string; folio: string; lugar: TipoLugar; en: Date; importe: string; contado_ya: boolean }[]>`
     select s.id, s.folio, l.tipo as lugar, s.resuelto_en as en, s.importe::text as importe,
            (exists (select 1 from recoleccion r join recoleccion_sobre x on x.recoleccion_id = r.id
                     where x.sobre_id = s.id and r.estado = 'confirmada' and x.contado is not null)
             or exists (select 1 from investigacion_sobre i where i.sobre_id = s.id)) as contado_ya
     from sobre_cierre s join lugar_efectivo l on l.id = s.lugar_id
-    where s.sucursal_id = ${s.id} and s.importe is not null and s.estado in ('usado', 'recogido') and s.resuelto_en >= ${inicio} and s.resuelto_en <= ${corte}
+    where s.sucursal_id = ${s.id} and s.importe is not null and s.estado in ('usado', 'recogido') and s.resuelto_en >= ${inicio} and s.resuelto_en <= ${corteBd}::text::timestamptz
     order by s.resuelto_en, s.folio`;
   const [sel] = await tx<{ n: number; anotado: string; sin_contar: number }[]>`
     select count(*)::int as n, coalesce(sum(s.importe), 0)::numeric(12, 2)::text as anotado,
@@ -374,7 +479,7 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
                                                where x.sobre_id = s.id and r.estado = 'confirmada' and x.contado is not null)
                                  and not exists (select 1 from investigacion_sobre i where i.sobre_id = s.id)))::int as sin_contar
     from sobre_cierre s where s.sucursal_id = ${s.id} and s.importe is not null and s.estado in ('usado', 'recogido')
-      and s.resuelto_en >= ${inicio} and s.resuelto_en <= ${corte}`;
+      and s.resuelto_en >= ${inicio} and s.resuelto_en <= ${corteBd}::text::timestamptz`;
   const recogidas = recolecciones.filter((r) => r.resuelta_en >= inicio);
   const retirosPeriodo = retiros.filter((r) => r.entregado_en >= inicio);
   const ocultoRetiro = (r: (typeof retiros)[number]) => r.encargada_id === usuarioId && (r.estado === "pendiente" || r.estado === "recuento");
@@ -405,7 +510,7 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
   const sinContar = sobres.length > 0 || entregasSobres.some((r) => !r.confirmada_ya) || sel.sin_contar > 0;
   return {
     id: s.id, codigo: s.codigo, nombre: s.nombre, recogedor, lugares, sobres, pendientes, confirmados, depositos, diferencias: difVisibles, investigar, movimientos,
-    entradas, visible: pesos(visible), ocultos, sinDatos: lugares.filter((l) => l.estado === "sin_datos").length, anotadosSinContar: !recogedor && sinContar,
+    entradas, origenes, visible: pesos(visible), ocultos, sinDatos: lugares.filter((l) => l.estado === "sin_datos").length, anotadosSinContar: !recogedor && sinContar,
   };
 }
 
@@ -504,6 +609,7 @@ const MOMENTO_VERIFICACION: Record<string, string> = {
 };
 
 async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja: CajaSucursal, tipo: TipoDetalle, id: string, inicio: Date, corte: Date): Promise<Detalle | null> {
+  const corteBd = hastaElCorte(corte);
   const ev = (en: Date, texto: string, persona: string | null = null): Evento => ({ en, texto, persona, despues: en > corte });
   const ordenar = (e: Evento[]) => e.sort((a, b) => a.en.getTime() - b.en.getTime());
 
@@ -514,7 +620,7 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
     const eventos: Evento[] = [];
     if (l.estado === "turno") {
       const [t] = await tx<{ id: string }[]>`
-        select t.id from turno t where t.sucursal_id = ${sucursalId} and t.abierto_en <= ${corte} order by t.abierto_en desc limit 1`;
+        select t.id from turno t where t.sucursal_id = ${sucursalId} and t.abierto_en <= ${corteBd}::text::timestamptz order by t.abierto_en desc limit 1`;
       filas.push({ etiqueta: `Contado al abrir (${fechaHora(l.base!.en)}, ${l.base!.por})`, valor: l.base!.importe });
       for (const mv of await tx<{ tipo: string; importe: string; en: Date; por: string }[]>`
         select me.tipo, me.importe::text as importe, me.en, u.nombre as por from movimiento_efectivo me join usuario u on u.id = me.registrado_por
@@ -619,22 +725,25 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
   }
 
   if (tipo === "recoleccion") {
-    const [r] = await tx<{ id: string; buzon: boolean; estado: string; creada_en: Date; resuelta_en: Date | null; entrego: string | null; recibe: string }[]>`
-      select r.id, r.buzon, r.estado, r.creada_en, r.resuelta_en, a.nombre as entrego, b.nombre as recibe
+    // Las comparaciones con el corte se hacen en la base (microsegundos), igual que en el reporte.
+    const [r] = await tx<{ id: string; buzon: boolean; estado: string; creada_en: Date; resuelta_en: Date | null; entrego: string | null; recibe: string;
+                           resuelta_al_corte: boolean; existia_al_corte: boolean }[]>`
+      select r.id, r.buzon, r.estado, r.creada_en, r.resuelta_en, a.nombre as entrego, b.nombre as recibe,
+             coalesce(r.resuelta_en <= ${corteBd}::text::timestamptz, false) as resuelta_al_corte, r.creada_en <= ${corteBd}::text::timestamptz as existia_al_corte
       from recoleccion r left join usuario a on a.id = r.entrega_por join usuario b on b.id = r.recibe where r.id = ${id} and r.sucursal_id = ${sucursalId}`;
     if (!r) return null;
-    const confirmadaAlCorte = r.estado === "confirmada" && !!r.resuelta_en && r.resuelta_en <= corte;
+    const confirmadaAlCorte = r.estado === "confirmada" && r.resuelta_al_corte;
     const contadaYa = r.estado === "confirmada";
     const oculto = caja.recogedor && !contadaYa;
     const sobres = await tx<{ id: string; folio: string; lugar: TipoLugar; anotado: string; contado: string | null }[]>`
       select s.id, s.folio, l.tipo as lugar, s.importe::text as anotado, x.contado::text as contado
       from recoleccion_sobre x join sobre_cierre s on s.id = x.sobre_id join lugar_efectivo l on l.id = s.lugar_id
       where x.recoleccion_id = ${id} order by s.resuelto_en, s.folio`;
-    const depositos = await tx<{ en: Date; fecha: string; importe: string; referencia: string; por: string }[]>`
-      select d.en, d.fecha::text as fecha, d.importe::text as importe, d.referencia, u.nombre as por
+    const depositos = await tx<{ en: Date; fecha: string; importe: string; referencia: string; por: string; al_corte: boolean }[]>`
+      select d.en, d.fecha::text as fecha, d.importe::text as importe, d.referencia, u.nombre as por, d.en <= ${corteBd}::text::timestamptz as al_corte
       from deposito_recoleccion d join usuario u on u.id = d.registrado_por where d.recoleccion_id = ${id} order by d.en`;
     const recogido = sobres.reduce((n, x) => n + cent(x.contado), 0);
-    const depositadoCorte = depositos.filter((d) => d.en <= corte).reduce((n, d) => n + cent(d.importe), 0);
+    const depositadoCorte = depositos.filter((d) => d.al_corte).reduce((n, d) => n + cent(d.importe), 0);
     const eventos: Evento[] = [];
     if (!r.buzon) eventos.push(ev(r.creada_en, `Entregó a ${r.recibe} (Dirección): ${sobres.map((x) => x.folio).join(", ")}`, r.entrego));
     if (r.estado === "cancelada" && r.resuelta_en) eventos.push(ev(r.resuelta_en, "Entrega cancelada: los sobres quedan por devolver", r.recibe));
@@ -652,7 +761,7 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
       left join usuario u on u.id = v.revisada_por where ds.recoleccion_id = ${id}`) {
       if (x.en) eventos.push(ev(x.en, `Revisó la diferencia de ${x.folio} (${signo(x.importe)}): ${RESULTADO[x.resultado!] ?? x.resultado}${x.propia ? " · Revisada por quien participó" : ""}`, x.por));
     }
-    const existiaAlCorte = r.creada_en <= corte;
+    const existiaAlCorte = r.existia_al_corte;
     const filas: FilaDetalle[] = !existiaAlCorte
       ? []
       : confirmadaAlCorte
@@ -694,7 +803,7 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
              d.tipo, d.importe::text as importe, d.registrada_en, l.tipo as lugar
       from diferencia_efectivo d join entrega_turno e on e.id = d.entrega_id join lugar_efectivo l on l.id = d.lugar_id
       join usuario a on a.id = e.entrega_por left join usuario b on b.id = e.recibe
-      where d.id = ${id} and l.sucursal_id = ${sucursalId} and d.registrada_en <= ${corte}`;
+      where d.id = ${id} and l.sucursal_id = ${sucursalId} and d.registrada_en <= ${corteBd}::text::timestamptz`;
     if (!f) return null;
     const eventos: Evento[] = [
       ev(f.entrega_en, f.entrega_tipo === "cambio_turno" ? `Entregó el turno${f.recibe ? ` a ${f.recibe}` : ""}` : "Cerró el día", f.entrego),
@@ -723,14 +832,15 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
 
   if (tipo === "entrada_fondo") {
     const [x] = await tx<{ id: string; tipo: string; lugar: TipoLugar; importe: string; origen: string; entrega: string; registro: string; registrada_en: Date;
-                           estado: string; resuelta_en: Date | null; recibio: string | null; motivo: string | null }[]>`
+                           estado: string; resuelta_en: Date | null; recibio: string | null; motivo: string | null; pendiente_al_corte: boolean }[]>`
       select x.id, x.tipo, l.tipo as lugar, x.importe::text as importe, x.origen, a.nombre as entrega, b.nombre as registro, x.registrada_en,
-             x.estado, x.resuelta_en, c.nombre as recibio, x.motivo_cancelacion as motivo
+             x.estado, x.resuelta_en, c.nombre as recibio, x.motivo_cancelacion as motivo,
+             (x.resuelta_en is null or x.resuelta_en > ${corteBd}::text::timestamptz) as pendiente_al_corte
       from entrada_fondo x join lugar_efectivo l on l.id = x.lugar_id join usuario a on a.id = x.entrega join usuario b on b.id = x.registrada_por
       left join usuario c on c.id = x.recibida_por
-      where x.id = ${id} and x.sucursal_id = ${sucursalId} and x.registrada_en <= ${corte}`;
+      where x.id = ${id} and x.sucursal_id = ${sucursalId} and x.registrada_en <= ${corteBd}::text::timestamptz`;
     if (!x) return null;
-    const pendienteAlCorte = x.resuelta_en === null || x.resuelta_en > corte;
+    const pendienteAlCorte = x.pendiente_al_corte;
     const eventos: Evento[] = [ev(x.registrada_en, `Registró ${x.tipo === "aumento" ? "un aumento del fondo" : "una reposición"} de ${dinero(x.importe)} · entrega ${x.entrega} · origen: ${x.origen}`, x.registro)];
     for (const i of await tx<{ en: Date; declarado: string; por: string }[]>`
       select i.en, i.declarado::text as declarado, u.nombre as por from intento_entrada_fondo i join usuario u on u.id = i.por where i.entrada_id = ${id} order by i.en`) {
@@ -807,6 +917,12 @@ const DECISION: Record<string, string> = { absorbe_sucursal: "Lo absorbe la sucu
  * contra el esperado es del cierre (lo que se entregó contra lo esperado al cerrar) y la que hay entre ambas personas es
  * de la apertura (lo contado al abrir contra lo cerrado).
  */
+/** De qué paso viene una diferencia de entrega, para la hoja «Diferencias». */
+function tipoDiferencia(d: { entrega_tipo: string; tipo: string }) {
+  if (d.entrega_tipo === "cambio_turno") return d.tipo === "contra_esperado" ? "Cambio de turno (contra el esperado)" : "Cambio de turno (entre ambas personas)";
+  return d.tipo === "contra_esperado" ? "Cierre (contra el esperado)" : "Apertura (contra lo cerrado)";
+}
+
 function textoDiferencia(d: { entrega_tipo: string; entrega_en: Date; registrada_en: Date; tipo: string }) {
   if (d.entrega_tipo === "cambio_turno") return `Cambio de turno del ${dia(d.entrega_en)} · ${d.tipo === "contra_esperado" ? "contra el esperado" : "entre ambas personas"}`;
   return d.tipo === "contra_esperado" ? `Cierre del ${dia(d.entrega_en)} · contra el esperado` : `Apertura del ${dia(d.registrada_en)} · contra lo cerrado`;
@@ -814,10 +930,11 @@ function textoDiferencia(d: { entrega_tipo: string; entrega_en: Date; registrada
 
 /** Estado al corte de una diferencia de turno (misma regla que la lista del reporte). */
 async function estadoDiferenciaAlCorte(tx: Tx, id: string, corte: Date) {
+  const corteBd = hastaElCorte(corte);
   const [d] = await tx<{ revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null }[]>`
-    select (select v.resultado from revision_diferencia v where v.diferencia_id = d.id and v.en <= ${corte}) as revision,
-           x.decision, x.requiere_correccion as requiere, x.correccion_en <= ${corte} as corregida
-    from diferencia_efectivo d left join resolucion_diferencia x on x.diferencia_id = d.id and x.en <= ${corte} where d.id = ${id}`;
+    select (select v.resultado from revision_diferencia v where v.diferencia_id = d.id and v.en <= ${corteBd}::text::timestamptz) as revision,
+           x.decision, x.requiere_correccion as requiere, x.correccion_en <= ${corteBd}::text::timestamptz as corregida
+    from diferencia_efectivo d left join resolucion_diferencia x on x.diferencia_id = d.id and x.en <= ${corteBd}::text::timestamptz where d.id = ${id}`;
   return estadoDiferencia(d).estado;
 }
 function estadoDiferencia(d: { revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null }) {
@@ -890,8 +1007,12 @@ export async function prepararDescarga(
           ...caja.investigar.map((x) => ["sobre", x.sobreId] as [TipoDetalle, string]),
           ...caja.entradas.map((x) => ["entrada_fondo", x.id] as [TipoDetalle, string]),
           ...caja.diferencias.filter((x) => x.clase === "turno").map((x) => ["diferencia", x.id] as [TipoDetalle, string]),
+          ...caja.origenes.map((o) => [o.clase, o.id] as [TipoDetalle, string]),
         ];
+        const vistos = new Set<string>();
         for (const [tipo, id] of piezas) {
+          if (vistos.has(`${tipo}:${id}`)) continue;
+          vistos.add(`${tipo}:${id}`);
           const d = await armarDetalle(tx, usuarioId, s.id, caja, tipo, id, v.inicio, v.corte);
           if (d) lista.push({ ...d, eventos: d.eventos.filter((e) => !e.despues) });
         }
