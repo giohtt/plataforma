@@ -3,6 +3,7 @@ import { tiempoPendiente } from "@/lib/datos-diferencia";
 import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
 import { turnoAbiertoDe, type TipoLugar } from "@/lib/turnos";
+import { estadoResolucionRetiro, TEXTO_DECISION, type EstadoResolucion } from "@/lib/resoluciones";
 
 /**
  * Bloque 5, paso 3: retiros de efectivo a Encargada de retiros (reglas 4 a 6; solo datos ficticios).
@@ -292,6 +293,8 @@ type FilaRetiro = {
   resultado: "aclarada" | "faltante_confirmado" | null; monto_verificado: string | null; folio_verificado: string | null;
   folio_en_sobre: string | null;
   dif_esperado: string | null; dif_en: Date | null; dif_presente: string | null; dif_entrega_id: string | null; dif_vinculada_en: Date | null;
+  /** Dirección ya resolvió el faltante confirmado. */
+  resuelto: boolean;
 };
 
 const FILAS = (tx: Tx | Sql, condicion: postgres.PendingQuery<postgres.Row[]>) => tx<FilaRetiro[]>`
@@ -304,7 +307,8 @@ const FILAS = (tx: Tx | Sql, condicion: postgres.PendingQuery<postgres.Row[]>) =
          (select coalesce(sum(d.importe), 0) from deposito_retiro d where d.retiro_id = r.id
             and not exists (select 1 from deposito_retiro c where c.corrige_id = d.id))::numeric(12, 2)::text as depositado,
          rv.resultado, rv.monto_verificado::text, rv.folio_verificado, r.folio_en_sobre,
-         dr.importe::text as dif_esperado, dr.registrada_en as dif_en, dv.presente::text as dif_presente, dv.entrega_id as dif_entrega_id, dv.en as dif_vinculada_en
+         dr.importe::text as dif_esperado, dr.registrada_en as dif_en, dv.presente::text as dif_presente, dv.entrega_id as dif_entrega_id, dv.en as dif_vinculada_en,
+         exists (select 1 from resolucion_retiro x where x.retiro_id = r.id) as resuelto
   from retiro r
   join sucursal s on s.id = r.sucursal_id
   join lugar_efectivo l on l.id = r.lugar_id
@@ -337,8 +341,10 @@ export type Saldo = {
   enPausa: string;
   /** Diferencia por aclarar (lo que contó − lo registrado), fuera de su saldo. */
   porAclarar: string;
-  /** Faltante confirmado en la revisión (registrado − verificado), pendiente para Dirección. */
+  /** Faltante confirmado en la revisión (registrado − verificado) mientras Dirección no lo resuelve. */
   faltanteDireccion: string;
+  /** Faltante confirmado en la revisión, resuelto o no. */
+  faltante: string;
 };
 
 export type Avisos = {
@@ -364,12 +370,16 @@ function saldoDe(f: FilaRetiro): Saldo {
     sinDestino: habilitado === null ? "0.00" : pesos(cent(habilitado) - cent(f.depositado)),
     enPausa: pausa && contado !== null ? contado : "0.00",
     porAclarar: pausa && contado !== null ? pesos(cent(contado) - cent(f.importe)) : "0.00",
-    faltanteDireccion: f.resultado === "faltante_confirmado" ? pesos(cent(f.importe) - cent(f.monto_verificado!)) : "0.00",
+    faltanteDireccion: f.resultado === "faltante_confirmado" && !f.resuelto ? pesos(cent(f.importe) - cent(f.monto_verificado!)) : "0.00",
+    faltante: f.resultado === "faltante_confirmado" ? pesos(cent(f.importe) - cent(f.monto_verificado!)) : "0.00",
   };
 }
 
 function textoEstado(f: FilaRetiro): string {
-  if (f.estado === "revisado") return f.resultado === "faltante_confirmado" ? "Revisado · faltante confirmado, pendiente para Dirección" : "Revisado · aclarada";
+  if (f.estado === "revisado") {
+    if (f.resultado !== "faltante_confirmado") return "Revisado · aclarada";
+    return f.resuelto ? "Revisado · faltante resuelto por Dirección" : "Revisado · faltante confirmado, pendiente para Dirección";
+  }
   return ESTADO_RETIRO[f.estado];
 }
 
@@ -716,6 +726,8 @@ export type DetalleRetiro = {
   puedeDepositar: boolean;
   depositos: Deposito[];
   historial: { en: Date; que: string; cuenta: string }[];
+  /** Faltante confirmado: su resolución de Dirección, o si esta cuenta puede resolverlo. */
+  resolucion: EstadoResolucion;
 };
 
 const dinero = (v: string) => `$${Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -804,6 +816,13 @@ export async function detalleRetiro(sql: Sql, usuarioId: string, codigo: string,
   if (f.habilitado_en) {
     historial.push({ en: f.habilitado_en, cuenta: "La plataforma", que: `Depósitos habilitados por ${dinero(f.monto_habilitado!)}` });
   }
+  const resolucion = (await estadoResolucionRetiro(sql, usuarioId, f.id))!;
+  if (resolucion.resolucion) {
+    historial.push({
+      en: resolucion.resolucion.en, cuenta: resolucion.resolucion.por,
+      que: `Dirección resolvió el faltante: ${TEXTO_DECISION}. No cambia el efectivo contado ni los depósitos. Motivo: «${resolucion.resolucion.motivo}»`,
+    });
+  }
   for (const d of depositos) {
     historial.push({
       en: d.en, cuenta: d.registradoPor,
@@ -837,6 +856,7 @@ export async function detalleRetiro(sql: Sql, usuarioId: string, codigo: string,
     puedeDepositar: esSuyo && f.monto_habilitado !== null && cent(r.saldo.sinDestino) > 0,
     depositos: [...depositos],
     historial,
+    resolucion,
   };
 }
 

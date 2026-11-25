@@ -1,7 +1,9 @@
 import ExcelJS from "exceljs";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
-import { dinero, nombreLugar, type ArchivoCaja, type CajaSucursal, type Detalle } from "@/lib/reporte-caja";
-import { aPesos, centavos, INCOMPLETO, lectura, NOTA_RANGOS, RANGOS, resumirCaja, resumirVarias, type ResumenCaja } from "@/lib/resumen-caja";
+import { dinero, ETAPA_DIFERENCIA, nombreLugar, type ArchivoCaja, type CajaSucursal, type Detalle } from "@/lib/reporte-caja";
+import { aPesos, centavos, INCOMPLETO, lectura, lineaCasos, NOTA_RANGOS, RANGOS, resumirCaja, resumirVarias, type ResumenCaja } from "@/lib/resumen-caja";
+
+const ORDEN_ETAPA = { por_revisar: 0, pendiente_resolucion: 1, correccion_pendiente: 2, cerrada: 3 } as const;
 
 /**
  * Archivos de «Caja y depósitos» (Excel y PDF; estructura aprobada el 25 nov 2026). Llevan lo mismo que la pantalla de
@@ -59,7 +61,11 @@ function filasResumen(c: CajaSucursal, s: ResumenCaja): Fila[] {
   f.push({ celdas: ["Confirmado, por depositar", $c(s.porDepositar.importe), "Contado", atrasados.n ? `${atrasados.n} con 48 horas o más sin depositar` : ""] });
   f.push({ celdas: [s.total.etiqueta, $c(s.total.importe), s.total.tipo === "sin_datos" ? SIN_DATOS : s.total.tipo === "subtotal" ? "Subtotal visible" : "Total", s.total.nota], negrita: true });
   f.push({ celdas: ["Depositado en el periodo", $c(s.depositado.importe), "Depositado", `No se suma al total: ya salió de la custodia · ${s.depositado.n} ${s.depositado.n === 1 ? "depósito" : "depósitos"}`] });
-  for (const a of s.atencion) f.push({ celdas: [`Requiere atención · ${a.texto} (${a.n})`, $c(a.importe), "Aparte", a.nota] });
+  // Las diferencias van caso por caso (no se suman entre sí: mezclan faltantes y sobrantes).
+  for (const a of s.atencion) {
+    f.push({ celdas: [`Requiere atención · ${a.texto} (${a.n})`, a.casos ? null : $c(a.importe), "Aparte: no se suma",
+                      a.casos ? [a.nota, lineaCasos(a)].filter(Boolean).join(" · ") : a.nota] });
+  }
   return f;
 }
 
@@ -103,11 +109,12 @@ function tablasSucursal(c: CajaSucursal, s: ResumenCaja, detalles: Detalle[] | u
   });
   tablas.push({
     hoja: "Diferencias", titulo: "Diferencias (aparte: no se suman a ninguna etapa)",
-    columnas: [{ titulo: "Clave", ancho: 7, pdf: 32 }, { titulo: "Origen", ancho: 30, pdf: 112 }, { titulo: "Folio", ancho: 20, pdf: 92 }, { titulo: "Lugar", ancho: 22, pdf: 86 },
-               { titulo: "Registrada", ancho: 12, pdf: 56 }, { titulo: "Importe", ancho: 12, pdf: 56, derecha: true }, { titulo: "Estado al corte", ancho: 44, pdf: 176 },
-               { titulo: "Abierta", ancho: 8, pdf: 34 }, { titulo: "Anterior al periodo", ancho: 11, pdf: 40 }, { titulo: "Cuenta en el neto", ancho: 10, pdf: 36 }],
-    filas: c.diferencias.map((d) => ({ celdas: [d.clave, d.tipoTexto, d.folio ?? "", nombreLugar(d.lugar), iso(d.registradaEn), { importe: d.importe }, `Estado al corte: ${d.estado}`,
-                                                 siNo(d.abierta), siNo(d.anterior), siNo(d.neto)] })),
+    columnas: [{ titulo: "Clave", ancho: 7, pdf: 32 }, { titulo: "Etapa", ancho: 22, pdf: 84 }, { titulo: "Origen", ancho: 30, pdf: 100 }, { titulo: "Folio", ancho: 20, pdf: 84 },
+               { titulo: "Lugar", ancho: 22, pdf: 74 }, { titulo: "Registrada", ancho: 12, pdf: 54 }, { titulo: "Importe", ancho: 12, pdf: 54, derecha: true },
+               { titulo: "Estado al corte", ancho: 44, pdf: 160 }, { titulo: "Anterior al periodo", ancho: 11, pdf: 40 }, { titulo: "Cuenta en el neto", ancho: 10, pdf: 38 }],
+    filas: [...c.diferencias].sort((a, b) => ORDEN_ETAPA[a.etapa] - ORDEN_ETAPA[b.etapa]).map((d) => ({
+      celdas: [d.clave, ETAPA_DIFERENCIA[d.etapa], d.tipoTexto, d.folio ?? "", nombreLugar(d.lugar), iso(d.registradaEn), { importe: d.importe }, `Estado al corte: ${d.estado}`,
+               siNo(d.anterior), siNo(d.neto)] })),
     nota: `Neto de referencia: ${dinero(aPesos(c.diferencias.filter((d) => d.neto).reduce((n, d) => n + centavos(d.importe), 0)))} (no cierra ningún caso).`,
   });
   const m = c.movimientos;
@@ -392,8 +399,8 @@ export async function pdfCaja(a: ArchivoCaja): Promise<Buffer> {
     for (const x of l.personas) renglon(x.persona, x.detalle, dinero(x.importe));
     bloque("Pendientes que requieren atención");
     for (const x of l.atencion) {
-      renglon(`${x.n} · ${x.texto}`, "", x.clave === "atrasados" ? "Ver «Por folio»"
-        : (x.clave === "por_revisar" || x.clave === "correcciones") && Number(x.importe) > 0 ? `+${dinero(x.importe)}` : dinero(x.importe), x.clave !== "atrasados");
+      renglon(`${x.n} · ${x.texto}`, x.casos ? lineaCasos(x) : "", x.clave === "atrasados" ? "Ver «Por folio»" : x.casos ? "Ver «Diferencias»" : dinero(x.importe),
+              x.clave !== "atrasados" && !x.casos);
     }
     ceros(l.atencionCeros);
     // Después, las tablas para analizar (la tabla por persona ya está resumida arriba).

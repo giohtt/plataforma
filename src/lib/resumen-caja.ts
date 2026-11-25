@@ -43,7 +43,11 @@ export type Total = {
   faltan: string[];
   nota: string;
 };
-export type Atencion = { clave: "atrasados" | "por_revisar" | "correcciones" | "investigar" | "entradas"; texto: string; n: number; importe: string; nota: string };
+export type Atencion = {
+  clave: "atrasados" | "por_revisar" | "pendiente_resolucion" | "correcciones" | "investigar" | "entradas"; texto: string; n: number; importe: string; nota: string;
+  /** Diferencias: cada caso con su importe (no se suman entre sí: mezclan faltantes y sobrantes). */
+  casos?: { texto: string; importe: string }[];
+};
 export type FilaFolio = {
   sucursal: string; codigo: string;
   folio: string;
@@ -150,15 +154,19 @@ export function resumirCaja(c: CajaSucursal, corte: Date): ResumenCaja {
 
   // Requiere atención (aparte: no se suma).
   const atrasados = c.confirmados.filter((x) => x.clase === "retiro" && x.aviso);
-  const abiertas = c.diferencias.filter((d) => d.abierta);
-  const correcciones = abiertas.filter((d) => d.estado.includes("corrección pendiente"));
-  const porRevisar = abiertas.filter((d) => !d.estado.includes("corrección pendiente"));
+  const porRevisar = c.diferencias.filter((d) => d.etapa === "por_revisar");
+  const porResolver = c.diferencias.filter((d) => d.etapa === "pendiente_resolucion");
+  const correcciones = c.diferencias.filter((d) => d.etapa === "correccion_pendiente");
+  const casos = (l: CajaSucursal["diferencias"]) => l.map((d) => ({ texto: textoCaso(d), importe: d.importe }));
   const suma = (l: { importe: string }[]) => pesos(l.reduce((n, x) => n + cent(x.importe), 0));
   const atencion: Atencion[] = [
     { clave: "atrasados", texto: "Retiros con 48 horas o más sin depositar", n: atrasados.length, importe: pesos(atrasados.reduce((n, x) => n + cent(x.saldo), 0)),
       nota: "Ya están en «Por depositar»: no se suman otra vez" },
-    { clave: "por_revisar", texto: "Diferencias por revisar o resolver", n: porRevisar.length, importe: suma(porRevisar), nota: "Aparte: no se suman ni se restan del efectivo" },
-    { clave: "correcciones", texto: "Correcciones pendientes", n: correcciones.length, importe: suma(correcciones), nota: "Aparte: no se suman ni se restan del efectivo" },
+    { clave: "por_revisar", texto: "Por revisar", n: porRevisar.length, importe: suma(porRevisar), nota: "Nadie las ha revisado", casos: casos(porRevisar) },
+    { clave: "pendiente_resolucion", texto: "Pendiente de resolución", n: porResolver.length, importe: suma(porResolver),
+      nota: "Confirmadas; falta la decisión de Dirección", casos: casos(porResolver) },
+    { clave: "correcciones", texto: "Corrección pendiente", n: correcciones.length, importe: suma(correcciones),
+      nota: "Ya tienen decisión; falta completarla", casos: casos(correcciones) },
     { clave: "investigar", texto: "Sobres por investigar", n: c.investigar.length, importe: pesos(c.investigar.reduce((n, x) => n + cent(x.anotado), 0)),
       nota: "Importe anotado; aparte, no se suma" },
     { clave: "entradas", texto: "Entradas al fondo sin confirmar", n: c.entradas.length, importe: suma(c.entradas),
@@ -283,3 +291,17 @@ export function lectura(s: ResumenCaja) {
   const atencionCeros = s.atencion.filter((a) => !a.n).map((a) => a.texto.toLowerCase());
   return { efectivo, ceros, personas, atencion, atencionCeros };
 }
+
+/** Nombre corto de un caso de diferencia, para leerlo de un vistazo. */
+function textoCaso(d: CajaSucursal["diferencias"][number]) {
+  const dia = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", day: "numeric", month: "short" }).format(d.registradaEn);
+  if (d.clase === "retiro_importe") return `Faltante del retiro ${d.folio}`;
+  if (d.clase === "sobre") return `${Number(d.importe) < 0 ? "Faltante" : "Diferencia"} del sobre ${d.folio}`;
+  if (d.clase === "retiro_esperado") return `Al retirar ${d.folio}`;
+  return `${d.tipoTexto.replace(/ \(.*\)$/, "")} del ${dia}`;
+}
+
+/** «−$50.00» / «+$20.00»: el signo siempre visible en una diferencia. */
+export const conSigno = (v: string) => (Number(v) < 0 ? `−${dinero(String(-Number(v)))}` : `+${dinero(v)}`);
+/** Los casos de un pendiente de diferencias en una línea, cada uno con su importe. */
+export const lineaCasos = (a: Atencion) => (a.casos ?? []).map((x) => `${x.texto} ${conSigno(x.importe)}`).join(" · ");

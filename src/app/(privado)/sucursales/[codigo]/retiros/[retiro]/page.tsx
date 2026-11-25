@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { FormularioResolverFaltante } from "@/components/ResolverFaltante";
 import { FormularioDeposito, FormularioRevisionRetiro } from "@/components/Retiros";
 import { NOMBRE_LUGAR } from "@/lib/datos-diferencia";
 import { obtenerBaseDatos } from "@/lib/db";
@@ -17,6 +18,7 @@ const AVISOS: Record<string, string> = {
   revisado: "Revisión registrada. Los depósitos de este folio quedan habilitados por el monto verificado; la salida y los conteos no cambiaron.",
   depositado: "Depósito registrado.",
   corregido: "Corrección registrada. El depósito anterior se conserva en el historial.",
+  resuelto: "Resolución registrada. El efectivo contado y los depósitos no cambiaron.",
 };
 
 /** Detalle de un retiro: lo registrado, los conteos de Encargada de retiros, la revisión, los depósitos y el historial. */
@@ -38,7 +40,7 @@ export default async function Retiro({ params, searchParams }: PageProps<"/sucur
       </p>
       {typeof aviso === "string" && AVISOS[aviso] ? <p className="aviso aviso-ok" role="status">{AVISOS[aviso]}</p> : null}
       <p>
-        <span className={`chip-estado ${r.estado === "por_revisar" || r.estado === "recuento" || r.estado === "pendiente" || r.resultado === "faltante_confirmado" ? "chip-vencida" : "chip-aclarada"}`} data-testid="estado-retiro">{r.textoEstado}</span>
+        <span className={`chip-estado ${r.estado === "por_revisar" || r.estado === "recuento" || r.estado === "pendiente" || (r.resultado === "faltante_confirmado" && Number(r.saldo.faltanteDireccion)) ? "chip-vencida" : "chip-aclarada"}`} data-testid="estado-retiro">{r.textoEstado}</span>
         {r.avisos.revision ? <> <span className="sub" data-testid="tiempo-revision">Por revisar desde hace {r.avisos.revision.texto}</span></> : null}
         {r.avisos.revision?.masDe48 ? <> <span className="chip-estado chip-vencida" data-testid="aviso-48-revision">48 horas o más en revisión</span></> : null}
       </p>
@@ -99,10 +101,24 @@ export default async function Retiro({ params, searchParams }: PageProps<"/sucur
           </p>
           {d.revision.folioVerificado ? <p data-testid="folio-verificado">Folio verificado: <span className="mono">{d.revision.folioVerificado}</span></p> : null}
           <p>Monto verificado: <strong data-testid="monto-verificado">{pesos.format(Number(d.revision.montoVerificado))}</strong> · Motivo: «{d.revision.motivo}»</p>
-          {d.revision.resultado === "faltante_confirmado" ? (
-            <p className="aviso aviso-info" data-testid="faltante-direccion">
-              Faltante de {pesos.format(Number(r.saldo.faltanteDireccion))}: pendiente para Dirección. Los depósitos del folio ya están habilitados por el monto verificado.
+          {d.revision.resultado === "faltante_confirmado" && d.resolucion.resolucion ? (
+            <p className="aviso aviso-ok" data-testid="faltante-resuelto">
+              Faltante de {pesos.format(Number(r.saldo.faltante))} resuelto por <strong>{d.resolucion.resolucion.por}</strong> (Dirección) · {hora.format(d.resolucion.resolucion.en)}:
+              {" "}<strong>Lo absorbe la sucursal</strong> · Motivo: «{d.resolucion.resolucion.motivo}». No cambió el efectivo contado ni los depósitos.
             </p>
+          ) : d.revision.resultado === "faltante_confirmado" ? (
+            <>
+              <p className="aviso aviso-info" data-testid="faltante-direccion">
+                Faltante de {pesos.format(Number(r.saldo.faltante))}: pendiente para Dirección (confirmado, pendiente de resolución). Los depósitos del folio ya están habilitados por el monto verificado.
+              </p>
+              {d.resolucion.puede ? (
+                <FormularioResolverFaltante codigo={codigo} clase="retiro" id={r.id} importe={pesos.format(Number(r.saldo.faltante))} />
+              ) : d.resolucion.participo ? (
+                <p className="sub" data-testid="resuelve-otra-cuenta">
+                  Participaste en este retiro: lo resuelve otra cuenta de Dirección que no participó. Tu autorización para revisar lo propio no aplica a resolver.
+                </p>
+              ) : null}
+            </>
           ) : null}
         </section>
       ) : d.puedeRevisar ? (

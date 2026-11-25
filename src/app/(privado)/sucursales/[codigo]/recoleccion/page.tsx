@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { FormularioResolverFaltante } from "@/components/ResolverFaltante";
 import { notFound } from "next/navigation";
 import {
   FormularioCancelarEntregaSobres, FormularioConfirmarRecoleccion, FormularioDeposito, FormularioDevolucion, FormularioEntregarSobres,
@@ -31,6 +32,7 @@ const AVISO: Record<string, string> = {
   deposito: "Depósito registrado.",
   trasladados: "Traslado al buzón registrado.",
   revisada: "Revisión guardada.",
+  resuelto: "Resolución registrada. El efectivo contado y los depósitos no cambiaron.",
 };
 
 /** Diferencia de un sobre (recolección o devolución) con su cadena de custodia y, si toca, la revisión. */
@@ -49,6 +51,22 @@ function TarjetaDiferencia({ d, codigo, devolucion = false }: { d: DiferenciaSob
       <ListaCadena cadena={d.cadena} />
       {d.revisarasPropia ? <p className="aviso aviso-info" data-testid="revisaras-propia">Participaste en la cadena de este sobre. Con tu autorización personal vigente puedes revisarla; quedará marcada «Revisada por quien participó».</p> : null}
       {d.puedeRevisar ? <FormularioRevisarDiferenciaSobre codigo={codigo} diferenciaId={d.id} importe={d.importe} /> : null}
+      {d.resolucion.resolucion ? (
+        <p className="aviso aviso-ok" data-testid="faltante-resuelto">
+          Faltante resuelto por <strong>{d.resolucion.resolucion.por}</strong> (Dirección): <strong>Lo absorbe la sucursal</strong> · Motivo: «{d.resolucion.resolucion.motivo}».
+          No cambió el efectivo contado ni los depósitos.
+        </p>
+      ) : d.resolucion.pendiente ? (
+        <>
+          <p className="aviso aviso-info" data-testid="faltante-direccion">Faltante confirmado, pendiente de resolución de Dirección. Es un caso aparte de cualquier otro faltante.</p>
+          {d.resolucion.puede ? <FormularioResolverFaltante codigo={codigo} clase="sobre" id={d.id} importe={pesos.format(Math.abs(Number(d.importe)))} /> : null}
+          {d.resolucion.participo ? (
+            <p className="sub" data-testid="resuelve-otra-cuenta">
+              Participaste en la cadena de este sobre: lo resuelve otra cuenta de Dirección que no participó. Tu autorización para revisar lo propio no aplica a resolver.
+            </p>
+          ) : null}
+        </>
+      ) : null}
     </div>
   );
 }

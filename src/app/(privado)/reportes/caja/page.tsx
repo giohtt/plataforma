@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { LEYENDA_ANOTADOS } from "@/lib/archivo-caja";
 import { obtenerBaseDatos } from "@/lib/db";
 import { reporteCaja, type CajaSucursal, type ReporteCaja } from "@/lib/reporte-caja";
-import { lectura, resumirCaja, resumirVarias, type ResumenCaja } from "@/lib/resumen-caja";
+import { lectura, lineaCasos, resumirCaja, resumirVarias, type ResumenCaja } from "@/lib/resumen-caja";
 import { requerirSesion } from "@/lib/sesion-servidor";
 import { $, enlaceMas, fecha, hora, RecuadroTotal, texto } from "./comun";
 import { PanelDescarga } from "./panel-descarga";
@@ -40,7 +40,7 @@ function Resumen({ c, s, r }: { c: CajaSucursal; s: ResumenCaja; r: ReporteCaja 
   const l = lectura(s);
   const ciegas = c.sobres.some((x) => x.oculto) || c.pendientes.some((p) => p.oculto);
   const destino: Record<string, string> = {
-    atrasados: mas("folio", { solo: "atrasados" }), por_revisar: mas("diferencias"), correcciones: mas("diferencias"),
+    atrasados: mas("folio", { solo: "atrasados" }), por_revisar: mas("diferencias"), pendiente_resolucion: mas("diferencias"), correcciones: mas("diferencias"),
     investigar: mas("folio", { etapa: "investigar" }), entradas: mas("folio", { etapa: "entrada" }),
   };
   return (
@@ -89,10 +89,15 @@ function Resumen({ c, s, r }: { c: CajaSucursal; s: ResumenCaja; r: ReporteCaja 
           <ul className="renglones">
             {l.atencion.map((a) => (
               <li key={a.clave} data-testid={`atencion-${a.clave}`}>
-                <span><span className="numero-pendiente">{a.n}</span>{a.texto}</span>
+                <span>
+                  <span className="numero-pendiente">{a.n}</span>{a.texto}
+                  {a.casos ? <span className="renglon-detalle">{lineaCasos(a)}</span> : null}
+                </span>
                 {a.clave === "atrasados"
                   ? <Link prefetch={false} href={destino[a.clave]} className="sin-corte">Ver folios</Link>
-                  : <Link prefetch={false} href={destino[a.clave]} className="renglon-importe">{(a.clave === "por_revisar" || a.clave === "correcciones") && Number(a.importe) > 0 ? `+${$(a.importe)}` : $(a.importe)}</Link>}
+                  : a.casos
+                    ? <Link prefetch={false} href={destino[a.clave]} className="sin-corte">Ver casos</Link>
+                    : <Link prefetch={false} href={destino[a.clave]} className="renglon-importe">{$(a.importe)}</Link>}
               </li>
             ))}
           </ul>
