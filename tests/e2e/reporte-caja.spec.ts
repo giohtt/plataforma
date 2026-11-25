@@ -6,8 +6,8 @@ import { abrirDesdeCierre, cerrarDia, cierrePendiente, configurarCustodia, prepa
 import { cifrarContrasena } from "../../src/lib/contrasena";
 import { revisarDiferencia } from "../../src/lib/diferencias";
 import { cambiarMontoFondo, confirmarEntradaFondo } from "../../src/lib/fondos";
-import { recogerBuzon, registrarDepositoRecoleccion } from "../../src/lib/recolecciones";
-import { confirmarRetiro, generarFolio, registrarDeposito, registrarRetiro } from "../../src/lib/retiros";
+import { recogerBuzon, registrarDepositoRecoleccion, revisarDiferenciaSobre } from "../../src/lib/recolecciones";
+import { confirmarRetiro, generarFolio, recontarRetiro, registrarDeposito, registrarRetiro, revisarRetiro } from "../../src/lib/retiros";
 import { abrirTurno } from "../../src/lib/turnos";
 import { aplicarCambio } from "../../src/lib/usuarios";
 
@@ -406,4 +406,70 @@ test("casos de la maqueta 7: depósitos parciales antes y durante el periodo, y 
   await expect(page.getByTestId("total-importe")).toHaveText("$300.00");
   await expect(page.getByTestId("total-nota")).toContainText("No es el total: faltan los datos de bolsa y cajón (sin conteos registrados)");
   await capturar(page, "caso-b-sin-conteos");
+});
+
+test("pendientes por etapa: Dirección resuelve el faltante de un retiro; el del sobre en que participó lo resuelve otra cuenta", async ({ page }) => {
+  const e = await escenario();
+  expect(await aplicarCambio(sql, e.general.id, e.dir.id, { tipo: "dar_permiso", permiso: "reporte.caja", alcance: { todas: false, sucursales: [e.sucursalId] }, limite: "", hasta: "", motivo: "Revisa el efectivo" }, PRUEBAS))
+    .toEqual({ ok: true });
+  // Sobre: Dirección recoge el buzón (participa) y cuenta $50 menos; Administración confirma el faltante.
+  expect(await recogerBuzon(sql, e.dir.id, e.codigo, { sobres: [
+    { sobreId: e.sobres[0].id, estado: "correcto", folioVisto: "", motivo: "", contado: "400" },
+    { sobreId: e.sobres[1].id, estado: "correcto", folioVisto: "", motivo: "", contado: "3000" },
+  ], llave: LLAVE }, PRUEBAS)).toMatchObject({ ok: true });
+  const [difSobre] = await sql<{ id: string }[]>`select d.id from diferencia_sobre d join sobre_cierre s on s.id = d.sobre_id where s.sucursal_id = ${e.sucursalId}`;
+  expect(await revisarDiferenciaSobre(sql, e.admin.id, e.codigo, { diferenciaId: difSobre.id, resultado: "faltante_confirmado", motivo: "Prueba: faltan 50 pesos" }, PRUEBAS))
+    .toEqual({ ok: true });
+  // Retiro: se registran $280, Encargada de retiros cuenta $250 y el Encargado confirma el faltante.
+  const encargada = await cuenta(`Encargada de retiros ${id()}`, "encargada_retiros", e.sucursalId);
+  const [turno] = await sql<{ id: string; abrio: string }[]>`select id, abierto_por as abrio from turno where sucursal_id = ${e.sucursalId} and cerrado_en is null`;
+  const folio = await generarFolio(sql, turno.abrio, e.codigo, { turnoId: turno.id, lugar: "cajon_mensualidades" }, PRUEBAS);
+  if (!folio.ok) throw new Error(folio.error);
+  const ret = await registrarRetiro(sql, turno.abrio, e.codigo, { turnoId: turno.id, folioId: folio.folioId, contado: "280", cambio: "0", encargada: encargada.id }, PRUEBAS);
+  if (!ret.ok) throw new Error(ret.error);
+  const version = async () => (await sql<{ version: number }[]>`select version from retiro where id = ${ret.retiroId}`)[0].version;
+  await confirmarRetiro(sql, encargada.id, { retiroId: ret.retiroId, version: await version(), importe: "250", folioCoincide: true, folioEnSobre: "", motivo: "" }, PRUEBAS);
+  await recontarRetiro(sql, encargada.id, { retiroId: ret.retiroId, version: await version(), recontaron: false, importe: null, con: null, motivo: "Prueba: Recepción ya se fue" }, PRUEBAS);
+  expect(await revisarRetiro(sql, e.encargado.id, e.codigo, { retiroId: ret.retiroId, version: await version(), resultado: "faltante_confirmado", motivo: "Prueba: el sobre trae 250", montoVerificado: "250" }, PRUEBAS))
+    .toEqual({ ok: true });
+
+  // En el reporte: «Por revisar» (el cierre con $20 menos) y «Pendiente de resolución» (dos casos, cada uno con su importe).
+  await entrar(page, e.dir.correo);
+  await page.goto(`/reportes/caja?sucursal=${e.codigo}`);
+  await expect(page.getByTestId("atencion-por_revisar")).toContainText("Por revisar");
+  await expect(page.getByTestId("atencion-pendiente_resolucion")).toContainText("2Pendiente de resolución");
+  await expect(page.getByTestId("atencion-pendiente_resolucion")).toContainText(`Faltante del retiro ${folio.folio} −$30.00`);
+  await expect(page.getByTestId("atencion-pendiente_resolucion")).toContainText(`Faltante del sobre ${e.sobres[1].folio} −$50.00`);
+  await capturar(page, "pendientes-por-etapa");
+  await page.getByTestId("atencion-pendiente_resolucion").getByRole("link", { name: "Ver casos" }).click();
+  await expect(page.getByTestId("etapa-pendiente_resolucion").getByTestId("diferencia")).toHaveCount(2);
+  await capturar(page, "diferencias-por-etapa");
+
+  // Dirección no participó en el retiro: lo resuelve desde el retiro, con motivo.
+  await page.getByTestId("etapa-pendiente_resolucion").getByTestId("diferencia").filter({ hasText: "Retiro" }).getByRole("link", { name: "Ir a resolver" }).click();
+  await expect(page.getByTestId("faltante-direccion")).toContainText("Faltante de $30.00: pendiente para Dirección");
+  const f = page.getByTestId("resolver-faltante");
+  await f.getByRole("button", { name: "Registrar resolución" }).click();
+  await expect(f.getByRole("alert")).toBeVisible();
+  await f.getByLabel("Motivo (obligatorio)").fill("Prueba: lo absorbe la sucursal");
+  await capturar(page, "resolver-retiro");
+  await f.getByRole("button", { name: "Registrar resolución" }).click();
+  await expect(page.getByRole("status")).toContainText("Resolución registrada");
+  await expect(page.getByTestId("faltante-resuelto")).toContainText("Lo absorbe la sucursal");
+  await expect(page.getByTestId("estado-retiro")).toHaveText("Revisado · faltante resuelto por Dirección");
+  await expect(page.getByTestId("historial-retiro")).toContainText("Dirección resolvió el faltante: Lo absorbe la sucursal");
+  await expect(page.getByTestId("sin-destino")).toHaveText("$250.00");
+
+  // En el sobre participó: no ve el formulario, aunque tenga autorización para revisar lo propio.
+  await page.goto(`/sucursales/${e.codigo}/recoleccion`);
+  const tarjeta = page.getByTestId(`diferencia-${e.sobres[1].folio}`);
+  await expect(tarjeta.getByTestId("faltante-direccion")).toBeVisible();
+  await expect(tarjeta.getByTestId("resuelve-otra-cuenta")).toContainText("lo resuelve otra cuenta de Dirección que no participó");
+  await expect(tarjeta.getByTestId("resolver-faltante")).toHaveCount(0);
+  await capturar(page, "sobre-participo");
+
+  // De vuelta en el reporte: queda un caso pendiente de resolución; el efectivo no cambió.
+  await page.goto(`/reportes/caja?sucursal=${e.codigo}`);
+  await expect(page.getByTestId("atencion-pendiente_resolucion")).toContainText("1Pendiente de resolución");
+  await expect(page.getByTestId("atencion-pendiente_resolucion")).not.toContainText("retiro");
 });

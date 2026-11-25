@@ -7,6 +7,7 @@ import { leerImporte } from "@/lib/datos-turno";
 import type { Entorno } from "@/lib/entorno";
 import type { Receptor } from "@/lib/entregas";
 import { esIdentificadorValido } from "@/lib/permisos";
+import { estadoResolucionSobre, type EstadoResolucion } from "@/lib/resoluciones";
 
 /**
  * Bloque 5, regla 7: recolección semanal de los sobres guardados (aprobado el 18 nov 2026; solo datos ficticios).
@@ -78,6 +79,8 @@ export type DiferenciaSobre = {
   puedeRevisar: boolean;
   revisarasPropia: boolean;
   revisadaPropia: boolean;
+  /** Faltante confirmado: su resolución de Dirección, o si esta cuenta puede resolverlo (sin la autorización de revisar lo propio). */
+  resolucion: EstadoResolucion;
 };
 export type RecoleccionConfirmada = {
   id: string; entregaPor: string | null; recibe: string; recibeId: string; confirmadaEn: Date; buzon: boolean;
@@ -335,6 +338,7 @@ async function diferenciasDe(tx: Tx | Sql, recoleccionId: string, usuarioId: str
         estado: d.resultado ?? "por_revisar", motivo: d.motivo, revisadaPor: d.revisada_por,
         cadena: await cadenaSobre(tx, d.sobre_id), puedeRevisar: !d.resultado && revisa && (!d.participo || d.autorrevision !== null),
         revisarasPropia: !d.resultado && revisa && d.participo && d.autorrevision !== null, revisadaPropia: d.propia,
+        resolucion: (await estadoResolucionSobre(tx, usuarioId, d.id))!,
       });
     }
     return diferencias;

@@ -4,12 +4,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import ExcelJS from "exceljs";
 import { excelCaja, LEYENDA_ANOTADOS, OCULTO, pdfCaja } from "@/lib/archivo-caja";
 import { abrirDesdeCierre, cerrarDia, cierrePendiente, configurarCustodia, prepararCierre, sobresEnCaja } from "@/lib/cierres";
-import { revisarDiferencia } from "@/lib/diferencias";
+import { resolverDiferencia, revisarDiferencia } from "@/lib/diferencias";
+import { estadoResolucionSobre, resolverFaltanteRetiro, resolverFaltanteSobre } from "@/lib/resoluciones";
 import { diasEntre, lectura, rango, resumirCaja } from "@/lib/resumen-caja";
 import { cambiarMontoFondo, confirmarEntradaFondo } from "@/lib/fondos";
-import { confirmarRecoleccion, recogerBuzon, registrarDepositoRecoleccion, registrarEntregaSobres } from "@/lib/recolecciones";
+import { confirmarRecoleccion, recogerBuzon, registrarDepositoRecoleccion, registrarEntregaSobres, revisarDiferenciaSobre } from "@/lib/recolecciones";
 import { detalleCaja, historialDescargas, prepararDescarga, reporteCaja, type ArchivoCaja } from "@/lib/reporte-caja";
-import { confirmarRetiro, generarFolio, registrarDeposito, registrarRetiro } from "@/lib/retiros";
+import { confirmarRetiro, detalleRetiro, generarFolio, recontarRetiro, registrarDeposito, registrarRetiro, revisarRetiro } from "@/lib/retiros";
 import { abrirTurno } from "@/lib/turnos";
 import { aplicarCambio, resumenPermisos, type CambioAcceso } from "@/lib/usuarios";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
@@ -648,5 +649,113 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
     const h = await historialDescargas(sql, [e.sucursalId]);
     expect(h.slice(0, 2).map((x) => [x.conOcultos, x.conAnotados])).toEqual([[false, true], [true, false]]);
+  });
+
+  it("faltantes confirmados de un retiro y de un sobre: pendientes de resolución, por separado; Dirección que no participó los resuelve sin mover efectivo", async () => {
+    const e = await escenario();
+    const encargado = await cuenta([["encargado", e.codigo]], "Encargado");
+    // Sobre: Dirección recoge el buzón (participa en su cadena) y cuenta $50 menos en el cajón; Administración lo confirma.
+    const [bolsa, cajon] = await cerrarDelDia(e);
+    await abrir(e);
+    expect(await recogerBuzon(sql, e.dir, e.codigo, { sobres: [
+      { sobreId: bolsa.id, estado: "correcto", folioVisto: "", motivo: "", contado: "420" },
+      { sobreId: cajon.id, estado: "correcto", folioVisto: "", motivo: "", contado: "3000" },
+    ], llave: LLAVE }, PRUEBAS)).toMatchObject({ ok: true, recogido: "3420.00" });
+    const [difSobre] = await sql<{ id: string }[]>`select d.id from diferencia_sobre d join sobre_cierre s on s.id = d.sobre_id where s.sucursal_id = ${e.sucursalId}`;
+    expect(await revisarDiferenciaSobre(sql, e.admin, e.codigo, { diferenciaId: difSobre.id, resultado: "faltante_confirmado", motivo: "Prueba: faltan 50 pesos" }, PRUEBAS))
+      .toEqual({ ok: true });
+    // Retiro: se registran $280; Encargada de retiros cuenta $250, no hay recuento y el Encargado confirma el faltante.
+    const f = await generarFolio(sql, e.matutina, e.codigo, { turnoId: e.turnoId, lugar: "cajon_mensualidades" }, PRUEBAS);
+    if (!f.ok) throw new Error(f.error);
+    const x = await registrarRetiro(sql, e.matutina, e.codigo, { turnoId: e.turnoId, folioId: f.folioId, contado: "280", cambio: "0", encargada: e.encargada }, PRUEBAS);
+    if (!x.ok) throw new Error(x.error);
+    const version = async () => (await sql<{ version: number }[]>`select version from retiro where id = ${x.retiroId}`)[0].version;
+    expect(await confirmarRetiro(sql, e.encargada, { retiroId: x.retiroId, version: await version(), importe: "250", folioCoincide: true, folioEnSobre: "", motivo: "" }, PRUEBAS))
+      .toMatchObject({ ok: true, resultado: "recuento" });
+    expect(await recontarRetiro(sql, e.encargada, { retiroId: x.retiroId, version: await version(), recontaron: false, importe: null, con: null, motivo: "Prueba: Recepción ya se fue" }, PRUEBAS))
+      .toMatchObject({ ok: true });
+    expect(await revisarRetiro(sql, encargado, e.codigo, { retiroId: x.retiroId, version: await version(), resultado: "faltante_confirmado", motivo: "Prueba: el sobre trae 250", montoVerificado: "250" }, PRUEBAS))
+      .toEqual({ ok: true });
+    const t1 = await reloj();
+
+    // Dos casos distintos, cada uno con su importe, en «Pendiente de resolución»; no se suman al efectivo.
+    const antes = await caja(e.admin, e);
+    const pendientes = antes.diferencias.filter((d) => d.etapa === "pendiente_resolucion");
+    expect(pendientes.map((d) => [d.clase, d.importe, d.estado]).sort()).toEqual([
+      ["retiro_importe", "-30.00", "Faltante confirmado · pendiente de resolución de Dirección"],
+      ["sobre", "-50.00", "Faltante confirmado · pendiente de resolución de Dirección"],
+    ]);
+    const s = resumirCaja(antes, antes.corte);
+    expect(s.atencion.find((a) => a.clave === "pendiente_resolucion")).toMatchObject({ n: 2 });
+    expect(s.atencion.find((a) => a.clave === "pendiente_resolucion")!.casos!.map((c) => c.importe).sort()).toEqual(["-30.00", "-50.00"]);
+    expect(lectura(s).atencion.map((a) => a.clave)).toContain("pendiente_resolucion");
+
+    // Quien no es Dirección no resuelve.
+    expect(await resolverFaltanteRetiro(sql, encargado, e.codigo, { retiroId: x.retiroId, motivo: "Prueba: lo absorbe la sucursal" }, PRUEBAS))
+      .toEqual({ ok: false, error: "sin_permiso" });
+    // Dirección participó en la cadena del sobre: aun con su autorización para revisar lo propio, no lo resuelve.
+    const general = (await sql<{ id: string }[]>`select id from usuario where correo = 'direccion.general@prueba.fitnessland.invalid'`)[0].id;
+    const hasta = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date(Date.now() + 30 * 86_400_000));
+    expect(await aplicarCambio(sql, general, e.dir, { tipo: "autorrevision", alcance: { todas: false, sucursales: [e.sucursalId] }, hasta, motivo: "Aún no hay personal de Administración" }, PRUEBAS))
+      .toEqual({ ok: true });
+    expect(await estadoResolucionSobre(sql, e.dir, difSobre.id)).toMatchObject({ pendiente: true, puede: false, participo: true });
+    expect(await resolverFaltanteSobre(sql, e.dir, e.codigo, { diferenciaId: difSobre.id, motivo: "Prueba: lo absorbe la sucursal" }, PRUEBAS))
+      .toEqual({ ok: false, error: "participaste" });
+    await expect(sql`insert into resolucion_diferencia_sobre (diferencia_id, decision, motivo, resuelta_por) values (${difSobre.id}, 'absorbe_sucursal', 'Directo en la base', ${e.dir})`)
+      .rejects.toThrow(/no resuelve su faltante/);
+    // Motivo obligatorio.
+    expect(await resolverFaltanteRetiro(sql, e.dir, e.codigo, { retiroId: x.retiroId, motivo: "no" }, PRUEBAS)).toEqual({ ok: false, error: "motivo" });
+    // Dirección no participó en el retiro: lo resuelve. Una sola vez.
+    expect(await resolverFaltanteRetiro(sql, e.dir, e.codigo, { retiroId: x.retiroId, motivo: "Prueba: lo absorbe la sucursal" }, PRUEBAS)).toEqual({ ok: true });
+    expect(await resolverFaltanteRetiro(sql, e.dir, e.codigo, { retiroId: x.retiroId, motivo: "Prueba: otra vez" }, PRUEBAS)).toEqual({ ok: false, error: "ya_resuelta" });
+    // Otra cuenta de Dirección, que no participó en la cadena del sobre, resuelve el sobre.
+    const otraDir = await cuenta([["direccion", e.codigo]], "Dirección sin participar");
+    expect(await resolverFaltanteSobre(sql, otraDir, e.codigo, { diferenciaId: difSobre.id, motivo: "Prueba: lo absorbe la sucursal" }, PRUEBAS)).toEqual({ ok: true });
+
+    // El efectivo, los saldos y los depósitos no cambian; los casos quedan cerrados con su decisión.
+    const despues = await caja(e.admin, e);
+    expect(despues.visible).toBe(antes.visible);
+    expect(despues.confirmados.map((c) => [c.clase, c.saldo])).toEqual(antes.confirmados.map((c) => [c.clase, c.saldo]));
+    expect(despues.diferencias.filter((d) => d.clase === "retiro_importe" || d.clase === "sobre").map((d) => [d.etapa, d.estado])).toEqual([
+      ["cerrada", "Resuelta por Dirección · Lo absorbe la sucursal"], ["cerrada", "Resuelta por Dirección · Lo absorbe la sucursal"],
+    ]);
+    // Con el corte anterior siguen pendientes de resolución.
+    expect((await caja(e.admin, e, t1)).diferencias.filter((d) => d.etapa === "pendiente_resolucion")).toHaveLength(2);
+    // Historial del retiro y detalle del reporte.
+    const det = (await detalleRetiro(sql, e.dir, e.codigo, x.retiroId))!;
+    expect(det.resolucion.resolucion).toMatchObject({ decision: "absorbe_sucursal", motivo: "Prueba: lo absorbe la sucursal" });
+    expect(det.historial.map((h) => h.que).join(" | ")).toMatch(/Dirección resolvió el faltante: Lo absorbe la sucursal/);
+    expect(det.retiro.saldo).toMatchObject({ habilitado: "250.00", depositado: "0.00", sinDestino: "250.00" });
+    const enReporte = (await detalleCaja(sql, e.admin, { codigo: e.codigo, tipo: "retiro", id: x.retiroId }))!.detalle;
+    expect(enReporte.eventos.map((v) => v.texto)).toEqual(expect.arrayContaining([expect.stringMatching(/^Dirección resolvió el faltante/)]));
+    const alCorte = (await detalleCaja(sql, e.admin, { codigo: e.codigo, tipo: "retiro", id: x.retiroId, corte: t1 }))!.detalle;
+    expect(alCorte.eventos.filter((v) => v.despues).map((v) => v.texto)).toEqual([expect.stringMatching(/^Dirección resolvió el faltante/)]);
+    // No se edita ni se borra.
+    await expect(sql`update resolucion_retiro set motivo = 'Otro motivo distinto' where retiro_id = ${x.retiroId}`).rejects.toThrow(/no se edita/);
+    await expect(sql`delete from resolucion_diferencia_sobre where diferencia_id = ${difSobre.id}`).rejects.toThrow(/no se edita/);
+  });
+
+  it("diferencias de turno: «Por revisar», «Pendiente de resolución» y «Corrección pendiente» por separado, sin sumarse", async () => {
+    const e = await escenario();
+    const encargado = await cuenta([["encargado", e.codigo]], "Encargado");
+    // Cierra con $20 de más en la bolsa: sobrante contra el esperado.
+    await cerrarDelDia(e, { conteo: { bolsa: "740", cajon: "3350" } });
+    await abrir(e);
+    const [dif] = await sql<{ id: string }[]>`select d.id from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id where l.sucursal_id = ${e.sucursalId} and d.tipo = 'contra_esperado'`;
+    const etapa = async () => (await caja(e.admin, e)).diferencias.find((d) => d.id === dif.id)!;
+    expect(await etapa()).toMatchObject({ etapa: "por_revisar", importe: "20.00" });
+    expect(await revisarDiferencia(sql, encargado, e.codigo, { diferenciaId: dif.id, resultado: "sobrante_confirmado", motivo: "Prueba: sobran 20 pesos" }, PRUEBAS))
+      .toMatchObject({ ok: true });
+    expect(await etapa()).toMatchObject({ etapa: "pendiente_resolucion" });
+    expect(await resolverDiferencia(sql, e.dir, e.codigo, { diferenciaId: dif.id, decision: "origen_identificado", motivo: "Prueba: se identificó el origen",
+      origen: "Un cobro que no se registró", requiereCorreccion: true }, PRUEBAS)).toMatchObject({ ok: true });
+    const c = await caja(e.admin, e);
+    expect(c.diferencias.find((d) => d.id === dif.id)).toMatchObject({ etapa: "correccion_pendiente", abierta: true });
+    const s = resumirCaja(c, c.corte);
+    expect(s.atencion.filter((a) => a.n).map((a) => [a.clave, a.n])).toEqual([["correcciones", 1]]);
+    expect(s.atencion.find((a) => a.clave === "correcciones")!.casos).toEqual([{ texto: expect.stringMatching(/^Cierre del /), importe: "20.00" }]);
+    expect(lectura(s).atencion.map((a) => a.texto)).toEqual(["Corrección pendiente"]);
+    // El efectivo no cambia con ninguna de estas etapas.
+    expect(c.visible).toBe("4090.00");
   });
 });

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { LEYENDA_ANOTADOS } from "@/lib/archivo-caja";
 import { obtenerBaseDatos } from "@/lib/db";
-import { historialDescargas, nombreLugar, reporteCaja, type CajaSucursal, type ReporteCaja } from "@/lib/reporte-caja";
+import { ETAPA_DIFERENCIA, historialDescargas, nombreLugar, reporteCaja, type CajaSucursal, type ReporteCaja } from "@/lib/reporte-caja";
 import { aPesos, centavos, NOTA_RANGOS, RANGOS, resumirCaja, type FilaFolio } from "@/lib/resumen-caja";
 import { requerirSesion } from "@/lib/sesion-servidor";
 import { $, Anterior, diaCorto, enlaceDetalle, enlaceMas, fecha, hora, Importe, texto } from "../comun";
@@ -179,33 +179,45 @@ function Movimientos({ r, c, varias }: { r: ReporteCaja; c: CajaSucursal; varias
   );
 }
 
+/** Diferencias agrupadas por etapa: por revisar, pendiente de resolución, corrección pendiente y cerradas. */
 function Diferencias({ r, c, varias }: { r: ReporteCaja; c: CajaSucursal; varias: boolean }) {
   const neto = aPesos(c.diferencias.filter((d) => d.neto).reduce((n, d) => n + centavos(d.importe), 0));
+  const operativo = (d: CajaSucursal["diferencias"][number]) =>
+    d.clase === "retiro_importe" ? `/sucursales/${c.codigo}/retiros/${d.id}` : d.clase === "sobre" ? `/sucursales/${c.codigo}/recoleccion` : null;
+  const ACCION: Record<string, string> = { por_revisar: "Ir a revisar", pendiente_resolucion: "Ir a resolver", correccion_pendiente: "Ver el caso", cerrada: "Ver el caso" };
   return (
     <section className="tarjeta" data-testid={`diferencias-${c.codigo}`}>
       {varias ? <h2 className="titulo-seccion">{c.nombre}</h2> : null}
-      {c.diferencias.length ? (
-        <div className="tabla-desplazable">
-          <table className="tabla">
-            <thead><tr><th>Clave</th><th>Caso</th><th>Lugar</th><th>Registrada</th><th>Importe</th><th>Estado al corte</th></tr></thead>
-            <tbody>
-              {c.diferencias.map((d) => (
-                <tr key={`${d.clase}-${d.id}`} data-testid="diferencia">
-                  <td data-etiqueta="Clave"><b>{d.clave}</b></td>
-                  <td data-etiqueta="Caso">{d.texto}<Anterior si={d.anterior} />{d.referencia ? <> <span className="sub">· solo referencia de su origen (no entra en el neto)</span></> : null}</td>
-                  <td data-etiqueta="Lugar">{nombreLugar(d.lugar)}</td>
-                  <td data-etiqueta="Registrada">{hora.format(d.registradaEn)}</td>
-                  <td data-etiqueta="Importe"><Link prefetch={false} href={enlaceDetalle(r, c.codigo, d.enlace.tipo, d.enlace.id)}><strong>{$(d.importe)}</strong></Link></td>
-                  <td data-etiqueta="Estado al corte">{d.abierta ? <span className="chip-estado chip-incompleto">{d.estado}</span> : d.estado}</td>
-                </tr>
+      {(["por_revisar", "pendiente_resolucion", "correccion_pendiente", "cerrada"] as const).map((etapa) => {
+        const lista = c.diferencias.filter((d) => d.etapa === etapa);
+        if (!lista.length) return null;
+        return (
+          <div key={etapa} data-testid={`etapa-${etapa}`}>
+            <h3 className="grupo-etapa">{ETAPA_DIFERENCIA[etapa]}{etapa === "cerrada" ? " (del periodo o de un origen mostrado)" : ""}</h3>
+            <ul className="renglones">
+              {lista.map((d) => (
+                <li key={`${d.clase}-${d.id}`} data-testid="diferencia">
+                  <span>
+                    <b>{d.clave}</b> · {d.texto}<Anterior si={d.anterior} />
+                    <span className="renglon-detalle">
+                      {nombreLugar(d.lugar)} · registrada {hora.format(d.registradaEn)} · {d.estado}
+                      {d.referencia ? " · solo referencia de su origen (no entra en el neto)" : ""}
+                    </span>
+                    <span className="renglon-detalle">
+                      <Link prefetch={false} href={enlaceDetalle(r, c.codigo, d.enlace.tipo, d.enlace.id)}>Historial al corte</Link>
+                      {operativo(d) && etapa !== "cerrada" ? <> · <Link prefetch={false} href={operativo(d)!}>{ACCION[etapa]}</Link></> : null}
+                    </span>
+                  </span>
+                  <span className="renglon-importe">{$(d.importe)}</span>
+                </li>
               ))}
-            </tbody>
-          </table>
-        </div>
-      ) : <p className="sub">Sin diferencias del periodo ni anteriores abiertas al corte.</p>}
+            </ul>
+          </div>
+        );
+      })}
+      {!c.diferencias.length ? <p className="sub">Sin diferencias del periodo ni anteriores abiertas al corte.</p> : null}
       <p className="sub">
-        Del periodo, más las anteriores abiertas al corte y las de un origen que aparece en «Origen y destino». {c.diferencias.filter((d) => d.abierta).length} abiertas ·
-        neto de referencia {$(neto)} (el neto no cierra ningún caso). Las diferencias <b>no se suman</b> a ninguna etapa.
+        Ninguna se suma al efectivo ni se descuenta a ninguna persona. Neto de referencia {$(neto)} (el neto no cierra ningún caso).
       </p>
     </section>
   );

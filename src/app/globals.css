@@ -1268,3 +1268,11 @@ td.mono {
     font-size: 11.5px;
   }
 }
+.grupo-etapa {
+  margin: 10px 0 2px;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
