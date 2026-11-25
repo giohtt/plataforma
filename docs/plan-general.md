@@ -308,6 +308,12 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
        - **Excel:** una tabla filtrable por hoja: «Resumen» (con la limitación en la misma fila que cada cifra), «Por persona», «Por folio», «Depositado» (solo depósitos del periodo), «Diferencias», «Movimientos» y «Notas». Con detalle, además «Origen y destino» e «Historial», con una fila por evento.
        - **PDF:** en horizontal. La primera página lleva las cuatro cifras, el total o subtotal con su limitación, lo depositado, «Requiere atención» y la tabla por persona; después, las mismas tablas.
        - **Comprobado** con los dos casos de la maqueta 7: depósitos parciales antes y durante el periodo, incluidos varios del mismo origen, sin duplicar importes; y una sucursal sin conteos con dinero confirmado por depositar.
+       - **Lectura rápida (aprobada el 25 nov 2026, misma tarde):** la pantalla principal tiene solo tres bloques: «Efectivo al corte», «Quién tiene dinero por depositar» y «Pendientes que requieren atención».
+         - **Efectivo al corte:** el total con su limitación junto al importe. Solo aparecen los renglones con algo. Lo que está en cero se agrupa en una línea, por ejemplo «Sin pendientes: 0 sobres registrados por recoger · 0 entregas por confirmar». Lo depositado en el periodo va en una línea aparte, que no se suma.
+         - **Sin cifras repetidas:** los retiros con 48 horas o más remiten a sus folios en lugar de repetir el importe.
+         - **«Descargar»** está arriba. Al tocarlo muestra sus opciones y una forma visible de cerrarlas.
+         - **Segundo nivel:** movimientos, por folio, origen y destino, diferencias e historial de descargas. En «Origen y destino» hay una fila corta por origen (depositado en el periodo y saldo al corte); sus depósitos, fechas e historial se abren al seleccionarla.
+         - **Archivos:** la primera página del PDF sigue la misma lectura. El Excel conserva sus tablas para analizar.
        - **Pendientes:** el reporte de ingresos y cobros, el de gastos y resultados, y el aviso de 48 horas para Dirección.
      - **Falta decidir:** el cuadre completo, pendiente de los datos de Open Desk.
 

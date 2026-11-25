@@ -45,14 +45,14 @@ export function Kpi({ etiqueta, cifra, href, testid, fuera }: { etiqueta: string
 
 export function RecuadroTotal({ t, ocultos }: { t: Total; ocultos: number }) {
   return (
-    <div className="tarjeta tarjeta-oscura total-caja" data-testid="total-caja">
+    <div className="total-caja" data-testid="total-caja">
       <div>
         <strong data-testid="total-etiqueta">{t.etiqueta}</strong>
-        <p className="sub" data-testid="total-nota">{t.nota}</p>
+        <p className="total-limitacion" data-testid="total-nota">{t.nota}</p>
       </div>
       <p className="cifra-grande" data-testid="total-importe">
-        {t.importe === null ? "Sin datos" : $(t.importe)}
-        {t.importe !== null && ocultos > 0 ? <span style={{ fontSize: 15 }}> + {ocultos} {ocultos === 1 ? "oculto" : "ocultos"}</span> : null}
+        {t.importe === null ? <span className="importe-oculto">Sin datos</span> : $(t.importe)}
+        {t.importe !== null && ocultos > 0 ? <span className="total-ocultos"> + {ocultos} {ocultos === 1 ? "oculto" : "ocultos"}</span> : null}
       </p>
     </div>
   );

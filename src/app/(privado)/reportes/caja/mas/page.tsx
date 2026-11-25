@@ -5,11 +5,12 @@ import { obtenerBaseDatos } from "@/lib/db";
 import { historialDescargas, nombreLugar, reporteCaja, type CajaSucursal, type ReporteCaja } from "@/lib/reporte-caja";
 import { aPesos, centavos, NOTA_RANGOS, RANGOS, resumirCaja, type FilaFolio } from "@/lib/resumen-caja";
 import { requerirSesion } from "@/lib/sesion-servidor";
-import { $, Anterior, diaCorto, enlaceDetalle, enlaceMas, fecha, hora, texto } from "../comun";
+import { $, Anterior, diaCorto, enlaceDetalle, enlaceMas, fecha, hora, Importe, texto } from "../comun";
+import { PanelDescarga } from "../panel-descarga";
 
 export const metadata = { title: "Más detalle · Caja y depósitos · Fitnessland" };
 
-const VISTAS = { folio: "Por folio", origen: "Origen y destino", diferencias: "Diferencias", descargas: "Historial de descargas" } as const;
+const VISTAS = { movimientos: "Movimientos", folio: "Por folio", origen: "Origen y destino", diferencias: "Diferencias", descargas: "Descargas" } as const;
 type Vista = keyof typeof VISTAS;
 const ETAPAS: Record<string, string> = {
   "1": "1. En la sucursal", "2": "2. Sobres por recoger", "3": "3. Entregado, pendiente de confirmar", "4": "4. Confirmado, por depositar",
@@ -82,68 +83,98 @@ function PorFolio({ r, filas, varias, filtros }: { r: ReporteCaja; filas: FilaFo
   );
 }
 
-/** Fechas de los depósitos de un origen, con su importe si hubo más de uno. */
-function Fechas({ d }: { d: { fecha: string; importe: string }[] }) {
-  if (!d.length) return null;
-  return <><br /><span className="sub">{d.map((x) => (d.length > 1 ? `${$(x.importe)} el ${fecha(x.fecha)}` : fecha(x.fecha))).join(" · ")}</span></>;
-}
-
+/** Una fila corta por origen; sus depósitos, fechas e historial se abren al seleccionarla. */
 function OrigenDestino({ r, c, varias }: { r: ReporteCaja; c: CajaSucursal; varias: boolean }) {
-  const suma = (k: "antes" | "durante" | "saldo" | "diferencia") => aPesos(c.origenes.reduce((n, o) => n + centavos(o[k]), 0));
+  const suma = (k: "antes" | "durante" | "saldo") => aPesos(c.origenes.reduce((n, o) => n + centavos(o[k]), 0));
   return (
     <section className="tarjeta" data-testid={`origen-${c.codigo}`}>
       {varias ? <h2 className="titulo-seccion">{c.nombre}</h2> : null}
       {c.origenes.length ? (
-        <div className="tabla-desplazable">
-          <table className="tabla" data-testid="tabla-origen">
-            <thead><tr><th>Origen</th><th>Anotado o registrado</th><th>Diferencia</th><th>Contado</th><th>Depositado antes del periodo</th><th>Depositado durante el periodo</th><th>Saldo al corte</th></tr></thead>
-            <tbody>
-              {c.origenes.map((o) => (
-                <tr key={`${o.clase}-${o.id}`} data-testid="origen">
-                  <td data-etiqueta="Origen">
-                    <Link prefetch={false} href={enlaceDetalle(r, c.codigo, o.clase, o.id)}>{o.texto}</Link><Anterior si={o.anterior} />
-                    {o.clase === "recoleccion" && o.folios.length ? <><br /><span className="sub">Sobres {o.folios.join(", ")}</span></> : null}
-                    {o.pausa ? <><br /><span className="sub">En pausa por revisión: aún no se deposita</span></> : null}
-                  </td>
-                  <td data-etiqueta="Anotado o registrado">{$(o.registrado)}</td>
-                  <td data-etiqueta="Diferencia">{Number(o.diferencia) ? <>{$(o.diferencia)} <span className="sub">{o.claves.join(", ")}</span></> : "—"}</td>
-                  <td data-etiqueta="Contado">{$(o.contado)}</td>
-                  <td data-etiqueta="Depositado antes del periodo">{$(o.antes)}<Fechas d={o.depositos.filter((d) => d.antes)} /></td>
-                  <td data-etiqueta="Depositado durante el periodo">{$(o.durante)}<Fechas d={o.depositos.filter((d) => !d.antes)} /></td>
-                  <td data-etiqueta="Saldo al corte"><strong>{$(o.saldo)}</strong></td>
-                </tr>
-              ))}
-              <tr data-testid="origen-total">
-                <td data-etiqueta="Origen"><b>Total</b></td>
-                <td data-etiqueta="Anotado o registrado"></td>
-                <td data-etiqueta="Diferencia">{$(suma("diferencia"))} <span className="sub">solo referencia</span></td>
-                <td data-etiqueta="Contado"></td>
-                <td data-etiqueta="Depositado antes del periodo">{$(suma("antes"))} <span className="sub">solo referencia</span></td>
-                <td data-etiqueta="Depositado durante el periodo"><strong data-testid="origen-durante">{$(suma("durante"))}</strong></td>
-                <td data-etiqueta="Saldo al corte"><strong data-testid="origen-saldo">{$(suma("saldo"))}</strong></td>
-              </tr>
-            </tbody>
-          </table>
+        <div className="origenes" data-testid="tabla-origen">
+          <div className="origen-encabezado"><span>Origen</span><span>Depositado en el periodo</span><span>Saldo al corte</span></div>
+          {c.origenes.map((o) => (
+            <details key={`${o.clase}-${o.id}`} className="origen" data-testid="origen">
+              <summary>
+                <span className="origen-titulo">{o.clase === "retiro" ? `Retiro ${o.folios[0]}` : o.texto.split(" · ").slice(0, 2).join(" · ")}<Anterior si={o.anterior} /></span>
+                <span className="n">{$(o.durante)}</span>
+                <span className="n"><b>{$(o.saldo)}</b></span>
+              </summary>
+              <div className="origen-cuerpo" data-testid="origen-cuerpo">
+                <span>
+                  {o.clase === "retiro" ? "Registrado" : "Anotado"} {$(o.registrado)}
+                  {Number(o.diferencia) ? <> · diferencia {$(o.diferencia)} ({o.claves.join(", ")})</> : null}
+                  {" "}· contado <b>{$(o.contado)}</b> · {o.persona}{o.pausa ? " · en pausa por revisión: aún no se deposita" : ""}
+                </span>
+                {o.depositos.length ? (
+                  <table className="tabla">
+                    <thead><tr><th>Depósito</th><th>Referencia</th><th>Importe</th></tr></thead>
+                    <tbody>
+                      {o.depositos.map((d, i) => (
+                        <tr key={i}>
+                          <td data-etiqueta="Depósito">{fecha(d.fecha)} · {d.antes ? "antes del periodo" : "durante el periodo"}</td>
+                          <td data-etiqueta="Referencia">{d.referencia}</td>
+                          <td data-etiqueta="Importe">{$(d.importe)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : <span className="sub">Sin depósitos hasta el corte.</span>}
+                <span>
+                  {o.clase === "recoleccion" && o.folios.length ? <>Sobres {o.folios.join(", ")} · </> : null}
+                  <Link prefetch={false} href={enlaceDetalle(r, c.codigo, o.clase, o.id)}>Ver historial</Link>
+                </span>
+              </div>
+            </details>
+          ))}
+          <div className="origen-encabezado origen-total" data-testid="origen-total">
+            <span>Total</span><span data-testid="origen-durante">{$(suma("durante"))}</span><span data-testid="origen-saldo">{$(suma("saldo"))}</span>
+          </div>
         </div>
       ) : <p className="sub">Sin depósitos en el periodo ni saldos por depositar al corte.</p>}
       <p className="sub">
-        En cada fila: <b>anotado + diferencia = contado</b> y <b>contado = depositado antes + depositado durante + saldo al corte</b>.
-        «Depositado durante el periodo» es el depositado del resumen y «Saldo al corte» es «Por depositar»; lo depositado antes del periodo es solo
-        referencia y no entra en ninguna cifra del periodo. Las diferencias se ligan por su clave y no se suman.
+        El depositado en el periodo y el saldo coinciden con el resumen. Al abrir una fila: lo anotado, la diferencia con su clave, lo contado y cada depósito
+        (antes o durante el periodo). Lo depositado antes del periodo ({$(suma("antes"))}) es solo referencia.
       </p>
-      <h3>Depósitos del periodo</h3>
-      {c.depositos.length ? (
-        <ul className="lista-simple" data-testid="depositos">
-          {c.depositos.map((d, i) => {
-            const o = c.origenes.find((x) => x.clase === d.clase && x.id === d.origenId);
-            return (
-              <li key={i}>
-                {fecha(d.fecha)} · ref. {d.referencia} · registró {d.por} · {o ? o.texto : d.clase === "retiro" ? `Retiro ${d.folio}` : "Recolección"} · <strong>{$(d.importe)}</strong>
-              </li>
-            );
-          })}
-        </ul>
-      ) : <p className="sub">Sin depósitos en el periodo.</p>}
+    </section>
+  );
+}
+
+/** Movimientos del periodo: pasos del mismo dinero, no se suman entre sí ni con los saldos. */
+function Movimientos({ r, c, varias }: { r: ReporteCaja; c: CajaSucursal; varias: boolean }) {
+  const m = c.movimientos;
+  return (
+    <section className="tarjeta" data-testid={`movimientos-${c.codigo}`}>
+      {varias ? <h2 className="titulo-seccion">{c.nombre}</h2> : null}
+      <ul className="renglones">
+        <li>
+          <details>
+            <summary>Sobres sellados al cerrar ({m.sellados.n})</summary>
+            <ul>{m.lista.sellados.map((x) => <li key={x.id}><Link prefetch={false} href={enlaceDetalle(r, c.codigo, "sobre", x.id)}><span className="mono">{x.folio}</span></Link> · {hora.format(x.en)} · <Importe v={x.anotado} /></li>)}</ul>
+          </details>
+          {m.sellados.anotado === null ? <span className="importe-oculto">anotado oculto ({m.sellados.ocultos} sin contar)</span> : <span className="renglon-importe">{$(m.sellados.anotado)}</span>}
+        </li>
+        <li>
+          <details>
+            <summary>Recogido por Dirección, contado ({m.recogido.n})</summary>
+            <ul>{m.lista.recogidas.map((x) => <li key={x.id}><Link prefetch={false} href={enlaceDetalle(r, c.codigo, "recoleccion", x.id)}>{hora.format(x.en)}</Link> · {x.recibe} · {$(x.importe)}</li>)}</ul>
+          </details>
+          <span className="renglon-importe">{$(m.recogido.importe)}</span>
+        </li>
+        <li>
+          <details>
+            <summary>Entregado a Encargada de retiros ({m.retiros.n}: {m.retiros.confirmados} confirmados, {m.retiros.pendientes} por confirmar)</summary>
+            <ul>{m.lista.retiros.map((x) => <li key={x.id}><Link prefetch={false} href={enlaceDetalle(r, c.codigo, "retiro", x.id)}><span className="mono">{x.folio}</span></Link> · {hora.format(x.en)} · <Importe v={x.importe} />{x.pendiente ? " · por confirmar" : ""}</li>)}</ul>
+          </details>
+          <span className="renglon-importe">{$(m.retiros.importe)}{m.retiros.ocultos ? <span className="importe-oculto"> + {m.retiros.ocultos} oculto</span> : null}</span>
+        </li>
+        <li><span>Entradas al fondo recibidas ({m.entradasFondo.n})</span><span className="renglon-importe">{$(m.entradasFondo.importe)}</span></li>
+        <li><span>Depositado en el banco ({m.depositado.n})</span><span className="renglon-importe">{$(m.depositado.importe)}</span></li>
+      </ul>
+      <p className="sub">
+        Son pasos del mismo dinero: no se suman entre sí ni con los saldos. Los cobros de visitas están en el{" "}
+        <Link prefetch={false} href={`/reportes/visitas?${new URLSearchParams({ sucursal: c.codigo, desde: r.desde, hasta: r.hasta })}`}>reporte de visitas</Link>;
+        las mensualidades no se calculan (faltan datos de Open Desk).
+      </p>
     </section>
   );
 }
@@ -184,13 +215,16 @@ export default async function MasDetalle({ searchParams }: PageProps<"/reportes/
   const sesion = await requerirSesion();
   const q = await searchParams;
   const pedida = texto(q.sucursal, 10);
-  const vista: Vista = (Object.keys(VISTAS) as Vista[]).find((v) => v === texto(q.vista, 15)) ?? "folio";
+  const vista: Vista = (Object.keys(VISTAS) as Vista[]).find((v) => v === texto(q.vista, 15)) ?? "movimientos";
   const sql = obtenerBaseDatos()!;
   const r = await reporteCaja(sql, sesion.usuarioId, {
     codigo: pedida && pedida !== "todas" ? pedida : null, desde: texto(q.desde, 10), hasta: texto(q.hasta, 10), corte: texto(q.corte),
   });
   if (!r) notFound();
   const varias = r.filas.length > 1;
+  const pedidas = r.filas.map((f) => f.codigo);
+  const descargables = r.sucursales.filter((x) => x.descargar && pedidas.includes(x.codigo));
+  const noDescargables = r.sucursales.filter((x) => !x.descargar && pedidas.includes(x.codigo));
   const sucursal = r.codigo ?? "todas";
   const volver = `/reportes/caja?${new URLSearchParams({ sucursal, desde: r.desde, hasta: r.hasta, corte: r.corte.toISOString() })}`;
   const folios = r.filas.flatMap((c) => resumirCaja(c, r.corte).folios);
@@ -200,10 +234,17 @@ export default async function MasDetalle({ searchParams }: PageProps<"/reportes/
   return (
     <main className="contenedor contenedor-amplio">
       <p className="sub"><Link href={volver}>← Caja y depósitos · {r.filas.map((f) => f.nombre).join(", ")} · corte {hora.format(r.corte)}</Link></p>
-      <h1 className="cabecera-titulo">Más detalle</h1>
-      <div className="franja-corte" data-testid="corte">
-        <span>{r.filas.map((f) => f.nombre).join(", ")} · {fecha(r.desde)} al {fecha(r.hasta)} · corte <b>{hora.format(r.corte)}</b></span>
-        <span>Mismo corte que el resumen</span>
+      <div className="cabecera-caja">
+        <div>
+          <h1 className="cabecera-titulo">Más detalle</h1>
+          <p className="sub" data-testid="corte">
+            <b>{r.filas.map((f) => f.nombre).join(", ")}</b> · {fecha(r.desde)} al {fecha(r.hasta)} · corte <b>{hora.format(r.corte)}</b> · mismo corte que el resumen
+          </p>
+        </div>
+        {descargables.length ? (
+          <PanelDescarga sucursal={sucursal} desde={r.desde} hasta={r.hasta} corte={r.corte.toISOString()} corteTexto={hora.format(r.corte)}
+                         incluidas={descargables.map((x) => x.nombre)} excluidas={noDescargables.map((x) => x.nombre)} />
+        ) : null}
       </div>
       {r.filas.some((f) => f.anotadosSinContar) ? <p className="aviso aviso-info">{LEYENDA_ANOTADOS}: no los recoges, por eso los ves.</p> : null}
       <nav className="pestanas-caja" aria-label="Más detalle">
@@ -213,6 +254,7 @@ export default async function MasDetalle({ searchParams }: PageProps<"/reportes/
       </nav>
       <h2 className="titulo-seccion">{VISTAS[vista]}</h2>
 
+      {vista === "movimientos" ? r.filas.map((c) => <Movimientos key={c.codigo} r={r} c={c} varias={varias} />) : null}
       {vista === "folio" ? <PorFolio r={r} filas={folios} varias={varias} filtros={filtros} /> : null}
       {vista === "origen" ? r.filas.map((c) => <OrigenDestino key={c.codigo} r={r} c={c} varias={varias} />) : null}
       {vista === "diferencias" ? r.filas.map((c) => <Diferencias key={c.codigo} r={r} c={c} varias={varias} />) : null}

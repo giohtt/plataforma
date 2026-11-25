@@ -62,7 +62,7 @@ export type FilaFolio = {
   atrasado: boolean;
   enlace: { tipo: string; id: string };
 };
-export type PorPersona = { persona: string; rangos: [number, number, number]; total: number; atrasados: number };
+export type PorPersona = { persona: string; n: number; rangos: [number, number, number]; total: number; atrasados: number };
 export type ResumenCaja = {
   enSucursal: Cifra; sobres: Cifra; pendiente: Cifra; porDepositar: Cifra; total: Total;
   depositado: { importe: string; n: number };
@@ -87,7 +87,15 @@ export function textoFaltan(lugares: TipoLugar[] | number, ocultos: number): str
   return f;
 }
 
-export function armarTotal(visible: string, conocido: boolean, faltan: string[]): Total {
+/** La limitación que siempre acompaña al total, con la fecha del último conteo del cajón si la hay. */
+export function limitacion(ultimoConteoCajon: Date | null) {
+  return ultimoConteoCajon
+    ? `Incompleto: faltan las mensualidades de Open Desk; el cajón cuenta con su último conteo (${fechaHora(ultimoConteoCajon)}).`
+    : "Incompleto: faltan las mensualidades de Open Desk.";
+}
+const fechaHora = (d: Date) => new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(d);
+
+export function armarTotal(visible: string, conocido: boolean, faltan: string[], incompleto = limitacion(null)): Total {
   const lista = faltan.join(" y ");
   if (!conocido) {
     return { tipo: "sin_datos", etiqueta: "Total al corte", importe: null, faltan,
@@ -95,9 +103,9 @@ export function armarTotal(visible: string, conocido: boolean, faltan: string[])
   }
   if (faltan.length) {
     return { tipo: "subtotal", etiqueta: "Subtotal visible al corte", importe: visible, faltan,
-             nota: `No es el total: faltan ${lista}. Incompleto además por las mensualidades de Open Desk.` };
+             nota: `No es el total: faltan ${lista}. ${incompleto}` };
   }
-  return { tipo: "total", etiqueta: "Total registrado al corte", importe: visible, faltan, nota: INCOMPLETO };
+  return { tipo: "total", etiqueta: "Total registrado al corte", importe: visible, faltan, nota: incompleto };
 }
 
 const plural = (n: number, uno: string, varios: string) => `${n} ${n === 1 ? uno : varios}`;
@@ -110,9 +118,7 @@ export function resumirCaja(c: CajaSucursal, corte: Date): ResumenCaja {
   const enSucursal: Cifra = {
     importe: conDatos.length ? pesos(conDatos.reduce((n, l) => n + cent(l.importe), 0)) : null, n: c.lugares.length, ocultos: 0,
     nota: !conDatos.length ? "Bolsa y cajón sin turnos ni conteos registrados. No es cero."
-      : [c.lugares.map((l) => `${l.tipo === "bolsa_visitas" ? "Bolsa" : "Cajón"} ${l.importe === null ? "sin datos" : dinero(l.importe)}`).join(" · "),
-         cajon ? `Cajón: último conteo ${new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" }).format(cajon.base!.en)}` : ""]
-        .filter(Boolean).join(" · "),
+      : c.lugares.map((l) => `${l.tipo === "bolsa_visitas" ? "Bolsa" : "Cajón"} ${l.importe === null ? "sin datos" : dinero(l.importe)}`).join(" · "),
   };
   // 2. Sobres por recoger: sin registros al corte, $0.00 y «0 sobres registrados».
   const sobresVisibles = c.sobres.filter((s) => s.anotado !== null);
@@ -140,7 +146,7 @@ export function resumirCaja(c: CajaSucursal, corte: Date): ResumenCaja {
   };
 
   const conocido = conDatos.length > 0 || sobresVisibles.length > 0 || pendVisibles.length > 0 || c.confirmados.length > 0;
-  const total = armarTotal(c.visible, conocido, textoFaltan(lugaresSinDatos, c.ocultos));
+  const total = armarTotal(c.visible, conocido, textoFaltan(lugaresSinDatos, c.ocultos), limitacion(cajon?.base?.en ?? null));
 
   // Requiere atención (aparte: no se suma).
   const atrasados = c.confirmados.filter((x) => x.clase === "retiro" && x.aviso);
@@ -163,7 +169,8 @@ export function resumirCaja(c: CajaSucursal, corte: Date): ResumenCaja {
   const mapa = new Map<string, PorPersona>();
   for (const x of c.confirmados) {
     const persona = x.clase === "recoleccion" ? x.recibe : x.encargada;
-    const p = mapa.get(persona) ?? { persona, rangos: [0, 0, 0], total: 0, atrasados: 0 };
+    const p = mapa.get(persona) ?? { persona, n: 0, rangos: [0, 0, 0], total: 0, atrasados: 0 };
+    p.n += 1;
     p.rangos[rango(diasEntre(x.desde, corte))] += cent(x.saldo);
     p.total += cent(x.saldo);
     if (x.clase === "retiro" && x.aviso) p.atrasados += 1;
@@ -251,3 +258,28 @@ export function resumirVarias(filas: { c: CajaSucursal; r: ResumenCaja }[]) {
 
 export const centavos = cent;
 export const aPesos = pesos;
+
+/**
+ * Lo que se lee en la pantalla principal y en la primera página del PDF (aprobado el 25 nov 2026): solo las cifras con
+ * algo; lo que está en cero se agrupa en una línea. No repite importes: los retiros con 48 horas o más remiten a
+ * «Quién tiene dinero por depositar».
+ */
+export type Renglon = { clave: string; etiqueta: string; importe: string | null; sinImporte?: string; detalle: string };
+export function lectura(s: ResumenCaja) {
+  const efectivo: Renglon[] = [{ clave: "1", etiqueta: "En la sucursal", importe: s.enSucursal.importe, sinImporte: "Sin datos", detalle: s.enSucursal.nota }];
+  const ceros: string[] = [];
+  if (s.sobres.n) efectivo.push({ clave: "2", etiqueta: "Sobres por recoger", importe: s.sobres.importe, sinImporte: "Oculto: sin contar", detalle: s.sobres.nota });
+  else ceros.push("0 sobres registrados por recoger");
+  if (s.pendiente.n) efectivo.push({ clave: "3", etiqueta: "Entregado, pendiente de confirmar", importe: s.pendiente.importe, sinImporte: "Oculto: sin contar", detalle: s.pendiente.nota });
+  else ceros.push("0 entregas por confirmar");
+  if (s.porDepositar.n) efectivo.push({ clave: "4", etiqueta: "Confirmado, por depositar", importe: s.porDepositar.importe, detalle: "Quién lo tiene, abajo" });
+  else ceros.push("nada por depositar");
+  const personas = s.porPersona.map((p) => ({
+    persona: p.persona, importe: pesos(p.total), atrasados: p.atrasados,
+    detalle: [`${p.n} ${p.n === 1 ? "saldo" : "saldos"}`,
+              ...[2, 1, 0].filter((i) => p.rangos[i]).map((i) => `${dinero(pesos(p.rangos[i]))} ${i === 2 ? "con más de 7 días" : i === 1 ? "de 3 a 7 días" : "de 0 a 2 días"}`)].join(" · "),
+  }));
+  const atencion = s.atencion.filter((a) => a.n);
+  const atencionCeros = s.atencion.filter((a) => !a.n).map((a) => a.texto.toLowerCase());
+  return { efectivo, ceros, personas, atencion, atencionCeros };
+}

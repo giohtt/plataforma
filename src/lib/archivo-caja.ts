@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
 import { dinero, nombreLugar, type ArchivoCaja, type CajaSucursal, type Detalle } from "@/lib/reporte-caja";
-import { aPesos, centavos, INCOMPLETO, NOTA_RANGOS, RANGOS, resumirCaja, resumirVarias, type ResumenCaja } from "@/lib/resumen-caja";
+import { aPesos, centavos, INCOMPLETO, lectura, NOTA_RANGOS, RANGOS, resumirCaja, resumirVarias, type ResumenCaja } from "@/lib/resumen-caja";
 
 /**
  * Archivos de «Caja y depósitos» (Excel y PDF; estructura aprobada el 25 nov 2026). Llevan lo mismo que la pantalla de
@@ -327,24 +327,34 @@ export async function pdfCaja(a: ArchivoCaja): Promise<Buffer> {
     for (const f of t.filas) fila(indices.map((i) => textoCelda(f.celdas[i])), f.negrita ? negrita : normal);
     if (t.nota) { y -= 3; escribir(t.nota, normal, 7.5, gris); }
   };
-  const cifra = (x: number, ancho0: number, etiqueta: string, importe: string, nota: string) => {
-    const h = 58;
-    pagina.drawRectangle({ x, y: y - h, width: ancho0, height: h, borderColor: rgb(0.85, 0.87, 0.9), borderWidth: 1, color: rgb(1, 1, 1) });
-    pagina.drawText(seguro(etiqueta), { x: x + 8, y: y - 15, size: 8.5, font: negrita, color: gris });
-    pagina.drawText(seguro(importe), { x: x + 8, y: y - 34, size: 15, font: negrita, color: tinta });
-    lineas(nota, normal, 7, ancho0 - 16).slice(0, 2).forEach((l, i) => pagina.drawText(l, { x: x + 8, y: y - 45 - i * 8, size: 7, font: normal, color: gris }));
-  };
-  const recuadro = (etiqueta: string, nota: string, importe: string) => {
-    const notaL = lineas(nota, normal, 8.5, util - 200);
-    const h = 26 + notaL.length * 11;
-    if (y - h < margen) nueva();
-    pagina.drawRectangle({ x: margen, y: y - h, width: util, height: h, color: rgb(0.13, 0.15, 0.17) });
-    pagina.drawText(seguro(etiqueta), { x: margen + 12, y: y - 17, size: 11, font: negrita, color: rgb(1, 1, 1) });
-    notaL.forEach((l, i) => pagina.drawText(l, { x: margen + 12, y: y - 30 - i * 11, size: 8.5, font: normal, color: rgb(0.79, 0.81, 0.84) }));
+  // Primera página: la misma lectura rápida que la pantalla (total con su limitación, renglones con algo, ceros agrupados).
+  const ancho1 = 560;
+  const linea = () => pagina.drawLine({ start: { x: margen, y }, end: { x: margen + ancho1, y }, thickness: 0.5, color: rgb(0.85, 0.87, 0.9) });
+  const bloque = (titulo: string) => { if (y < margen + 90) nueva(); y -= 10; escribir(titulo, negrita, 12); y -= 2; };
+  const renglon = (etiqueta: string, detalle: string, importe: string, fuerte = true) => {
+    const det = detalle ? lineas(detalle, normal, 8.5, ancho1 - 140) : [];
+    const h = 15 + det.length * 11 + 4;
+    if (y - h < margen + 14) nueva();
+    pagina.drawText(seguro(etiqueta), { x: margen, y: y - 12, size: 10.5, font: normal, color: tinta });
+    det.forEach((l, i) => pagina.drawText(l, { x: margen, y: y - 25 - i * 11, size: 8.5, font: normal, color: gris }));
     const t = seguro(importe);
-    pagina.drawText(t, { x: margen + util - 12 - negrita.widthOfTextAtSize(t, 18), y: y - h / 2 - 6, size: 18, font: negrita, color: rgb(1, 1, 1) });
-    y -= h + 8;
+    const f = fuerte ? negrita : normal;
+    pagina.drawText(t, { x: margen + ancho1 - f.widthOfTextAtSize(t, 10.5), y: y - 12, size: 10.5, font: f, color: fuerte ? tinta : gris });
+    y -= h;
+    linea();
   };
+  const totalLectura = (t: { etiqueta: string; nota: string; importe: string | null }, ocultos: number) => {
+    const nota = lineas(t.nota, normal, 9, ancho1 - 200);
+    const h = 22 + nota.length * 12;
+    if (y - h < margen) nueva();
+    pagina.drawText(seguro(t.etiqueta), { x: margen, y: y - 13, size: 11.5, font: negrita, color: tinta });
+    nota.forEach((l, i) => pagina.drawText(l, { x: margen, y: y - 28 - i * 12, size: 9, font: normal, color: ocre }));
+    const im = seguro(t.importe === null ? SIN_DATOS : `${dinero(t.importe)}${ocultos ? ` + ${ocultos} ${ocultos === 1 ? "oculto" : "ocultos"}` : ""}`);
+    pagina.drawText(im, { x: margen + ancho1 - negrita.widthOfTextAtSize(im, 22), y: y - 22, size: 22, font: negrita, color: t.importe === null ? gris : tinta });
+    y -= h + 6;
+    linea();
+  };
+  const ceros = (lista: string[]) => { if (lista.length) { y -= 4; escribir(`Sin pendientes: ${lista.join(" · ")}.`, normal, 9, gris, ancho1); } };
   const cabecera = (titulo: string) => {
     escribir(titulo, negrita, 16);
     escribir(`${dia(r.desde)} al ${dia(r.hasta)} · corte ${fechaHora(r.corte)} · Descargado por ${a.por} el ${fechaHora(a.en)} · ${a.contenido === "detalle" ? "con detalle" : "resumen"} · Solo datos ficticios`, normal, 8.5, gris);
@@ -352,35 +362,45 @@ export async function pdfCaja(a: ArchivoCaja): Promise<Buffer> {
     if (p.anotados) escribir(LEYENDA_ANOTADOS, negrita, 8.5, ocre);
     y -= 4;
   };
-  const importeO = (x: { importe: string | null; ocultos: number }) => (x.importe === null ? (x.ocultos ? OCULTO : SIN_DATOS) : dinero(x.importe));
 
   if (p.sucursales.length > 1) {
     cabecera("Caja y depósitos · Todas las incluidas");
-    tabla({
-      hoja: "", titulo: "Por sucursal",
-      columnas: [{ titulo: "Sucursal", ancho: 0, pdf: 130 }, { titulo: "En la sucursal", ancho: 0, pdf: 90, derecha: true }, { titulo: "Sobres por recoger", ancho: 0, pdf: 90, derecha: true },
-                 { titulo: "Pendiente de confirmar", ancho: 0, pdf: 90, derecha: true }, { titulo: "Por depositar", ancho: 0, pdf: 90, derecha: true },
-                 { titulo: "Total al corte", ancho: 0, pdf: 130 }, { titulo: "Depositado en el periodo", ancho: 0, pdf: 90, derecha: true }],
-      filas: p.sucursales.map(({ c, s }) => ({ celdas: [c.nombre, importeO(s.enSucursal), importeO(s.sobres), importeO(s.pendiente), importeO(s.porDepositar),
-                                                         `${s.total.importe === null ? SIN_DATOS : dinero(s.total.importe)}${s.total.tipo === "subtotal" ? " · subtotal visible" : ""}`, dinero(s.depositado.importe)] })),
-    });
-    y -= 8;
     const juntas = resumirVarias(p.sucursales.map((x) => ({ c: x.c, r: x.s })));
-    recuadro(juntas.total.etiqueta, juntas.total.nota, juntas.total.importe === null ? SIN_DATOS : dinero(juntas.total.importe));
-    escribir(`Depositado en el periodo (ya salió de la custodia, no se suma): ${dinero(juntas.depositado.importe)} · ${juntas.depositado.n} depósitos`, normal, 9);
+    bloque("Efectivo al corte");
+    totalLectura(juntas.total, p.sucursales.reduce((n, x) => n + x.s.ocultos, 0));
+    for (const { c, s } of p.sucursales) {
+      const pendientes = s.atencion.reduce((n, x) => n + x.n, 0);
+      renglon(c.nombre, [s.total.tipo === "subtotal" ? `Subtotal visible: faltan ${s.total.faltan.join(" y ")}` : s.total.tipo === "sin_datos" ? "Sin ningún importe conocido" : "Total registrado",
+                         s.porDepositar.n ? `por depositar ${dinero(s.porDepositar.importe!)}` : "", pendientes ? `${pendientes} ${pendientes === 1 ? "pendiente" : "pendientes"}` : ""].filter(Boolean).join(" · "),
+              s.total.importe === null ? SIN_DATOS : dinero(s.total.importe));
+    }
+    y -= 4;
+    escribir(`Ya depositado en el periodo, no se suma: ${dinero(juntas.depositado.importe)} · ${juntas.depositado.n} ${juntas.depositado.n === 1 ? "depósito" : "depósitos"}`, normal, 9.5, tinta, ancho1);
   }
   for (const [i, { c, s, tablas }] of p.sucursales.entries()) {
     if (i > 0 || p.sucursales.length > 1) nueva();
     cabecera(`Caja y depósitos · ${c.nombre}`);
-    const w = (util - 3 * 10) / 4;
-    [["En la sucursal", s.enSucursal], ["Sobres por recoger", s.sobres], ["Pendiente de confirmar", s.pendiente], ["Por depositar", s.porDepositar]]
-      .forEach(([et, x], j) => { const k = x as ResumenCaja["sobres"]; cifra(margen + j * (w + 10), w, et as string, importeO(k), k.nota); });
-    y -= 66;
-    recuadro(s.total.etiqueta, s.total.nota, s.total.importe === null ? SIN_DATOS : dinero(s.total.importe) + (s.ocultos ? ` + ${s.ocultos} ocultos` : ""));
-    escribir(`Depositado en el periodo (ya salió de la custodia, no se suma): ${dinero(s.depositado.importe)} · ${s.depositado.n} ${s.depositado.n === 1 ? "depósito" : "depósitos"}`, negrita, 9);
-    escribir(`Requiere atención: ${s.atencion.map((x) => `${x.texto.toLowerCase()}: ${x.n}${x.n ? ` (${dinero(x.importe)})` : ""}`).join(" · ")}`, normal, 8.5);
+    const l = lectura(s);
+    bloque("Efectivo al corte");
+    totalLectura(s.total, s.ocultos);
+    for (const x of l.efectivo) renglon(x.etiqueta, x.detalle, x.importe === null ? (x.sinImporte ?? SIN_DATOS) : dinero(x.importe), x.importe !== null);
+    ceros(l.ceros);
+    y -= 2;
+    escribir(`Ya depositado en el periodo, no se suma: ${dinero(s.depositado.importe)} · ${s.depositado.n} ${s.depositado.n === 1 ? "depósito" : "depósitos"}`, normal, 9.5, tinta, ancho1);
+    bloque("Quién tiene dinero por depositar");
+    if (!l.personas.length) escribir("Nadie tiene dinero por depositar al corte.", normal, 9, gris, ancho1);
+    for (const x of l.personas) renglon(x.persona, x.detalle, dinero(x.importe));
+    bloque("Pendientes que requieren atención");
+    for (const x of l.atencion) {
+      renglon(`${x.n} · ${x.texto}`, "", x.clave === "atrasados" ? "Ver «Por folio»"
+        : (x.clave === "por_revisar" || x.clave === "correcciones") && Number(x.importe) > 0 ? `+${dinero(x.importe)}` : dinero(x.importe), x.clave !== "atrasados");
+    }
+    ceros(l.atencionCeros);
+    // Después, las tablas para analizar (la tabla por persona ya está resumida arriba).
+    nueva();
+    escribir(`Detalle al corte · ${c.nombre}`, negrita, 13);
     for (const t of tablas) {
-      if (t.hoja === "Resumen") continue;
+      if (t.hoja === "Resumen" || t.hoja === "Por persona") continue;
       tabla(t);
     }
   }

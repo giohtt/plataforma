@@ -5,7 +5,7 @@ import ExcelJS from "exceljs";
 import { excelCaja, LEYENDA_ANOTADOS, OCULTO, pdfCaja } from "@/lib/archivo-caja";
 import { abrirDesdeCierre, cerrarDia, cierrePendiente, configurarCustodia, prepararCierre, sobresEnCaja } from "@/lib/cierres";
 import { revisarDiferencia } from "@/lib/diferencias";
-import { diasEntre, rango, resumirCaja } from "@/lib/resumen-caja";
+import { diasEntre, lectura, rango, resumirCaja } from "@/lib/resumen-caja";
 import { cambiarMontoFondo, confirmarEntradaFondo } from "@/lib/fondos";
 import { confirmarRecoleccion, recogerBuzon, registrarDepositoRecoleccion, registrarEntregaSobres } from "@/lib/recolecciones";
 import { detalleCaja, historialDescargas, prepararDescarga, reporteCaja, type ArchivoCaja } from "@/lib/reporte-caja";
@@ -465,7 +465,8 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
       expect(t).not.toContain("Total registrado al corte");
       expect(t).not.toContain("Subtotal visible");
     }
-    expect(pdf).toContain("En la sucursal Sin datos");
+    expect(pdf).toMatch(/En la sucursal .*No es cero\. Sin datos/);
+    expect(pdf).toContain("Sin pendientes: 0 sobres registrados por recoger · 0 entregas por confirmar · nada por depositar.");
     expect(pdf).toContain("Total al corte");
   });
 
@@ -491,7 +492,11 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
     expect(r.confirmados).toEqual([expect.objectContaining({ clase: "retiro", saldo: "800.00" })]);
     const s = resumirCaja(r, r.corte);
     expect(s.total).toMatchObject({ tipo: "subtotal", etiqueta: "Subtotal visible al corte", importe: "800.00", faltan: ["los datos de bolsa y cajón (sin conteos registrados)"] });
-    expect(s.total.nota).toBe("No es el total: faltan los datos de bolsa y cajón (sin conteos registrados). Incompleto además por las mensualidades de Open Desk.");
+    expect(s.total.nota).toBe("No es el total: faltan los datos de bolsa y cajón (sin conteos registrados). Incompleto: faltan las mensualidades de Open Desk.");
+    // Lectura rápida: «En la sucursal» sin datos; lo que está en cero, agrupado en una línea.
+    const l = lectura(s);
+    expect(l.efectivo.map((x) => [x.etiqueta, x.importe])).toEqual([["En la sucursal", null], ["Confirmado, por depositar", "800.00"]]);
+    expect(l.ceros).toEqual(["0 sobres registrados por recoger", "0 entregas por confirmar"]);
     expect(s.enSucursal.importe).toBeNull();
     expect(s.sobres).toMatchObject({ importe: "0.00", nota: "0 sobres registrados" });
     expect(s.porDepositar.importe).toBe("800.00");
@@ -584,7 +589,7 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
         expect(pdf).toContain("$2,160.00");
         expect(pdf).toContain("$1,040.00");
         // Lo depositado antes del periodo solo aparece como referencia del origen y en su historial, nunca como depósito del periodo.
-        expect(pdf).toMatch(/Depositado en el periodo \(ya salió de la custodia, no se suma\): \$2,160\.00 · 4 depósitos/);
+        expect(pdf).toContain("Ya depositado en el periodo, no se suma: $2,160.00 · 4 depósitos");
         continue;
       }
       const h = await hojasExcel(await excelCaja(a.archivo));

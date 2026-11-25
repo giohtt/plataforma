@@ -89,6 +89,19 @@ async function entrar(page: Page, correo: string) {
   await page.getByRole("button", { name: "Iniciar sesión" }).click();
   await expect(page).toHaveURL(/\/$/);
 }
+/** Elige sucursal (y periodo) desde «Cambiar sucursal o periodo». */
+async function elegir(page: Page, sucursal: string) {
+  if (await page.getByTestId("descargar").isVisible()) await page.getByTestId("cerrar-descarga").click();
+  const d = page.getByTestId("cambiar");
+  if ((await d.getAttribute("open")) === null) await d.locator("summary").click();
+  await page.getByTestId("filtros").getByLabel("Sucursal").selectOption({ label: sucursal });
+  await page.getByRole("button", { name: "Ver" }).click();
+}
+/** Abre el panel de descarga si está cerrado. */
+async function abrirDescarga(page: Page) {
+  if (!(await page.getByTestId("descargar").isVisible())) await page.getByTestId("abrir-descarga").click();
+  await expect(page.getByTestId("descargar")).toBeVisible();
+}
 const capturar = async (page: Page, nombre: string) => {
   if (process.env.CAPTURAR) await page.screenshot({ path: `${process.env.CAPTURAR}/${nombre}-${test.info().project.name}.png`, fullPage: true });
 };
@@ -135,28 +148,27 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   await page.getByTestId("ir-reporte-caja").click();
   await expect(page.getByRole("heading", { name: "Caja y depósitos", exact: true })).toBeVisible();
   await expect(page.getByTestId("resumen-sucursales")).toBeVisible();
-  await page.getByTestId("filtros").getByLabel("Sucursal").selectOption({ label: e.nombre });
-  await page.getByRole("button", { name: "Ver" }).click();
-  // Las cuatro cifras de custodia al corte.
-  await expect(page.getByTestId("kpi-sucursal-importe")).toHaveText("$600.00");
-  await expect(page.getByTestId("kpi-sucursal")).toContainText("Bolsa $300.00 · Cajón $300.00 · Cajón: último conteo");
-  await expect(page.getByTestId("kpi-sobres-importe")).toHaveText("$3,450.00");
-  await expect(page.getByTestId("kpi-sobres")).toContainText("2 sobres");
-  await expect(page.getByTestId("kpi-pendiente-importe")).toHaveText("$0.00");
-  await expect(page.getByTestId("kpi-por-depositar-importe")).toHaveText("$0.00");
+  await elegir(page, e.nombre);
+  // Efectivo al corte: solo los renglones con algo; lo que está en cero, agrupado en una línea.
+  await expect(page.getByTestId("renglon-1-importe")).toHaveText("$600.00");
+  await expect(page.getByTestId("renglon-1")).toContainText("Bolsa $300.00 · Cajón $300.00");
+  await expect(page.getByTestId("renglon-2-importe")).toHaveText("$3,450.00");
+  await expect(page.getByTestId("renglon-2")).toContainText("2 sobres");
+  await expect(page.getByTestId("efectivo-ceros")).toHaveText("Sin pendientes: 0 entregas por confirmar · nada por depositar.");
+  await expect(page.getByTestId("total-nota")).toContainText("el cajón cuenta con su último conteo");
   await expect(page.getByTestId("leyenda-anotados")).toContainText("Contiene importes anotados de sobres sin contar");
   await expect(page.getByTestId("total-etiqueta")).toHaveText("Total registrado al corte");
   await expect(page.getByTestId("total-caja")).toContainText("Incompleto");
   await expect(page.getByTestId("total-importe")).toHaveText("$4,050.00");
-  await expect(page.getByTestId("kpi-depositado-importe")).toHaveText("$0.00");
+  await expect(page.getByTestId("depositado-importe")).toHaveText("$0.00");
   // El aumento del fondo sin confirmar y la diferencia del cierre van aparte, en «Requiere atención».
   await expect(page.getByTestId("atencion-entradas")).toContainText("$200.00");
   await expect(page.getByTestId("atencion-por_revisar")).toContainText("−$20.00");
-  await expect(page.getByTestId("kpi-sucursal")).not.toContainText("$500.00");
+  await expect(page.getByTestId("renglon-1")).not.toContainText("$500.00");
   await capturar(page, "caja-administracion");
 
   // Segundo nivel, con el mismo corte: por folio (con quién lo tiene y antigüedad) y diferencias con su clave.
-  const corte = await page.getByTestId("corte").locator("b").innerText();
+  const corte = await page.getByTestId("corte").locator("b").last().innerText();
   await page.getByTestId("ir-folio").click();
   await expect(page.getByRole("heading", { name: "Más detalle" })).toBeVisible();
   await expect(page.getByTestId("corte")).toContainText(corte);
@@ -196,7 +208,13 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   await expect(page.getByTestId("atencion-por_revisar")).toContainText("−$20.00");
 
   // Descargas: Excel y PDF, con el mismo corte; quedan en el historial.
+  // El panel de descarga se abre al tocar «Descargar» y se cierra con «Cerrar».
+  await abrirDescarga(page);
+  await capturar(page, "caja-descargar-abierto");
+  await page.getByTestId("cerrar-descarga").click();
+  await expect(page.getByTestId("descargar")).toHaveCount(0);
   const descargar = async (formato: string) => {
+    await abrirDescarga(page);
     const f2 = page.getByTestId("descargar");
     await f2.getByLabel(formato, { exact: false }).check();
     const [d] = await Promise.all([page.waitForEvent("download"), f2.getByTestId("boton-descargar").click()]);
@@ -215,19 +233,17 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   await page.getByRole("link", { name: /← Caja y depósitos/ }).click();
 
   // Con «Todas mis sucursales» solo se incluye la que puede descargar, y lo avisa.
-  await page.getByTestId("filtros").getByLabel("Sucursal").selectOption({ label: "Todas mis sucursales" });
-  await page.getByRole("button", { name: "Ver" }).click();
+  await elegir(page, "Todas mis sucursales");
+  await abrirDescarga(page);
   await expect(page.getByTestId("descarga-incluidas")).toContainText(`Se incluyen: ${e.nombre}`);
   await expect(page.getByTestId("descarga-incluidas")).toContainText(`No se incluyen (sin permiso de descarga): ${e.otraNombre}`);
   await expect(page.getByTestId(`resumen-${"O" + e.codigo.slice(1)}`)).toContainText("Sin datos");
   await capturar(page, "caja-todas");
 
   // La otra sucursal no tiene turnos ni ningún importe: «Sin datos», nunca $0.00; sin registros de sobres, $0.00.
-  await page.getByTestId("filtros").getByLabel("Sucursal").selectOption({ label: e.otraNombre });
-  await page.getByRole("button", { name: "Ver" }).click();
-  await expect(page.getByTestId("kpi-sucursal-importe")).toHaveText("Sin datos");
-  await expect(page.getByTestId("kpi-sobres-importe")).toHaveText("$0.00");
-  await expect(page.getByTestId("kpi-sobres")).toContainText("0 sobres registrados");
+  await elegir(page, e.otraNombre);
+  await expect(page.getByTestId("renglon-1-importe")).toHaveText("Sin datos");
+  await expect(page.getByTestId("efectivo-ceros")).toHaveText("Sin pendientes: 0 sobres registrados por recoger · 0 entregas por confirmar · nada por depositar.");
   await expect(page.getByTestId("total-etiqueta")).toHaveText("Total al corte");
   await expect(page.getByTestId("total-importe")).toHaveText("Sin datos");
   await expect(page.getByTestId("total-nota")).toContainText("no hay ningún importe conocido");
@@ -244,13 +260,13 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   await entrar(page, e.dir.correo);
   await page.goto(`/sucursales/${e.codigo}`);
   await page.getByTestId("reporte-caja").click();
-  await expect(page.getByTestId("kpi-sobres-importe")).toHaveText("Oculto: sin contar");
-  await expect(page.getByTestId("kpi-sobres")).toContainText("importe oculto hasta contarlos");
+  await expect(page.getByTestId("renglon-2-importe")).toHaveText("Oculto: sin contar");
+  await expect(page.getByTestId("renglon-2")).toContainText("importe oculto hasta contarlos");
   await expect(page.getByTestId("aviso-ciegas")).toBeVisible();
   await expect(page.getByTestId("total-etiqueta")).toHaveText("Subtotal visible al corte");
   await expect(page.getByTestId("total-caja")).toContainText("No es el total: faltan 2 importes ocultos");
   await expect(page.getByTestId("total-importe")).toContainText("$600.00");
-  await expect(page.getByTestId("descargar")).toHaveCount(0);
+  await expect(page.getByTestId("abrir-descarga")).toHaveCount(0);
   await expect(page.getByTestId("leyenda-anotados")).toHaveCount(0);
   await capturar(page, "caja-direccion-ciegas");
   await page.getByTestId("ir-folio").click();
@@ -268,14 +284,16 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   ], llave: LLAVE }, PRUEBAS);
   expect(recogida).toMatchObject({ ok: true });
   await page.goto(`/reportes/caja?sucursal=${e.codigo}`);
-  await expect(page.getByTestId("kpi-por-depositar-importe")).toHaveText("$3,400.00");
+  await expect(page.getByTestId("renglon-4-importe")).toHaveText("$3,400.00");
   await expect(page.getByTestId("total-etiqueta")).toHaveText("Total registrado al corte");
   await expect(page.getByTestId("por-persona").getByTestId("persona")).toContainText(e.dir.nombre);
   await expect(page.getByTestId("por-persona").getByTestId("persona")).toContainText("$3,400.00");
   await capturar(page, "caja-direccion-recogido");
   await page.getByTestId("ir-origen").click();
-  await expect(page.getByTestId("origen")).toContainText("$3,450.00");
-  await expect(page.getByTestId("origen")).toContainText("−$50.00");
+  await expect(page.getByTestId("origen-cuerpo")).toBeHidden();
+  await page.getByTestId("origen").locator("summary").click();
+  await expect(page.getByTestId("origen-cuerpo")).toContainText("Anotado $3,450.00");
+  await expect(page.getByTestId("origen-cuerpo")).toContainText("diferencia −$50.00 (D-2)");
   await expect(page.getByTestId("origen-saldo")).toHaveText("$3,400.00");
   await page.getByRole("link", { name: "Diferencias", exact: true }).click();
   await expect(page.getByTestId("diferencia").filter({ hasText: "−$50.00" })).toBeVisible();
@@ -338,20 +356,23 @@ test("casos de la maqueta 7: depósitos parciales antes y durante el periodo, y 
 
   await entrar(page, e.admin.correo);
   await page.goto(`/reportes/caja?${new URLSearchParams({ sucursal: e.codigo, desde: hoy, hasta: hoy })}`);
-  await expect(page.getByTestId("kpi-depositado-importe")).toHaveText("$2,160.00");
-  await expect(page.getByTestId("kpi-por-depositar-importe")).toHaveText("$1,020.00");
-  await expect(page.getByTestId("atencion-atrasados")).toContainText("$20.00");
+  await expect(page.getByTestId("depositado-importe")).toHaveText("$2,160.00");
+  await expect(page.getByTestId("renglon-4-importe")).toHaveText("$1,020.00");
+  await expect(page.getByTestId("atencion-atrasados")).toContainText("Ver folios");
+  await expect(page.getByTestId("por-persona")).toContainText("$1,000.00 de 3 a 7 días");
   await capturar(page, "caso-a-resumen");
   await page.getByTestId("ir-origen").click();
   const filas = page.getByTestId("origen");
   await expect(filas).toHaveCount(2);
   await expect(filas.nth(0)).toContainText("Anterior al periodo");
-  await expect(filas.nth(0)).toContainText("$400.00");
-  await expect(filas.nth(0)).toContainText("$2,000.00");
+  await expect(filas.nth(0).locator("summary")).toContainText("$2,000.00");
+  await expect(filas.nth(0).locator("summary")).not.toContainText("$400.00");
+  await filas.nth(0).locator("summary").click();
+  await expect(filas.nth(0).getByTestId("origen-cuerpo")).toContainText("antes del periodo");
+  await expect(filas.nth(0).getByTestId("origen-cuerpo")).toContainText("$400.00");
+  await expect(filas.nth(0).getByTestId("origen-cuerpo").locator("tbody tr")).toHaveCount(3);
   await expect(page.getByTestId("origen-durante")).toHaveText("$2,160.00");
   await expect(page.getByTestId("origen-saldo")).toHaveText("$1,020.00");
-  await expect(page.getByTestId("depositos").getByRole("listitem")).toHaveCount(4);
-  await expect(page.getByTestId("depositos")).not.toContainText("DEP-ANTES");
   await capturar(page, "caso-a-origen-destino");
 
   // Caso B (otra sucursal): sin conteos al corte (el periodo termina ayer; sus turnos son de hoy) y un retiro de $300
@@ -378,10 +399,9 @@ test("casos de la maqueta 7: depósitos parciales antes y durante el periodo, y 
   const ayer = fecha(new Date(Date.now() - 86_400_000));
   const hace3 = fecha(new Date(Date.now() - 3 * 86_400_000));
   await page.goto(`/reportes/caja?${new URLSearchParams({ sucursal: b.codigo, desde: hace3, hasta: ayer })}`);
-  await expect(page.getByTestId("kpi-sucursal-importe")).toHaveText("Sin datos");
-  await expect(page.getByTestId("kpi-sobres-importe")).toHaveText("$0.00");
-  await expect(page.getByTestId("kpi-sobres")).toContainText("0 sobres registrados");
-  await expect(page.getByTestId("kpi-por-depositar-importe")).toHaveText("$300.00");
+  await expect(page.getByTestId("renglon-1-importe")).toHaveText("Sin datos");
+  await expect(page.getByTestId("efectivo-ceros")).toHaveText("Sin pendientes: 0 sobres registrados por recoger · 0 entregas por confirmar.");
+  await expect(page.getByTestId("renglon-4-importe")).toHaveText("$300.00");
   await expect(page.getByTestId("total-etiqueta")).toHaveText("Subtotal visible al corte");
   await expect(page.getByTestId("total-importe")).toHaveText("$300.00");
   await expect(page.getByTestId("total-nota")).toContainText("No es el total: faltan los datos de bolsa y cajón (sin conteos registrados)");
