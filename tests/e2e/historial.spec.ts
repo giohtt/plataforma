@@ -147,7 +147,6 @@ test("Recepción ve el detalle de su sucursal y de la otra solo conteo y última
   await expect(page.getByTestId("cobertura-actual")).toContainText("puede haber visitas anteriores sin registrar");
   await entrar(page, admin.correo);
   await page.goto(urlHistorial);
-  await abrirGrupo(page, "configuracion");
   await expect(page.getByTestId("cobertura")).toContainText("datos confiables desde el 4 nov 2026");
   await expect(page.getByTestId("historial-incompleto")).toBeVisible();
 });
