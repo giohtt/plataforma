@@ -811,6 +811,56 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
     await guardar("resuelta-propia", r.archivo);
   });
 
+  it("historial de la recolección en Excel y PDF: resolución del faltante del sobre y su clave, una vez y solo hasta el corte", async () => {
+    const e = await escenario();
+    const [bolsa, cajon] = await cerrarDelDia(e);
+    await abrir(e);
+    expect(await recogerBuzon(sql, e.dir, e.codigo, { sobres: [
+      { sobreId: bolsa.id, estado: "correcto", folioVisto: "", motivo: "", contado: "420" },
+      { sobreId: cajon.id, estado: "correcto", folioVisto: "", motivo: "", contado: "3000" },
+    ], llave: LLAVE }, PRUEBAS)).toMatchObject({ ok: true });
+    const [dif] = await sql<{ id: string; folio: string }[]>`
+      select d.id, s.folio from diferencia_sobre d join sobre_cierre s on s.id = d.sobre_id where s.sucursal_id = ${e.sucursalId}`;
+    const [{ clave }] = await sql<{ clave: string }[]>`select clave from clave_diferencia where clase = 'sobre' and caso_id = ${dif.id}`;
+    expect(await revisarDiferenciaSobre(sql, e.admin, e.codigo, { diferenciaId: dif.id, resultado: "faltante_confirmado", motivo: "Prueba: faltan 50 pesos" }, PRUEBAS))
+      .toEqual({ ok: true });
+    const antes = await reloj();
+    // Dirección participó (recogió el buzón): resuelve con su autorización personal, con la marca.
+    const general = (await sql<{ id: string }[]>`select id from usuario where correo = 'direccion.general@prueba.fitnessland.invalid'`)[0].id;
+    const hasta = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date(Date.now() + 30 * 86_400_000));
+    expect(await aplicarCambio(sql, general, e.dir, { tipo: "autorresolucion", alcance: { todas: false, sucursales: [e.sucursalId] }, hasta, motivo: "Prueba: no hay otra Dirección" }, PRUEBAS))
+      .toEqual({ ok: true });
+    expect(await resolverFaltanteSobre(sql, e.dir, e.codigo, { diferenciaId: dif.id, motivo: "Prueba: lo absorbe la sucursal" }, PRUEBAS)).toEqual({ ok: true });
+    expect(await dar(e.admin, "reporte.caja_descargar", [e.sucursalId])).toEqual({ ok: true });
+    const RESUELTA = `Dirección resolvió el faltante de ${dif.folio}: Lo absorbe la sucursal · Resuelta por quien participó · «Prueba: lo absorbe la sucursal»`;
+    const CLAVE = `Clave asignada: ${clave}`;
+    const veces = (texto: string, buscado: string) => texto.split(buscado).length - 1;
+    const archivos = async (corte?: string) => {
+      const x = await prepararDescarga(sql, e.admin, { codigo: e.codigo, formato: "xlsx", contenido: "detalle", corte }, PRUEBAS);
+      if (!x.ok) throw new Error(x.error);
+      const hojas = await hojasExcel(await excelCaja(x.archivo));
+      return { historial: hojas["Historial"].map((f) => f.join(" | ")).join("\n"), pdf: textoPdf(await pdfCaja(x.archivo)) };
+    };
+    // Al corte actual: la resolución con su marca y la clave, cada una una sola vez, en Excel y PDF.
+    const ahora = await archivos();
+    expect(veces(ahora.historial, RESUELTA)).toBe(1);
+    expect(veces(ahora.historial, CLAVE)).toBe(1);
+    expect(ahora.historial).toMatch(new RegExp(`Recolección del buzón[^\n]*${RESUELTA.replace(/[.*+?^${}()|[\]\\«»]/g, "\\$&")}`));
+    expect(veces(ahora.pdf.replace(/\s+/g, " "), "Resuelta por quien participó · «Prueba: lo absorbe la sucursal»")).toBe(1);
+    expect(veces(ahora.pdf, CLAVE)).toBe(1);
+    // Con un corte anterior a la resolución: la clave (ya asignada) sí; la resolución no.
+    const previo = await archivos(antes);
+    expect(veces(previo.historial, CLAVE)).toBe(1);
+    expect(previo.historial).not.toContain("Dirección resolvió el faltante");
+    expect(previo.pdf).not.toContain("resolvió el faltante");
+    // En pantalla, el detalle con el corte anterior la marca como posterior al corte.
+    const rec = (await sql<{ id: string }[]>`select recoleccion_id as id from diferencia_sobre where id = ${dif.id}`)[0].id;
+    const det = (await detalleCaja(sql, e.admin, { codigo: e.codigo, tipo: "recoleccion", id: rec, corte: antes }))!.detalle;
+    expect(det.eventos.filter((v) => v.despues).map((v) => v.texto)).toEqual([RESUELTA]);
+    // No cambia importes.
+    expect((await caja(e.admin, e)).confirmados.find((c) => c.clase === "recoleccion")).toMatchObject({ saldo: "3420.00" });
+  });
+
   it("clave fija por caso: se asigna al registrarse, no cambia con el periodo ni al cerrarse otros casos, y conserva el código original", async () => {
     const e = await escenario();
     const encargado = await cuenta([["encargado", e.codigo]], "Encargado");
