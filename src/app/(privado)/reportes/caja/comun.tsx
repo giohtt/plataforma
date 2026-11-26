@@ -5,6 +5,8 @@ import type { Cifra, Total } from "@/lib/resumen-caja";
 /** Piezas compartidas por las pantallas de «Caja y depósitos» (resumen y más detalle). */
 const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
 export const $ = (v: string) => (Number(v) < 0 ? `−${pesos.format(-Number(v))}` : pesos.format(Number(v)));
+/** Con signo siempre: «+» en sobrantes y «−» en faltantes (lista de diferencias). */
+export const $signo = (v: string) => (Number(v) > 0 ? `+${$(v)}` : $(v));
 export const hora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
 export const diaCorto = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", day: "numeric", month: "short" });
 const dia = new Intl.DateTimeFormat("es-MX", { timeZone: "UTC", dateStyle: "medium" });

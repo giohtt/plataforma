@@ -70,7 +70,7 @@ export const ETAPA_DIFERENCIA: Record<EtapaDiferencia, string> = {
 };
 const PENDIENTE_DIRECCION = "Faltante confirmado · pendiente de resolución de Dirección";
 const RESUELTA_ABSORBE = "Resuelta por Dirección · Lo absorbe la sucursal";
-const MARCA_RESUELTA = "Resuelta por quien participó";
+export const MARCA_RESUELTA = "Resuelta por quien participó";
 export type Diferencia = {
   clase: "turno" | "retiro_esperado" | "retiro_importe" | "sobre";
   id: string;
