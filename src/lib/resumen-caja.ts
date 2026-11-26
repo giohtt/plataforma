@@ -293,7 +293,11 @@ export function lectura(s: ResumenCaja) {
 }
 
 /** Nombre corto de un caso de diferencia, para leerlo de un vistazo. */
+/** Un caso en una línea, con su clave fija primero: «TEN-D4 · Cambio de turno del 12 nov». */
 function textoCaso(d: CajaSucursal["diferencias"][number]) {
+  return `${d.clave} · ${descripcionCaso(d)}`;
+}
+function descripcionCaso(d: CajaSucursal["diferencias"][number]) {
   const dia = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", day: "numeric", month: "short" }).format(d.registradaEn);
   if (d.clase === "retiro_importe") return `Faltante del retiro ${d.folio}`;
   if (d.clase === "sobre") return `${Number(d.importe) < 0 ? "Faltante" : "Diferencia"} del sobre ${d.folio}`;

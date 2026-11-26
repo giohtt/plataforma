@@ -729,6 +729,8 @@ export type DetalleRetiro = {
   historial: { en: Date; que: string; cuenta: string }[];
   /** Faltante confirmado: su resolución de Dirección, o si esta cuenta puede resolverlo. */
   resolucion: EstadoResolucion;
+  /** Claves fijas de sus casos de diferencia: la del importe (contado contra registrado) y la de al retirar. */
+  claves: { clave: string; caso: "importe" | "esperado" }[];
 };
 
 const dinero = (v: string) => `$${Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -833,10 +835,21 @@ export async function detalleRetiro(sql: Sql, usuarioId: string, codigo: string,
         : `Depósito bancario ${dinero(d.importe)} del ${fechaCorta(d.depositadoEn)} · referencia ${d.referencia}`,
     });
   }
+  // Claves fijas de sus casos (la Encargada de retiros no ve la de al retirar mientras cuenta a ciegas).
+  const claves = (await sql<{ clave: string; clase: string; asignada_en: Date; origen: string }[]>`
+    select k.clave, k.clase, k.asignada_en, k.origen from clave_diferencia k
+    where (k.clase = 'retiro_importe' and k.caso_id = ${f.id})
+       or (k.clase = 'retiro_esperado' and k.caso_id in (select x.id from diferencia_retiro x where x.retiro_id = ${f.id}))
+    order by k.numero`).filter((k) => !(ciega && k.clase === "retiro_esperado"));
+  for (const k of claves) {
+    historial.push({ en: k.asignada_en, cuenta: "La plataforma",
+      que: `Clave asignada (${k.clase === "retiro_importe" ? "diferencia de importe" : "diferencia al retirar"}): ${k.clave}${k.origen === "casos_existentes" ? " · caso registrado antes de las claves fijas; su fecha original no cambia" : ""}` });
+  }
   historial.sort((a, b) => a.en.getTime() - b.en.getTime());
 
   return {
     retiro: r,
+    claves: claves.map((k) => ({ clave: k.clave, caso: k.clase === "retiro_importe" ? "importe" as const : "esperado" as const })),
     registrado: ciega ? null : { contado: f.contado, cambio: f.cambio, importe: f.importe, esperado: f.esperado },
     conteos: {
       inicial: f.inicial !== null ? { importe: f.inicial, folioCoincide: f.inicial_folio!, en: f.inicial_en! } : null,

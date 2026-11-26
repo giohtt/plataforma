@@ -40,7 +40,7 @@ function TarjetaDiferencia({ d, codigo, devolucion = false }: { d: DiferenciaSob
   return (
     <div className="tarjeta" data-testid={`diferencia-${d.folio}`}>
       <p>
-        <strong>Sobre <span className="mono">{d.folio}</span></strong>
+        {d.clave ? <><span className="clave-caso" data-testid="clave-caso">{d.clave}</span> · </> : null}<strong>Sobre <span className="mono">{d.folio}</span></strong>
         {d.contado !== null ? <> · anotado {pesos.format(Number(d.anotado))} · contado {pesos.format(Number(d.contado))} · diferencia <strong>{firmado(d.importe)}</strong></> : null}
         {d.verificacion ? <> · {devolucion && d.verificacion.estado === "falta" ? "no regresó en la devolución" : `${devolucion ? "volvió" : "llegó"} ${COMO[d.verificacion.estado]}`}{d.verificacion.folioVisto ? ` (${d.verificacion.folioVisto})` : ""}: «{d.verificacion.motivo}»</> : null}
       </p>

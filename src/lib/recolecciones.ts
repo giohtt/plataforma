@@ -72,6 +72,8 @@ export type IncidenciaLlave = {
 export type EstadoDiferenciaSobre = "por_revisar" | "aclarada" | "faltante_confirmado" | "sobrante_confirmado" | "incidencia_confirmada";
 export type DiferenciaSobre = {
   id: string; folio: string; anotado: string; contado: string | null; importe: string;
+  /** Clave fija del caso (TEN-D7). */
+  clave: string | null;
   verificacion: Verificacion | null; estado: EstadoDiferenciaSobre; motivo: string | null; revisadaPor: string | null;
   /** Personas de la cadena del sobre (cerró, custodió, verificó la caja, entregó, recogió). */
   cadena: Cadena;
@@ -321,8 +323,8 @@ async function diferenciasDe(tx: Tx | Sql, recoleccionId: string, usuarioId: str
     const difs = await tx<{ id: string; sobre_id: string; folio: string; anotado: string; contado: string | null; importe: string;
                             v_estado: Verificacion["estado"] | null; v_folio: string | null; v_motivo: string | null; v_por: string | null; v_en: Date | null;
                             resultado: EstadoDiferenciaSobre | null; motivo: string | null; revisada_por: string | null; participo: boolean;
-                            autorrevision: string | null; propia: boolean }[]>`
-      select d.id, d.sobre_id, s.folio, s.importe::text as anotado, x.contado::text as contado, d.importe::text as importe,
+                            autorrevision: string | null; propia: boolean; clave: string | null }[]>`
+      select d.id, d.sobre_id, (select k.clave from clave_diferencia k where k.clase = 'sobre' and k.caso_id = d.id) as clave, s.folio, s.importe::text as anotado, x.contado::text as contado, d.importe::text as importe,
              v.estado as v_estado, v.folio_visto as v_folio, v.motivo as v_motivo, vu.nombre as v_por, v.en as v_en,
              rv.resultado, rv.motivo, ru.nombre as revisada_por, ${usuarioId}::uuid in (select participantes_sobre(d.sobre_id)) as participo,
              autorrevision_vigente(${usuarioId}, s.sucursal_id) as autorrevision, rv.autorrevision_id is not null as propia
@@ -333,7 +335,7 @@ async function diferenciasDe(tx: Tx | Sql, recoleccionId: string, usuarioId: str
     const diferencias: DiferenciaSobre[] = [];
     for (const d of difs) {
       diferencias.push({
-        id: d.id, folio: d.folio, anotado: d.anotado, contado: d.contado, importe: d.importe,
+        id: d.id, folio: d.folio, anotado: d.anotado, contado: d.contado, importe: d.importe, clave: d.clave,
         verificacion: d.v_estado ? { estado: d.v_estado, folioVisto: d.v_folio, motivo: d.v_motivo, por: d.v_por!, en: d.v_en! } : null,
         estado: d.resultado ?? "por_revisar", motivo: d.motivo, revisadaPor: d.revisada_por,
         cadena: await cadenaSobre(tx, d.sobre_id), puedeRevisar: !d.resultado && revisa && (!d.participo || d.autorrevision !== null),
