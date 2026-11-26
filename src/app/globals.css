@@ -1314,7 +1314,7 @@ td.mono {
   font-weight: 800;
 }
 .grupo-menu > summary::-webkit-details-marker { display: none; }
-.grupo-menu > summary::before { content: "▸"; color: var(--muted); transition: transform 0.15s; }
+.grupo-menu > summary::before { content: "▸"; color: var(--muted); }
 .grupo-menu[open] > summary::before { transform: rotate(90deg); }
 .grupo-pendientes {
   margin-left: auto;
@@ -1330,3 +1330,4 @@ td.mono {
   gap: 8px;
   padding: 0 12px 12px;
 }
+.grupo-contenido { padding: 0 16px 14px; }

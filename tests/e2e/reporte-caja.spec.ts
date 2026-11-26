@@ -265,6 +265,13 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   expect(r).toEqual({ ok: true });
   await entrar(page, e.dir.correo);
   await page.goto(`/sucursales/${e.codigo}`);
+  // Menú de Dirección: solo «Efectivo y depósitos» abierto; «Lo que puedes hacer en esta sucursal», cerrado.
+  await expect(page.getByTestId("abrir-grupo-autorizaciones")).toContainText("Autorizaciones y accesos");
+  await expect(page.getByTestId("permisos-sucursal")).toBeHidden();
+  await capturar(page, "menu-direccion-cerrado");
+  await abrirGrupo(page, "autorizaciones");
+  await abrirGrupo(page, "configuracion");
+  await capturar(page, "menu-direccion-abierto");
   await abrirGrupo(page, "reportes");
   await page.getByTestId("reporte-caja").click();
   await expect(page.getByTestId("renglon-2-importe")).toHaveText("Oculto: sin contar");

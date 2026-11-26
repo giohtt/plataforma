@@ -199,7 +199,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
               </Link>
             ) : null}
           </Grupo>
-          <Grupo clave="autorizaciones" titulo="Autorizaciones">
+          <Grupo clave="autorizaciones" titulo="Autorizaciones y accesos">
             {puedeAutorizarAcceso || puedeRevisarAccesos ? (
               <Link className="boton" href={`/sucursales/${sucursal.codigo}/accesos`} data-testid="accesos">
                 {puedeAutorizarAcceso ? "Accesos por autorizar" : "Registro de accesos"}
@@ -261,13 +261,16 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
         );
       })}
 
-      <section className="tarjeta" aria-labelledby="titulo-permisos">
-        <h2 id="titulo-permisos" className="titulo-seccion">Lo que puedes hacer en esta sucursal</h2>
-        <ul data-testid="permisos-sucursal">
-          {permisos.map((p) => <li key={p.clave}>{p.descripcion} <span className="sub mono">{p.clave}</span></li>)}
-        </ul>
-        <p className="sub">Calculado en el servidor a partir de tus perfiles, alcance y facultades vigentes.</p>
-      </section>
+      {/* Cerrado al entrar; se abre para consultarlo (26 nov 2026). */}
+      <details className="grupo-menu" data-testid="grupo-permisos">
+        <summary data-testid="abrir-grupo-permisos"><span>Lo que puedes hacer en esta sucursal</span></summary>
+        <div className="grupo-contenido">
+          <ul data-testid="permisos-sucursal">
+            {permisos.map((p) => <li key={p.clave}>{p.descripcion} <span className="sub mono">{p.clave}</span></li>)}
+          </ul>
+          <p className="sub">Calculado en el servidor a partir de tus perfiles, alcance y facultades vigentes.</p>
+        </div>
+      </details>
 
       {historial ? (
         <section className="tarjeta" aria-labelledby="titulo-historial" data-testid="historial-sucursal">

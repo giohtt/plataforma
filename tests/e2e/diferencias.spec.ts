@@ -107,6 +107,7 @@ test("Encargado consulta el caso: esperado, entregado y recibido por separado, y
     if (await grupo.count()) await expect(grupo).not.toHaveAttribute("open", "");
   }
   await capturar(page, "menu-sucursal");
+  await expect(page.getByTestId("grupo-permisos")).not.toHaveAttribute("open", "");
   await expect(page.getByTestId("diferencias")).toHaveText("Diferencias de efectivo (1)");
   await page.getByTestId("diferencias").click();
   const caso = page.getByTestId("caso-diferencia").first();
