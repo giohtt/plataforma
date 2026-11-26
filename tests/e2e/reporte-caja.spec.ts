@@ -525,7 +525,10 @@ test("autorización para resolver lo propio: se otorga expresamente con vista pr
   await page.goto(`/reportes/caja/mas?sucursal=${e.codigo}&vista=diferencias`);
   const cerrada = page.getByTestId("etapa-cerrada").getByTestId("diferencia").filter({ hasText: e.sobres[1].folio });
   await expect(cerrada.getByTestId("chip-resuelta-propia")).toHaveText("Resuelta por quien participó");
-  await expect(cerrada).toContainText("Lo absorbe la sucursal · Resuelta por quien participó");
+  // En pantalla la marca va una sola vez (la etiqueta); el texto del estado no la repite.
+  await expect(cerrada).toContainText("Resuelta por Dirección · Lo absorbe la sucursal");
+  expect(((await cerrada.textContent()) ?? "").split("Resuelta por quien participó")).toHaveLength(2);
+  await expect(cerrada.getByTestId("importe-diferencia")).toHaveText("−$50.00");
   await capturar(page, "reporte-resuelta-propia");
 
   // Terminada: se bloquean nuevas resoluciones propias; la marca y el historial se conservan.

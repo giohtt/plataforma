@@ -2,10 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { LEYENDA_ANOTADOS } from "@/lib/archivo-caja";
 import { obtenerBaseDatos } from "@/lib/db";
-import { ETAPA_DIFERENCIA, historialDescargas, nombreLugar, reporteCaja, type CajaSucursal, type ReporteCaja } from "@/lib/reporte-caja";
+import { ETAPA_DIFERENCIA, historialDescargas, MARCA_RESUELTA, nombreLugar, reporteCaja, type CajaSucursal, type ReporteCaja } from "@/lib/reporte-caja";
 import { aPesos, centavos, NOTA_RANGOS, RANGOS, resumirCaja, type FilaFolio } from "@/lib/resumen-caja";
 import { requerirSesion } from "@/lib/sesion-servidor";
-import { $, Anterior, diaCorto, enlaceDetalle, enlaceMas, fecha, hora, Importe, texto } from "../comun";
+import { $, $signo, Anterior, diaCorto, enlaceDetalle, enlaceMas, fecha, hora, Importe, texto } from "../comun";
 import { PanelDescarga } from "../panel-descarga";
 
 export const metadata = { title: "Más detalle · Caja y depósitos · Fitnessland" };
@@ -202,7 +202,8 @@ function Diferencias({ r, c, varias }: { r: ReporteCaja; c: CajaSucursal; varias
                     {d.revisadaPropia ? <> <span className="marca-propia-chip" data-testid="chip-revisada-propia">Revisada por quien participó</span></> : null}
                     {d.resueltaPropia ? <> <span className="marca-resuelta-propia" data-testid="chip-resuelta-propia">Resuelta por quien participó</span></> : null}
                     <span className="renglon-detalle">
-                      {nombreLugar(d.lugar)} · registrada {hora.format(d.registradaEn)} · {d.estado}
+                      {nombreLugar(d.lugar)} · registrada {hora.format(d.registradaEn)} · {/* En pantalla la marca va solo como etiqueta; en archivos e historial, en el texto. */}
+                      {d.resueltaPropia ? d.estado.replace(` · ${MARCA_RESUELTA}`, "") : d.estado}
                       {d.referencia ? " · solo referencia de su origen (no entra en el neto)" : ""}
                     </span>
                     <span className="renglon-detalle">
@@ -210,7 +211,7 @@ function Diferencias({ r, c, varias }: { r: ReporteCaja; c: CajaSucursal; varias
                       {operativo(d) && etapa !== "cerrada" ? <> · <Link prefetch={false} href={operativo(d)!}>{ACCION[etapa]}</Link></> : null}
                     </span>
                   </span>
-                  <span className="renglon-importe">{$(d.importe)}</span>
+                  <span className="renglon-importe" data-testid="importe-diferencia">{$signo(d.importe)}</span>
                 </li>
               ))}
             </ul>
