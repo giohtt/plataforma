@@ -1331,3 +1331,4 @@ td.mono {
   padding: 0 12px 12px;
 }
 .grupo-contenido { padding: 0 16px 14px; }
+.clave-caso { font-family: var(--f-mono, ui-monospace, monospace); font-weight: 800; white-space: nowrap; }

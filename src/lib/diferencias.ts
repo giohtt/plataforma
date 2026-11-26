@@ -41,6 +41,8 @@ export type NivelRevision = "encargado" | "administracion" | "direccion";
 export type Revision = { resultado: ResultadoRevision; motivo: string; revisadaPor: string; nivel: NivelRevision; en: Date; propia: boolean };
 export type Diferencia = {
   id: string; lugar: TipoLugar; tipo: TipoDiferencia; importe: string; estado: EstadoDiferencia; registradaEn: Date;
+  /** Clave fija del caso (TEN-D7) y cuándo se asignó. */
+  clave: string | null; claveAsignadaEn: Date | null; claveCasoExistente: boolean;
   revision: Revision | null;
   resolucion: Resolucion | null;
   /** Desde cuándo espera a Dirección (confirmado o con corrección pendiente); null si no está pendiente para Dirección. */
@@ -132,13 +134,16 @@ type FilaDiferencia = {
   decision: DecisionDireccion | null; motivo_dir: string | null; origen: string | null; requiere_correccion: boolean | null;
   resolutor: string | null; resuelta_en: Date | null; correccion: string | null; corrector: string | null; correccion_en: Date | null;
   correccion_ref_tipo: string | null; correccion_ref_id: string | null;
+  clave: string | null; clave_en: Date | null; clave_existente: boolean | null;
 };
 const DIFERENCIAS = (sql: Sql | Tx, entregaIds: string[]) => sql<FilaDiferencia[]>`
   select d.id, d.entrega_id, l.tipo as lugar, d.tipo, d.importe::text as importe, d.registrada_en,
          r.resultado, r.motivo, u.nombre as revisor, r.nivel, r.en as revisada_en, r.autorrevision_id is not null as propia,
          x.decision, x.motivo as motivo_dir, x.origen, x.requiere_correccion, ux.nombre as resolutor, x.en as resuelta_en,
-         x.correccion, uc.nombre as corrector, x.correccion_en, x.correccion_ref_tipo, x.correccion_ref_id
+         x.correccion, uc.nombre as corrector, x.correccion_en, x.correccion_ref_tipo, x.correccion_ref_id,
+         k.clave, k.asignada_en as clave_en, k.origen = 'casos_existentes' as clave_existente
   from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id
+  left join clave_diferencia k on k.clase = 'turno' and k.caso_id = d.id
   left join revision_diferencia r on r.diferencia_id = d.id left join usuario u on u.id = r.revisada_por
   left join resolucion_diferencia x on x.diferencia_id = d.id left join usuario ux on ux.id = x.resuelta_por
   left join usuario uc on uc.id = x.correccion_por
@@ -154,6 +159,7 @@ const aDiferencia = (d: FilaDiferencia): Diferencia => {
     : resolucion.requiereCorreccion && !resolucion.correccion ? "correccion_pendiente" : "resuelta";
   return {
     id: d.id, lugar: d.lugar, tipo: d.tipo, importe: d.importe, registradaEn: d.registrada_en, estado, resolucion,
+    clave: d.clave, claveAsignadaEn: d.clave_en, claveCasoExistente: Boolean(d.clave_existente),
     revision: d.resultado ? { resultado: d.resultado, motivo: d.motivo!, revisadaPor: d.revisor!, nivel: d.nivel!, en: d.revisada_en!, propia: Boolean(d.propia) } : null,
     pendienteDireccionDesde: estado === "faltante_confirmado" || estado === "sobrante_confirmado" || estado === "correccion_pendiente" ? d.revisada_en : null,
   };
@@ -415,6 +421,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     ...personasApoyo.map((p) => ({ en: p.declarado_en, que: `Apoyo declarado en el ${ETAPA[p.etapa]}: ${p.nombre}`, cuenta: p.por })),
     ...personasApoyo.filter((p) => p.confirmado_en).map((p) => ({ en: p.confirmado_en!, que: `Apoyo confirmado en el ${ETAPA[p.etapa]}`, cuenta: p.nombre })),
     ...difs.map((d) => ({ en: d.registradaEn, que: `Diferencia registrada (${LUGAR[d.lugar]}): ${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : (cierre ? "entre cierre y apertura" : "en la entrega")}`, cuenta: "La plataforma, al confirmar" })),
+    ...difs.filter((d) => d.clave).map((d) => ({ en: d.claveAsignadaEn!, que: `Clave asignada (${LUGAR[d.lugar]}, ${dinero(d.importe)}): ${d.clave}${d.claveCasoExistente ? " · caso registrado antes de las claves fijas; su fecha original no cambia" : ""}`, cuenta: "La plataforma" })),
     ...incidencias.map((i) => ({ en: i.registradaEn, que: `Incidencia por revisar: ${i.detalle}`, cuenta: "La plataforma, al abrir" })),
     ...incidencias.filter((i) => i.revision).map((i) => ({
       en: i.revision!.en, que: `Revisión de la incidencia (${i.detalle}). Motivo: «${i.revision!.motivo}»`, cuenta: i.revision!.revisadaPor,

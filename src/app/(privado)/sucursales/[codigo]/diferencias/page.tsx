@@ -36,7 +36,7 @@ export default async function Diferencias({ params }: PageProps<"/sucursales/[co
                       {c.diferencias.length ? (
                         <ul className="lista-simple">
                           {c.diferencias.map((d) => (
-                            <li key={d.id}>{NOMBRE_LUGAR[d.lugar]}: <strong style={{ whiteSpace: "nowrap" }}>{firmado(d.importe)}</strong> · {etiquetaDiferencia(d.tipo, d.importe, c.tipo === "cierre")} · {ESTADO_DIFERENCIA[d.estado]}</li>
+                            <li key={d.id}>{d.clave ? <><span className="clave-caso" data-testid="clave-caso">{d.clave}</span> · </> : null}{NOMBRE_LUGAR[d.lugar]}: <strong style={{ whiteSpace: "nowrap" }}>{firmado(d.importe)}</strong> · {etiquetaDiferencia(d.tipo, d.importe, c.tipo === "cierre")} · {ESTADO_DIFERENCIA[d.estado]}</li>
                           ))}
                         </ul>
                       ) : "Sin diferencias"}

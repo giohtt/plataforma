@@ -186,7 +186,7 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   await page.getByRole("button", { name: "Filtrar" }).click();
   await expect(page.getByTestId("tabla-folios").locator("tbody tr")).toHaveCount(2);
   await page.getByRole("link", { name: "Diferencias", exact: true }).click();
-  await expect(page.getByTestId("diferencia")).toContainText("D-1");
+  await expect(page.getByTestId("diferencia")).toContainText(`${e.codigo}-D1`);
   await expect(page.getByTestId("diferencia")).toContainText("Por revisar");
   const enlaceDiferencia = await page.getByTestId("diferencia").getByRole("link").getAttribute("href");
   const corteIso = new URL(enlaceDiferencia!, "http://x").searchParams.get("corte")!;
@@ -307,7 +307,7 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   await expect(page.getByTestId("origen-cuerpo")).toBeHidden();
   await page.getByTestId("origen").locator("summary").click();
   await expect(page.getByTestId("origen-cuerpo")).toContainText("Anotado $3,450.00");
-  await expect(page.getByTestId("origen-cuerpo")).toContainText("diferencia −$50.00 (D-2)");
+  await expect(page.getByTestId("origen-cuerpo")).toContainText(`diferencia −$50.00 (${e.codigo}-D2)`);
   await expect(page.getByTestId("origen-saldo")).toHaveText("$3,400.00");
   await page.getByRole("link", { name: "Diferencias", exact: true }).click();
   await expect(page.getByTestId("diferencia").filter({ hasText: "−$50.00" })).toBeVisible();

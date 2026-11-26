@@ -456,13 +456,16 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
                        origen: { clase: "recoleccion", id: d.recoleccion_id }, tipoTexto: "Sobre en recolección", folio: d.folio });
   }
   // Del periodo, las anteriores abiertas al corte y, solo como referencia, las anteriores ya cerradas de un origen que
-  // aparece en «Origen y destino» (no entran en el neto del periodo). Cada una con su clave D-1, D-2…
+  // aparece en «Origen y destino» (no entran en el neto del periodo). Cada una con su clave fija (TEN-D7), asignada una
+  // sola vez al registrarse el caso: no cambia con el periodo ni al cerrarse otros casos.
+  const claves = new Map((await tx<{ clase: string; caso_id: string; clave: string }[]>`
+    select clase, caso_id, clave from clave_diferencia where sucursal_id = ${s.id}`).map((c) => [`${c.clase}:${c.caso_id}`, c.clave]));
   const enOrigen = (d: Dif) => !!d.origen && origenes.some((o) => o.clase === d.origen!.clase && o.id === d.origen!.id);
   const difVisibles: Diferencia[] = diferencias.filter((d) => !d.anterior || d.abierta || enOrigen(d))
     .sort((a, b) => a.registradaEn.getTime() - b.registradaEn.getTime())
-    .map((d, i) => {
+    .map((d) => {
       const referencia = d.anterior && !d.abierta;
-      return { ...d, clave: `D-${i + 1}`, referencia, neto: d.neto && !referencia };
+      return { ...d, clave: claves.get(`${d.clase}:${d.id}`) ?? "Sin clave", referencia, neto: d.neto && !referencia };
     });
   for (const o of origenes) {
     o.claves = difVisibles.filter((d) => d.origen?.clase === o.clase && d.origen.id === o.id).map((d) => d.clave);
@@ -750,7 +753,9 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
     const filas: FilaDetalle[] = [{ etiqueta: "Anotado al cerrar", valor: anotado, nota: oculto ? "Oculto hasta contarlo (conteo a ciegas)." : undefined }];
     if (recogida) filas.push({ etiqueta: `Contado por ${recogida.recibe}`, valor: recogida.contado });
     const dif = caja.diferencias.find((d) => d.clase === "sobre" && d.enlace.id === id);
-    if (dif) filas.push({ etiqueta: "Diferencia (aparte, no se suma a ninguna etapa)", valor: dif.importe, nota: dif.estado });
+    const k = await eventosClave(tx, (await tx<{ id: string }[]>`select id from diferencia_sobre where sobre_id = ${id}`).map((x) => ({ clase: "sobre", id: x.id })), ev);
+    eventos.push(...k.eventos);
+    if (dif) filas.push({ etiqueta: `Diferencia ${dif.clave} (aparte, no se suma a ninguna etapa)`, valor: dif.importe, nota: dif.estado });
     return {
       tipo, titulo: `Sobre ${s.folio}`, subtitulo: `${NOMBRE_LUGAR[s.lugar]} · ${caja.nombre}${s.resuelto_en ? ` · cerrado el ${dia(s.resuelto_en)}` : ""}`,
       alCorte, importeAlCorte: enEtapa2 ? anotado : enEntrega ? anotado : null, filas, eventos: ordenar(eventos),
@@ -854,10 +859,12 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
       eventos.push(ev(x.en, `Dirección resolvió: ${DECISION[x.decision] ?? x.decision} · «${x.motivo}»`, x.por));
       if (x.correccion_en) eventos.push(ev(x.correccion_en, `Registró la corrección: «${x.correccion}»`, x.corrigio));
     }
+    const k = await eventosClave(tx, [{ clase: "turno", id }], ev);
+    eventos.push(...k.eventos);
     // Si la diferencia ya no está en la lista al corte (anterior al periodo y cerrada), su estado se calcula igual.
     const estado = d?.estado ?? (await estadoDiferenciaAlCorte(tx, id, corte));
     return {
-      tipo, titulo: textoDiferencia(f), subtitulo: `${NOMBRE_LUGAR[f.lugar]} · ${caja.nombre}`,
+      tipo, titulo: `${k.claves[0] ? `${k.claves[0]} · ` : ""}${textoDiferencia(f)}`, subtitulo: `${NOMBRE_LUGAR[f.lugar]} · ${caja.nombre}`,
       alCorte: `Estado al corte: ${estado}`, importeAlCorte: null,
       filas: [{ etiqueta: "Diferencia (aparte, no se suma a ninguna etapa)", valor: f.importe, nota: `Estado al corte: ${estado}` }],
       eventos: ordenar(eventos), anterior: f.registrada_en < inicio, oculto: false, anotadosSinContar: false,
@@ -923,6 +930,9 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
     from resolucion_retiro x join usuario u on u.id = x.resuelta_por where x.retiro_id = ${id}`) {
     eventos.push(ev(x.en, `Dirección resolvió el faltante: Lo absorbe la sucursal${x.propia ? ` · ${MARCA_RESUELTA}` : ""} · «${x.motivo}»`, x.por));
   }
+  const k = await eventosClave(tx, [{ clase: "retiro_importe", id },
+    ...(await tx<{ id: string }[]>`select id from diferencia_retiro where retiro_id = ${id}`).map((x) => ({ clase: "retiro_esperado", id: x.id }))], ev);
+  eventos.push(...k.eventos);
   const deps = await tx<{ id: string; importe: string; en: Date; referencia: string; por: string; corrige: string | null }[]>`
     select d.id, d.importe::text as importe, d.en, d.referencia, u.nombre as por, d.corrige_id as corrige
     from deposito_retiro d join usuario u on u.id = d.registrado_por where d.retiro_id = ${id} order by d.en`;
@@ -943,10 +953,26 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
     filas.push({ etiqueta: "Depositado hasta el corte", valor: pesos(vigentesCorte.reduce((n, d) => n + cent(d.importe), 0)) });
   }
   return {
-    tipo, titulo: `Retiro ${r.folio}`, subtitulo: `${NOMBRE_LUGAR[r.lugar]} · ${caja.nombre} · entregado el ${dia(r.entregado_en)}`,
+    tipo, titulo: `Retiro ${r.folio}`, subtitulo: `${NOMBRE_LUGAR[r.lugar]} · ${caja.nombre} · entregado el ${dia(r.entregado_en)}${k.claves.length ? ` · diferencia ${k.claves.join(", ")}` : ""}`,
     alCorte, importeAlCorte: enPendiente ? enPendiente.importe : enConfirmado ? enConfirmado.saldo : null, filas, eventos: ordenar(eventos),
     anterior: r.entregado_en < inicio, oculto, anotadosSinContar: false,
   };
+}
+
+/** «Clave asignada» en el historial de un caso: cuándo se asignó (a los casos que ya existían, al aprobarse las claves). */
+async function eventosClave(tx: Tx, casos: { clase: string; id: string }[], ev: (en: Date, texto: string, persona?: string | null) => Evento) {
+  const eventos: Evento[] = [];
+  const claves: string[] = [];
+  for (const c of casos) {
+    const [k] = await tx<{ clave: string; asignada_en: Date; origen: string }[]>`
+      select clave, asignada_en, origen from clave_diferencia where clase = ${c.clase} and caso_id = ${c.id}`;
+    if (!k) continue;
+    claves.push(k.clave);
+    eventos.push(ev(k.asignada_en, k.origen === "casos_existentes"
+      ? `Clave asignada: ${k.clave} (caso registrado antes de las claves fijas; su fecha original no cambia)`
+      : `Clave asignada: ${k.clave}`));
+  }
+  return { eventos, claves };
 }
 
 const DECISION: Record<string, string> = { absorbe_sucursal: "Lo absorbe la sucursal", queda_en_bolsa: "Queda en la bolsa", origen_identificado: "Origen identificado" };

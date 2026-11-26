@@ -41,6 +41,9 @@ export default async function Retiro({ params, searchParams }: PageProps<"/sucur
       {typeof aviso === "string" && AVISOS[aviso] ? <p className="aviso aviso-ok" role="status">{AVISOS[aviso]}</p> : null}
       <p>
         <span className={`chip-estado ${r.estado === "por_revisar" || r.estado === "recuento" || r.estado === "pendiente" || (r.resultado === "faltante_confirmado" && Number(r.saldo.faltanteDireccion)) ? "chip-vencida" : "chip-aclarada"}`} data-testid="estado-retiro">{r.textoEstado}</span>
+        {d.claves.map((k) => (
+          <span key={k.clave} className="sub" data-testid="clave-caso"> · {k.caso === "importe" ? "Diferencia" : "Diferencia al retirar"} <span className="clave-caso">{k.clave}</span></span>
+        ))}
         {r.avisos.revision ? <> <span className="sub" data-testid="tiempo-revision">Por revisar desde hace {r.avisos.revision.texto}</span></> : null}
         {r.avisos.revision?.masDe48 ? <> <span className="chip-estado chip-vencida" data-testid="aviso-48-revision">48 horas o más en revisión</span></> : null}
       </p>

@@ -1,4 +1,8 @@
+import { copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { inflateSync } from "node:zlib";
+import postgresCliente from "postgres";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import ExcelJS from "exceljs";
@@ -14,6 +18,7 @@ import { confirmarRetiro, detalleRetiro, generarFolio, recontarRetiro, registrar
 import { abrirTurno } from "@/lib/turnos";
 import { aplicarCambio, resumenPermisos, type CambioAcceso } from "@/lib/usuarios";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
+import { aplicarMigraciones, DIRECTORIO_MIGRACIONES } from "../../scripts/migrar.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
 
 /**
@@ -345,7 +350,7 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
     expect(ahora.diferencias[0].estado).toBe("Faltante confirmado · pendiente para Dirección");
     const d = (await detalleCaja(sql, e.admin, { codigo: e.codigo, tipo: "diferencia", id: dif.id, corte: t1 }))!;
     expect(d.detalle.alCorte).toBe("Estado al corte: Por revisar");
-    expect(d.detalle.titulo).toMatch(/^Cierre del .* · contra el esperado$/);
+    expect(d.detalle.titulo).toMatch(new RegExp(`^${e.codigo}-D\\d+ · Cierre del .* · contra el esperado$`));
     expect(d.detalle.eventos.filter((x) => x.despues).map((x) => x.texto)).toEqual([expect.stringMatching(/^Revisó: Faltante confirmado/)]);
     expect(d.detalle.eventos.filter((x) => !x.despues).map((x) => x.texto).join(" | ")).not.toMatch(/Revisó/);
     expect(await dar(e.admin, "reporte.caja_descargar", [e.sucursalId])).toEqual({ ok: true });
@@ -806,6 +811,58 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
     await guardar("resuelta-propia", r.archivo);
   });
 
+  it("clave fija por caso: se asigna al registrarse, no cambia con el periodo ni al cerrarse otros casos, y conserva el código original", async () => {
+    const e = await escenario();
+    const encargado = await cuenta([["encargado", e.codigo]], "Encargado");
+    // Caso 1: el cierre con $20 de más (al abrir, contra el esperado). Caso 2: el sobre con $50 menos.
+    await cerrarDelDia(e, { conteo: { bolsa: "740", cajon: "3350" } });
+    await abrir(e);
+    const [bolsa, cajon] = await sql<{ id: string }[]>`select id from sobre_cierre where sucursal_id = ${e.sucursalId} order by folio`;
+    expect(await recogerBuzon(sql, e.dir, e.codigo, { sobres: [
+      { sobreId: bolsa.id, estado: "correcto", folioVisto: "", motivo: "", contado: "420" },
+      { sobreId: cajon.id, estado: "correcto", folioVisto: "", motivo: "", contado: "3000" },
+    ], llave: LLAVE }, PRUEBAS)).toMatchObject({ ok: true });
+    // Una clave por caso, numeradas en orden de registro; el sobre es el último.
+    const filas = await sql<{ clave: string; numero: number; clase: string; caso_id: string; origen: string }[]>`
+      select clave, numero, clase, caso_id, origen from clave_diferencia where sucursal_id = ${e.sucursalId} order by numero`;
+    expect(filas.map((f) => f.clave)).toEqual(filas.map((_, i) => `${e.codigo}-D${i + 1}`));
+    expect(filas.every((f) => f.origen === "al_registrar")).toBe(true);
+    const claveSobre = filas.at(-1)!;
+    expect(claveSobre.clase).toBe("sobre");
+    const [dif] = await sql<{ id: string }[]>`select d.id from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id
+      where l.sucursal_id = ${e.sucursalId} and d.tipo = 'contra_esperado'`;
+    const claveTurno = filas.find((f) => f.caso_id === dif.id)!.clave;
+    const claveDe = async (corte?: string) => Object.fromEntries((await caja(e.admin, e, corte)).diferencias.map((d) => [d.id, d.clave]));
+    const t1 = await reloj();
+    expect(await claveDe()).toMatchObject({ [dif.id]: claveTurno, [claveSobre.caso_id]: claveSobre.clave });
+    // Se cierra el primero: el sobre conserva su clave; con el corte anterior, también.
+    expect(await revisarDiferencia(sql, encargado, e.codigo, { diferenciaId: dif.id, resultado: "aclarada", motivo: "Prueba: error de conteo" }, PRUEBAS)).toMatchObject({ ok: true });
+    expect((await claveDe())[claveSobre.caso_id]).toBe(claveSobre.clave);
+    expect((await claveDe(t1))[claveSobre.caso_id]).toBe(claveSobre.clave);
+    // En la línea de pendientes y en el Excel.
+    const s = resumirCaja(await caja(e.admin, e), (await caja(e.admin, e)).corte);
+    expect(s.atencion.find((a) => a.clave === "por_revisar")!.casos).toContainEqual({ texto: `${claveSobre.clave} · Faltante del sobre ${(await sql<{ folio: string }[]>`select folio from sobre_cierre where id = ${cajon.id}`)[0].folio}`, importe: "-50.00" });
+    expect(await dar(e.admin, "reporte.caja_descargar", [e.sucursalId])).toEqual({ ok: true });
+    const r = await prepararDescarga(sql, e.admin, { codigo: e.codigo, formato: "xlsx", contenido: "detalle" }, PRUEBAS);
+    if (!r.ok) throw new Error(r.error);
+    expect(await textoExcel(await excelCaja(r.archivo))).toContain(claveSobre.clave);
+    // En el historial del caso.
+    const det = (await detalleCaja(sql, e.admin, { codigo: e.codigo, tipo: "diferencia", id: dif.id }))!.detalle;
+    expect(det.titulo.startsWith(`${claveTurno} · `)).toBe(true);
+    expect(det.eventos.map((v) => v.texto)).toContain(`Clave asignada: ${claveTurno}`);
+    // Si cambiara el código de la sucursal, la clave conserva el original; los nuevos casos usan el nuevo código y siguen la numeración.
+    const nuevo = `Z${e.codigo}`;
+    await sql`update sucursal set codigo = ${nuevo} where id = ${e.sucursalId}`;
+    expect((await sql<{ clave: string }[]>`select clave from clave_diferencia where sucursal_id = ${e.sucursalId} order by numero`).map((f) => f.clave))
+      .toEqual(filas.map((f) => f.clave));
+    const otra = await sql<{ clave: string }[]>`select asignar_clave_diferencia(${e.sucursalId}, 'turno', gen_random_uuid(), now()) as clave`;
+    expect(otra[0].clave).toBe(`${nuevo}-D${filas.length + 1}`);
+    await sql`update sucursal set codigo = ${e.codigo} where id = ${e.sucursalId}`;
+    // No se edita ni se borra.
+    await expect(sql`update clave_diferencia set clave = 'otra' where sucursal_id = ${e.sucursalId}`).rejects.toThrow();
+    await expect(sql`delete from clave_diferencia where sucursal_id = ${e.sucursalId}`).rejects.toThrow();
+  });
+
   it("diferencias de turno: «Por revisar», «Pendiente de resolución» y «Corrección pendiente» por separado, sin sumarse", async () => {
     const e = await escenario();
     const encargado = await cuenta([["encargado", e.codigo]], "Encargado");
@@ -824,9 +881,78 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
     expect(c.diferencias.find((d) => d.id === dif.id)).toMatchObject({ etapa: "correccion_pendiente", abierta: true });
     const s = resumirCaja(c, c.corte);
     expect(s.atencion.filter((a) => a.n).map((a) => [a.clave, a.n])).toEqual([["correcciones", 1]]);
-    expect(s.atencion.find((a) => a.clave === "correcciones")!.casos).toEqual([{ texto: expect.stringMatching(/^Cierre del /), importe: "20.00" }]);
+    expect(s.atencion.find((a) => a.clave === "correcciones")!.casos).toEqual([{ texto: expect.stringMatching(new RegExp(`^${e.codigo}-D\\d+ · Cierre del `)), importe: "20.00" }]);
     expect(lectura(s).atencion.map((a) => a.texto)).toEqual(["Corrección pendiente"]);
     // El efectivo no cambia con ninguna de estas etapas.
     expect(c.visible).toBe("4090.00");
+  });
+});
+
+/**
+ * Los casos que ya existían antes de las claves fijas: una base con las migraciones hasta la 0043, casos registrados y
+ * después la 0044. Reciben su clave en orden de registro; se guarda cuándo se asignó y la fecha original no cambia.
+ */
+describe.skipIf(!URL_ADMIN)("claves fijas para los casos que ya existían", () => {
+  let admin: postgres.Sql;
+  let nombre: string;
+  let previas: string;
+  beforeAll(async () => {
+    nombre = `prueba_claves_${Date.now()}`;
+    admin = postgresCliente(URL_ADMIN!, { max: 1, onnotice: () => {} });
+    await admin.unsafe(`create database ${nombre}`);
+    const url = new URL(URL_ADMIN!);
+    url.pathname = `/${nombre}`;
+    sql = postgresCliente(url.toString(), { max: 6, prepare: false, onnotice: () => {} });
+    previas = await mkdtemp(path.join(tmpdir(), "migraciones-"));
+    for (const a of (await readdir(DIRECTORIO_MIGRACIONES)).filter((a) => a < "0044")) await copyFile(path.join(DIRECTORIO_MIGRACIONES, a), path.join(previas, a));
+    await aplicarMigraciones(sql, { directorio: previas });
+    await cargarDatosPrueba(sql, { entorno: "pruebas" });
+    for (const x of await sql<{ id: string; correo: string }[]>`select id, correo from usuario`) u[x.correo.replace("@prueba.fitnessland.invalid", "")] = x.id;
+  });
+  afterAll(async () => {
+    await sql?.end({ timeout: 5 });
+    await admin?.unsafe(`drop database if exists ${nombre} with (force)`);
+    await admin?.end({ timeout: 5 });
+    if (previas) await rm(previas, { recursive: true, force: true });
+  });
+
+  it("reciben su clave en orden de registro, con la fecha de asignación aparte", async () => {
+    const e = await escenario();
+    await cerrarDelDia(e, { conteo: { bolsa: "740", cajon: "3350" } });
+    await abrir(e);
+    const [bolsa, cajon] = await sql<{ id: string }[]>`select id from sobre_cierre where sucursal_id = ${e.sucursalId} order by folio`;
+    expect(await recogerBuzon(sql, e.dir, e.codigo, { sobres: [
+      { sobreId: bolsa.id, estado: "correcto", folioVisto: "", motivo: "", contado: "420" },
+      { sobreId: cajon.id, estado: "correcto", folioVisto: "", motivo: "", contado: "3000" },
+    ], llave: LLAVE }, PRUEBAS)).toMatchObject({ ok: true });
+    const f = await generarFolio(sql, e.matutina, e.codigo, { turnoId: e.turnoId, lugar: "cajon_mensualidades" }, PRUEBAS);
+    if (!f.ok) throw new Error(f.error);
+    const x = await registrarRetiro(sql, e.matutina, e.codigo, { turnoId: e.turnoId, folioId: f.folioId, contado: "280", cambio: "0", encargada: e.encargada }, PRUEBAS);
+    if (!x.ok) throw new Error(x.error);
+    const version = async () => (await sql<{ version: number }[]>`select version from retiro where id = ${x.retiroId}`)[0].version;
+    await confirmarRetiro(sql, e.encargada, { retiroId: x.retiroId, version: await version(), importe: "250", folioCoincide: true, folioEnSobre: "", motivo: "" }, PRUEBAS);
+    await recontarRetiro(sql, e.encargada, { retiroId: x.retiroId, version: await version(), recontaron: false, importe: null, con: null, motivo: "Prueba: Recepción ya se fue" }, PRUEBAS);
+    const antes = await sql<{ fecha: Date }[]>`
+      select registrada_en as fecha from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id where l.sucursal_id = ${e.sucursalId}
+      union all select ds.creada_en from diferencia_sobre ds join sobre_cierre s on s.id = ds.sobre_id where s.sucursal_id = ${e.sucursalId}
+      union all select reportado_en from retiro where id = ${x.retiroId} order by 1`;
+    expect(antes.length).toBeGreaterThanOrEqual(3);
+
+    await aplicarMigraciones(sql);
+    const filas = await sql<{ clave: string; clase: string; registrado: Date; asignada_en: Date; origen: string }[]>`
+      select clave, clase, registrado, asignada_en, origen from clave_diferencia where sucursal_id = ${e.sucursalId} order by numero`;
+    expect(filas.map((k) => k.clave)).toEqual(antes.map((_, i) => `${e.codigo}-D${i + 1}`));
+    expect(filas.every((k) => k.origen === "casos_existentes")).toBe(true);
+    expect(filas.at(-1)!.clase).toBe("retiro_importe");
+    // La fecha original del caso no cambia; la asignación queda aparte.
+    expect(filas.map((k) => k.registrado.getTime())).toEqual(antes.map((a) => a.fecha.getTime()));
+    for (const k of filas) expect(k.asignada_en.getTime()).toBeGreaterThanOrEqual(k.registrado.getTime());
+    const det = (await detalleRetiro(sql, e.admin, e.codigo, x.retiroId))!;
+    const ultima = filas.at(-1)!.clave;
+    expect(det.claves).toEqual([{ clave: ultima, caso: "importe" }]);
+    expect(det.historial.map((h) => h.que)).toContain(`Clave asignada (diferencia de importe): ${ultima} · caso registrado antes de las claves fijas; su fecha original no cambia`);
+    // Los casos nuevos siguen la numeración.
+    const otra = await sql<{ clave: string }[]>`select asignar_clave_diferencia(${e.sucursalId}, 'turno', gen_random_uuid(), now()) as clave`;
+    expect(otra[0].clave).toBe(`${e.codigo}-D${filas.length + 1}`);
   });
 });

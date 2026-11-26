@@ -200,7 +200,7 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
           return (
             <div key={d.id} className="tarjeta" data-testid="diferencia" data-tipo={d.tipo}>
               <p>
-                <strong>{NOMBRE_LUGAR[d.lugar]} · {etiquetaDiferencia(d.tipo, d.importe, !!k)}: {firmado(d.importe)}</strong>{" "}
+                <strong>{d.clave ? <><span className="clave-caso" data-testid="clave-caso">{d.clave}</span> · </> : null}{NOMBRE_LUGAR[d.lugar]} · {etiquetaDiferencia(d.tipo, d.importe, !!k)}: {firmado(d.importe)}</strong>{" "}
                 <span className={`chip-estado ${d.estado === "aclarada" || d.estado === "resuelta" ? "chip-aclarada" : "chip-vencida"}`} data-testid="estado-diferencia">{ESTADO_DIFERENCIA[d.estado]}</span>
               </p>
               <p className="sub">Se compara: {comparado}.</p>
