@@ -473,3 +473,68 @@ test("pendientes por etapa: Dirección resuelve el faltante de un retiro; el del
   await expect(page.getByTestId("atencion-pendiente_resolucion")).toContainText("1Pendiente de resolución");
   await expect(page.getByTestId("atencion-pendiente_resolucion")).not.toContainText("retiro");
 });
+
+test("autorización para resolver lo propio: se otorga expresamente con vista previa; quien participó resuelve el sobre y queda marcado", async ({ page }) => {
+  const e = await escenario();
+  expect(await aplicarCambio(sql, e.general.id, e.dir.id, { tipo: "dar_permiso", permiso: "reporte.caja", alcance: { todas: false, sucursales: [e.sucursalId] }, limite: "", hasta: "", motivo: "Revisa el efectivo" }, PRUEBAS))
+    .toEqual({ ok: true });
+  expect(await recogerBuzon(sql, e.dir.id, e.codigo, { sobres: [
+    { sobreId: e.sobres[0].id, estado: "correcto", folioVisto: "", motivo: "", contado: "400" },
+    { sobreId: e.sobres[1].id, estado: "correcto", folioVisto: "", motivo: "", contado: "3000" },
+  ], llave: LLAVE }, PRUEBAS)).toMatchObject({ ok: true });
+  const [difSobre] = await sql<{ id: string }[]>`select d.id from diferencia_sobre d join sobre_cierre s on s.id = d.sobre_id where s.sucursal_id = ${e.sucursalId}`;
+  expect(await revisarDiferenciaSobre(sql, e.admin.id, e.codigo, { diferenciaId: difSobre.id, resultado: "faltante_confirmado", motivo: "Prueba: faltan 50 pesos" }, PRUEBAS))
+    .toEqual({ ok: true });
+
+  // Quien administra accesos la otorga: una sucursal, hasta (máximo 90 días), motivo y vista previa.
+  await entrar(page, e.general.correo);
+  await page.goto(`/usuarios/${e.dir.id}`);
+  const seccion = page.getByTestId("autorresolucion");
+  await expect(seccion.getByTestId("autorresolucion-sin")).toContainText("quien participó no resuelve sus faltantes");
+  await seccion.getByTestId("abrir-autorresolucion").click();
+  const a = seccion.getByTestId("formulario-autorresolucion");
+  const max = await a.getByLabel("Hasta").getAttribute("max");
+  expect(await a.getByLabel("Hasta").inputValue()).toBe(max);
+  await a.getByLabel("Una sucursal").check();
+  await a.getByLabel(`Caja ${e.codigo}`, { exact: true }).check();
+  await a.getByLabel("Motivo").fill("Prueba: no hay otra Dirección que resuelva");
+  await a.getByRole("button", { name: "Revisar cómo quedará" }).click();
+  await expect(a.getByTestId("vista-previa")).toContainText("Puede resolver con «Lo absorbe la sucursal» faltantes ya confirmados de retiros y sobres en los que participó");
+  await capturar(page, "autorresolucion-vista-previa");
+  expect((await sql`select 1 from autorresolucion where usuario_id = ${e.dir.id}`).length).toBe(0);
+  await a.getByRole("button", { name: "Confirmar y guardar" }).click();
+  await expect(seccion.getByTestId("autorresolucion-vigente")).toContainText(`Autorizada en Caja ${e.codigo}`);
+  // La de revisar lo propio no se otorgó.
+  await expect(page.getByTestId("autorrevision")).toContainText("Sin autorización");
+  await capturar(page, "autorresolucion-otorgada");
+
+  // Dirección, que participó en la cadena del sobre, ahora lo resuelve con la marca.
+  await entrar(page, e.dir.correo);
+  await page.goto(`/sucursales/${e.codigo}/recoleccion`);
+  const tarjeta = page.getByTestId(`diferencia-${e.sobres[1].folio}`);
+  await expect(tarjeta.getByTestId("resolver-propio")).toContainText("quedará marcado «Resuelta por quien participó»");
+  const f = tarjeta.getByTestId("resolver-faltante");
+  await f.getByLabel("Motivo (obligatorio)").fill("Prueba: lo absorbe la sucursal");
+  await capturar(page, "resolver-propio");
+  await f.getByRole("button", { name: "Registrar resolución" }).click();
+  await expect(page.getByRole("status")).toContainText("Resolución registrada");
+  await expect(page.getByTestId(`diferencia-${e.sobres[1].folio}`).getByTestId("marca-resuelta-propia")).toHaveText("Resuelta por quien participó");
+  await capturar(page, "resuelta-propia");
+
+  // En el reporte: cerrada, con la marca; el efectivo no cambió.
+  await page.goto(`/reportes/caja/mas?sucursal=${e.codigo}&vista=diferencias`);
+  const cerrada = page.getByTestId("etapa-cerrada").getByTestId("diferencia").filter({ hasText: e.sobres[1].folio });
+  await expect(cerrada.getByTestId("chip-resuelta-propia")).toHaveText("Resuelta por quien participó");
+  await expect(cerrada).toContainText("Lo absorbe la sucursal · Resuelta por quien participó");
+  await capturar(page, "reporte-resuelta-propia");
+
+  // Terminada: se bloquean nuevas resoluciones propias; la marca y el historial se conservan.
+  const [vig] = await sql<{ id: string }[]>`select id from autorresolucion where usuario_id = ${e.dir.id} and revocada_en is null`;
+  expect(await aplicarCambio(sql, e.general.id, e.dir.id, { tipo: "terminar_autorresolucion", id: vig.id, motivo: "Prueba: se termina" }, PRUEBAS)).toEqual({ ok: true });
+  await page.goto(`/sucursales/${e.codigo}/recoleccion`);
+  await expect(page.getByTestId(`diferencia-${e.sobres[1].folio}`).getByTestId("marca-resuelta-propia")).toBeVisible();
+  await entrar(page, e.general.correo);
+  await page.goto("/usuarios?vista=historial");
+  await expect(page.getByTestId("historial-accesos")).toContainText("Autorizó resolver faltantes en los que participó");
+  await expect(page.getByTestId("historial-accesos")).toContainText("Terminó la autorización para resolver faltantes en los que participó");
+});

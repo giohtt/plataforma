@@ -106,6 +106,32 @@ export default async function Persona({ params, searchParams }: PageProps<"/usua
         </section>
       ) : null}
 
+      {p.esDireccion || p.autorresolucion ? (
+        <section className="tarjeta" aria-labelledby="t-autores" data-testid="autorresolucion">
+          <h2 id="t-autores" className="titulo-seccion">Resolver faltantes en los que participó (temporal)</h2>
+          {p.autorresolucion ? (
+            <p className="aviso aviso-info" data-testid="autorresolucion-vigente">
+              Autorizada {p.autorresolucion.todas ? "en todas las sucursales" : `en ${p.autorresolucion.sucursal}`} del {fechaHora.format(p.autorresolucion.desde)} al{" "}
+              <strong>{fechaHora.format(p.autorresolucion.hasta!)}</strong> · {p.autorresolucion.otorgadoPor} · «{p.autorresolucion.motivo}». Mientras esté vigente, y
+              mientras conserve Dirección y el permiso de resolver en esa sucursal, puede resolver con «Lo absorbe la sucursal» faltantes ya confirmados de retiros y
+              sobres en los que participó; cada uno queda marcado «Resuelta por quien participó».
+            </p>
+          ) : (
+            <p className="sub" data-testid="autorresolucion-sin">Sin autorización: quien participó no resuelve sus faltantes. La autorización para revisar lo propio no sirve para resolver.</p>
+          )}
+          <p className="sub">
+            Solo para Dirección, aparte de «Revisar lo propio». Máximo 90 días, se renueva solo a mano, con motivo; nunca se activa ni se renueva sola. Al vencer o
+            terminarla se bloquean nuevas resoluciones propias y se conserva todo el historial. No cambia dinero ni descuenta a personas.
+          </p>
+          {f.asignar ? (
+            <p className="fila-acciones">
+              <FormularioCambio persona={per.id} tipo="autorresolucion" catalogo={p.catalogo} renovar={Boolean(p.autorresolucion)} />
+              {p.autorresolucion ? <FormularioCambio persona={per.id} tipo="terminar_autorresolucion" catalogo={p.catalogo} fijo={{ id: p.autorresolucion.id, etiqueta: "la autorización para resolver faltantes en los que participó" }} /> : null}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
       <section className="tarjeta" aria-labelledby="t-resumen" data-testid="resumen-permisos">
         <h2 id="t-resumen" className="titulo-seccion">Lo que puede hacer hoy</h2>
         <p className="sub">

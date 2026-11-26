@@ -181,6 +181,47 @@ describe.skipIf(!URL_ADMIN)("usuarios, roles y permisos", () => {
     expect(hoyMx()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
+  it("autorización para resolver lo propio: aparte de la de revisar, quien administra accesos se la otorga a sí misma con vista previa, máximo 90 días, renovable a mano y con historial", async () => {
+    const yo = u["direccion"];
+    const res = (hasta: string): CambioAcceso => ({ tipo: "autorresolucion", alcance: { todas: true }, hasta, motivo: "Aún no hay otra Dirección que resuelva" });
+    // Vista previa: no guarda nada.
+    const vista = await previsualizarCambio(sql, yo, yo, res(masDias(30)), PRUEBAS);
+    expect(vista).toMatchObject({ ok: true, detalle: expect.stringMatching(/faltantes ya confirmados de retiros y sobres en los que participó.*«Resuelta por quien participó»/) });
+    expect((await sql`select 1 from autorresolucion where usuario_id = ${yo}`).length).toBe(0);
+    expect(await cambiar(yo, yo, res(masDias(91)))).toEqual({ ok: false, error: "hasta" });
+    expect(await cambiar(yo, u["recepcion.tenango"], res(masDias(30)))).toEqual({ ok: false, error: "no_direccion" });
+    // Sin usuario.asignar no se otorga.
+    expect(await cambiar(u["recepcion.tenango"], yo, res(masDias(30)))).toEqual({ ok: false, error: "sin_permiso" });
+    // Es aparte: no crea, renueva ni termina la de revisar lo propio.
+    const revisar = () => sql<{ id: string; revocada: boolean }[]>`select id, revocada_en is not null as revocada from autorrevision where usuario_id = ${yo} order by creado_en`;
+    if (!(await revisar()).some((x) => !x.revocada)) {
+      expect(await cambiar(yo, yo, { tipo: "autorrevision", alcance: { todas: true }, hasta: masDias(30), motivo: "Aún no hay personal de Administración" })).toEqual({ ok: true });
+    }
+    const antesRevisar = await revisar();
+    expect(await cambiar(yo, yo, res(masDias(90)))).toEqual({ ok: true });
+    expect(await cambiar(yo, yo, res(masDias(60)))).toEqual({ ok: true });
+    expect(await revisar()).toEqual(antesRevisar);
+    const filas = await sql<{ revocada: boolean; renueva: boolean }[]>`
+      select revocada_en is not null as revocada, renueva_a is not null as renueva from autorresolucion where usuario_id = ${yo} order by creado_en`;
+    expect(filas).toEqual([{ revocada: true, renueva: false }, { revocada: false, renueva: true }]);
+    const ficha = (await pantallaPersona(sql, yo, yo))!;
+    expect(ficha.autorresolucion).toMatchObject({ todas: true, motivo: "Aún no hay otra Dirección que resuelva" });
+    expect(ficha.autorrevision).not.toBeNull();
+    // Terminar: queda en el historial; la de revisar sigue.
+    expect(await cambiar(yo, yo, { tipo: "terminar_autorresolucion", id: ficha.autorresolucion!.id, motivo: "Ya hay otra Dirección" })).toEqual({ ok: true });
+    expect((await pantallaPersona(sql, yo, yo))!).toMatchObject({ autorresolucion: null, autorrevision: expect.anything() });
+    // En la base: más de 90 días, editar o borrar no se acepta.
+    await expect(sql`insert into autorresolucion (usuario_id, todas_las_sucursales, vigente_desde, vigente_hasta, otorgada_por, motivo)
+                     values (${u["direccion.general"]}, true, now(), now() + interval '91 days', ${yo}, 'Prueba de límite')`).rejects.toThrow(/autorresolucion_maximo_90_dias/);
+    await expect(sql`update autorresolucion set vigente_hasta = vigente_hasta + interval '1 day' where usuario_id = ${yo}`).rejects.toThrow(/solo se puede terminar/);
+    await expect(sql`delete from autorresolucion where usuario_id = ${yo}`).rejects.toThrow(/no se borra/);
+    const h = await historialAccesos(sql, yo);
+    expect(h.map((x) => x.accion)).toEqual(expect.arrayContaining([
+      "Autorizó resolver faltantes en los que participó", "Renovó la autorización para resolver faltantes en los que participó",
+      "Terminó la autorización para resolver faltantes en los que participó",
+    ]));
+  });
+
   it("siempre queda una cuenta que administra accesos sin vencimiento (desactivar, quitar, restringir o vencer)", async () => {
     const yo = u["direccion"];
     const g = u["direccion.general"];

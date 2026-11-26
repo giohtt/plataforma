@@ -111,10 +111,11 @@ function tablasSucursal(c: CajaSucursal, s: ResumenCaja, detalles: Detalle[] | u
     hoja: "Diferencias", titulo: "Diferencias (aparte: no se suman a ninguna etapa)",
     columnas: [{ titulo: "Clave", ancho: 7, pdf: 32 }, { titulo: "Etapa", ancho: 22, pdf: 84 }, { titulo: "Origen", ancho: 30, pdf: 100 }, { titulo: "Folio", ancho: 20, pdf: 84 },
                { titulo: "Lugar", ancho: 22, pdf: 74 }, { titulo: "Registrada", ancho: 12, pdf: 54 }, { titulo: "Importe", ancho: 12, pdf: 54, derecha: true },
-               { titulo: "Estado al corte", ancho: 44, pdf: 160 }, { titulo: "Anterior al periodo", ancho: 11, pdf: 40 }, { titulo: "Cuenta en el neto", ancho: 10, pdf: 38 }],
+               { titulo: "Estado al corte", ancho: 44, pdf: 130 }, { titulo: "Anterior al periodo", ancho: 11, pdf: 36 }, { titulo: "Cuenta en el neto", ancho: 10, pdf: 34 },
+               { titulo: "Revisada por quien participó", ancho: 12, pdf: 0 }, { titulo: "Resuelta por quien participó", ancho: 12, pdf: 0 }],
     filas: [...c.diferencias].sort((a, b) => ORDEN_ETAPA[a.etapa] - ORDEN_ETAPA[b.etapa]).map((d) => ({
       celdas: [d.clave, ETAPA_DIFERENCIA[d.etapa], d.tipoTexto, d.folio ?? "", nombreLugar(d.lugar), iso(d.registradaEn), { importe: d.importe }, `Estado al corte: ${d.estado}`,
-               siNo(d.anterior), siNo(d.neto)] })),
+               siNo(d.anterior), siNo(d.neto), siNo(d.revisadaPropia), siNo(d.resueltaPropia)] })),
     nota: `Neto de referencia: ${dinero(aPesos(c.diferencias.filter((d) => d.neto).reduce((n, d) => n + centavos(d.importe), 0)))} (no cierra ningún caso).`,
   });
   const m = c.movimientos;

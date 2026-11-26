@@ -70,6 +70,7 @@ export const ETAPA_DIFERENCIA: Record<EtapaDiferencia, string> = {
 };
 const PENDIENTE_DIRECCION = "Faltante confirmado · pendiente de resolución de Dirección";
 const RESUELTA_ABSORBE = "Resuelta por Dirección · Lo absorbe la sucursal";
+const MARCA_RESUELTA = "Resuelta por quien participó";
 export type Diferencia = {
   clase: "turno" | "retiro_esperado" | "retiro_importe" | "sobre";
   id: string;
@@ -95,6 +96,9 @@ export type Diferencia = {
    * descuenta a ninguna persona.
    */
   etapa: EtapaDiferencia;
+  /** Marcas permanentes: revisada o resuelta por quien participó (con su autorización personal). */
+  revisadaPropia: boolean;
+  resueltaPropia: boolean;
   folio: string | null;
 };
 /**
@@ -259,7 +263,7 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
   const retiros = await tx<{
     id: string; folio: string; lugar: TipoLugar; importe: string; entregado_en: Date; encargada_id: string; entrego: string; encargada: string; estado: string;
     habilitado_en: Date | null; reportado_en: Date | null; monto_habilitado: string | null; discrepancia: string | null; contado: string | null; depositado: string; revision: string | null;
-    resuelta: boolean;
+    resuelta: boolean; resuelta_propia: boolean; revisada_propia: boolean;
   }[]>`
     select r.id, r.folio, l.tipo as lugar, r.importe::text as importe, r.entregado_en, r.encargada_id, a.nombre as entrego, b.nombre as encargada, r.estado,
            r.habilitado_en, r.reportado_en, r.monto_habilitado::text as monto_habilitado, r.discrepancia,
@@ -267,7 +271,9 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
            coalesce((select sum(d.importe) from deposito_retiro d where d.retiro_id = r.id and d.en <= ${corteBd}::text::timestamptz
                      and not exists (select 1 from deposito_retiro c where c.corrige_id = d.id and c.en <= ${corteBd}::text::timestamptz)), 0)::numeric(12, 2)::text as depositado,
            (select v.resultado from retiro_revision v where v.retiro_id = r.id and v.en <= ${corteBd}::text::timestamptz) as revision,
-           exists (select 1 from resolucion_retiro x where x.retiro_id = r.id and x.en <= ${corteBd}::text::timestamptz) as resuelta
+           exists (select 1 from resolucion_retiro x where x.retiro_id = r.id and x.en <= ${corteBd}::text::timestamptz) as resuelta,
+           exists (select 1 from resolucion_retiro x where x.retiro_id = r.id and x.en <= ${corteBd}::text::timestamptz and x.autorresolucion_id is not null) as resuelta_propia,
+           exists (select 1 from retiro_revision v where v.retiro_id = r.id and v.en <= ${corteBd}::text::timestamptz and v.autorrevision_id is not null) as revisada_propia
     from retiro r join lugar_efectivo l on l.id = r.lugar_id join usuario a on a.id = r.entregado_por join usuario b on b.id = r.encargada_id
     where r.sucursal_id = ${s.id} and r.entregado_en <= ${corteBd}::text::timestamptz
     order by r.entregado_en`;
@@ -296,10 +302,11 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
                          saldo: r.contado ?? r.importe, anterior: anterior(r.entregado_en) });
     }
     if (r.discrepancia === "importe" && r.reportado_en && r.reportado_en <= corte && r.contado !== null) {
-      const e = etapaFaltante(r.revision, r.resuelta);
+      const e = etapaFaltante(r.revision, r.resuelta, r.resuelta_propia);
       diferencias.push({ clase: "retiro_importe", id: r.id, enlace: { tipo: "retiro", id: r.id },
                          texto: `Retiro ${r.folio} · registrado ${dinero(r.importe)} · contado ${dinero(r.contado)}`, lugar: r.lugar,
                          importe: pesos(cent(r.contado) - cent(r.importe)), estado: e.estado, etapa: e.etapa,
+                         revisadaPropia: r.revisada_propia, resueltaPropia: r.resuelta_propia,
                          abierta: e.etapa !== "cerrada", anterior: anterior(r.reportado_en), registradaEn: r.reportado_en, neto: true,
                          origen: { clase: "retiro", id: r.id }, tipoTexto: "Retiro", folio: r.folio });
     }
@@ -402,9 +409,10 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
 
   // Aparte: diferencias (del periodo, más las anteriores que siguen abiertas al corte).
   const difTurno = await tx<{ id: string; entrega_id: string; entrega_tipo: string; entrega_en: Date; tipo: string; importe: string; registrada_en: Date; lugar: TipoLugar;
-                               revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null }[]>`
+                               revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null; revisada_propia: boolean }[]>`
     select d.id, d.entrega_id, e.tipo as entrega_tipo, e.creada_en as entrega_en, d.tipo, d.importe::text as importe, d.registrada_en, l.tipo as lugar,
            (select v.resultado from revision_diferencia v where v.diferencia_id = d.id and v.en <= ${corteBd}::text::timestamptz) as revision,
+           exists (select 1 from revision_diferencia v where v.diferencia_id = d.id and v.en <= ${corteBd}::text::timestamptz and v.autorrevision_id is not null) as revisada_propia,
            x.decision, x.requiere_correccion as requiere, x.correccion_en <= ${corteBd}::text::timestamptz as corregida
     from diferencia_efectivo d join entrega_turno e on e.id = d.entrega_id join lugar_efectivo l on l.id = d.lugar_id
     left join resolucion_diferencia x on x.diferencia_id = d.id and x.en <= ${corteBd}::text::timestamptz
@@ -413,7 +421,7 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
   for (const d of difTurno) {
     const { estado, abierta, etapa } = estadoDiferencia(d);
     diferencias.push({ clase: "turno", id: d.id, enlace: { tipo: "diferencia", id: d.id }, texto: textoDiferencia(d),
-                       lugar: d.lugar, importe: d.importe, estado, abierta, etapa, anterior: anterior(d.registrada_en), registradaEn: d.registrada_en, neto: d.tipo === "contra_esperado",
+                       lugar: d.lugar, importe: d.importe, estado, abierta, etapa, revisadaPropia: d.revisada_propia, resueltaPropia: false, anterior: anterior(d.registrada_en), registradaEn: d.registrada_en, neto: d.tipo === "contra_esperado",
                        origen: null, tipoTexto: tipoDiferencia(d), folio: null });
   }
   // Diferencias contra el esperado al retirar: mientras no se vinculan a la del cambio de turno (después ya están ahí).
@@ -424,22 +432,27 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
       and not exists (select 1 from diferencia_retiro_entrega v where v.diferencia_retiro_id = x.id and v.en <= ${corteBd}::text::timestamptz)
     order by x.registrada_en`) {
     diferencias.push({ clase: "retiro_esperado", id: d.id, enlace: { tipo: "retiro", id: d.retiro_id }, texto: `Al retirar ${d.folio} · contra el esperado`,
-                       lugar: d.lugar, importe: d.importe, estado: "Se revisa con la entrega del turno", abierta: true, etapa: "por_revisar", anterior: anterior(d.registrada_en),
+                       lugar: d.lugar, importe: d.importe, estado: "Se revisa con la entrega del turno", abierta: true, etapa: "por_revisar", revisadaPropia: false, resueltaPropia: false, anterior: anterior(d.registrada_en),
                        registradaEn: d.registrada_en, neto: true, origen: null, tipoTexto: "Al retirar (contra el esperado)", folio: d.folio });
   }
   for (const d of await tx<{ id: string; sobre_id: string; recoleccion_id: string; folio: string; lugar: TipoLugar; importe: string; creada_en: Date; incidencia: boolean; revision: string | null;
-                             anotado: string; contado: string | null; resuelta: boolean }[]>`
+                             anotado: string; contado: string | null; resuelta: boolean; resuelta_propia: boolean; revisada_propia: boolean }[]>`
     select ds.id, ds.sobre_id, ds.recoleccion_id, s.folio, l.tipo as lugar, ds.importe::text as importe, ds.creada_en, ds.verificacion_id is not null as incidencia,
            (select v.resultado from revision_diferencia_sobre v where v.diferencia_id = ds.id and v.en <= ${corteBd}::text::timestamptz) as revision,
            s.importe::text as anotado, (select x.contado::text from recoleccion_sobre x where x.recoleccion_id = ds.recoleccion_id and x.sobre_id = ds.sobre_id) as contado,
-           exists (select 1 from resolucion_diferencia_sobre x where x.diferencia_id = ds.id and x.en <= ${corteBd}::text::timestamptz) as resuelta
+           exists (select 1 from resolucion_diferencia_sobre x where x.diferencia_id = ds.id and x.en <= ${corteBd}::text::timestamptz) as resuelta,
+           exists (select 1 from resolucion_diferencia_sobre x where x.diferencia_id = ds.id and x.en <= ${corteBd}::text::timestamptz
+                   and x.autorresolucion_id is not null) as resuelta_propia,
+           exists (select 1 from revision_diferencia_sobre v where v.diferencia_id = ds.id and v.en <= ${corteBd}::text::timestamptz
+                   and v.autorrevision_id is not null) as revisada_propia
     from diferencia_sobre ds join sobre_cierre s on s.id = ds.sobre_id join lugar_efectivo l on l.id = s.lugar_id
     where s.sucursal_id = ${s.id} and ds.creada_en <= ${corteBd}::text::timestamptz
     order by ds.creada_en`) {
-    const e = etapaFaltante(d.revision, d.resuelta);
+    const e = etapaFaltante(d.revision, d.resuelta, d.resuelta_propia);
     const texto = `Sobre ${d.folio}${d.incidencia ? " · llegó abierto o con otro folio" : ""} · anotado ${dinero(d.anotado)}${d.contado ? ` · contado ${dinero(d.contado)}` : ""}`;
     diferencias.push({ clase: "sobre", id: d.id, enlace: { tipo: "sobre", id: d.sobre_id }, texto, lugar: d.lugar, importe: d.importe,
-                       estado: e.estado, etapa: e.etapa, abierta: e.etapa !== "cerrada", anterior: anterior(d.creada_en), registradaEn: d.creada_en, neto: true,
+                       estado: e.estado, etapa: e.etapa, abierta: e.etapa !== "cerrada", anterior: anterior(d.creada_en),
+                       revisadaPropia: d.revisada_propia, resueltaPropia: d.resuelta_propia, registradaEn: d.creada_en, neto: true,
                        origen: { clase: "recoleccion", id: d.recoleccion_id }, tipoTexto: "Sobre en recolección", folio: d.folio });
   }
   // Del periodo, las anteriores abiertas al corte y, solo como referencia, las anteriores ya cerradas de un origen que
@@ -714,10 +727,10 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
       eventos.push(ev(x.creada_en, `Diferencia registrada: ${signo(x.importe)}`));
       if (x.en) eventos.push(ev(x.en, `Revisó la diferencia: ${RESULTADO[x.resultado!] ?? x.resultado}${x.propia ? " · Revisada por quien participó" : ""}`, x.por));
     }
-    for (const x of await tx<{ en: Date; motivo: string; por: string }[]>`
-      select x.en, x.motivo, u.nombre as por from resolucion_diferencia_sobre x join diferencia_sobre ds on ds.id = x.diferencia_id
-      join usuario u on u.id = x.resuelta_por where ds.sobre_id = ${id}`) {
-      eventos.push(ev(x.en, `Dirección resolvió el faltante: Lo absorbe la sucursal · «${x.motivo}»`, x.por));
+    for (const x of await tx<{ en: Date; motivo: string; por: string; propia: boolean }[]>`
+      select x.en, x.motivo, u.nombre as por, x.autorresolucion_id is not null as propia from resolucion_diferencia_sobre x
+      join diferencia_sobre ds on ds.id = x.diferencia_id join usuario u on u.id = x.resuelta_por where ds.sobre_id = ${id}`) {
+      eventos.push(ev(x.en, `Dirección resolvió el faltante: Lo absorbe la sucursal${x.propia ? ` · ${MARCA_RESUELTA}` : ""} · «${x.motivo}»`, x.por));
     }
     // Dónde estaba al corte (la misma clasificación del reporte).
     const enEtapa2 = caja.sobres.find((x) => x.id === id);
@@ -905,9 +918,10 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
     eventos.push(ev(v.en, `Revisó: ${RESULTADO[v.resultado] ?? v.resultado} · verificado ${dinero(v.monto)}${v.propia ? " · Revisada por quien participó" : ""}`, v.por));
   }
   if (r.habilitado_en) eventos.push(ev(r.habilitado_en, `Depósitos habilitados por ${dinero(r.monto_habilitado!)}`));
-  for (const x of await tx<{ en: Date; motivo: string; por: string }[]>`
-    select x.en, x.motivo, u.nombre as por from resolucion_retiro x join usuario u on u.id = x.resuelta_por where x.retiro_id = ${id}`) {
-    eventos.push(ev(x.en, `Dirección resolvió el faltante: Lo absorbe la sucursal · «${x.motivo}»`, x.por));
+  for (const x of await tx<{ en: Date; motivo: string; por: string; propia: boolean }[]>`
+    select x.en, x.motivo, u.nombre as por, x.autorresolucion_id is not null as propia
+    from resolucion_retiro x join usuario u on u.id = x.resuelta_por where x.retiro_id = ${id}`) {
+    eventos.push(ev(x.en, `Dirección resolvió el faltante: Lo absorbe la sucursal${x.propia ? ` · ${MARCA_RESUELTA}` : ""} · «${x.motivo}»`, x.por));
   }
   const deps = await tx<{ id: string; importe: string; en: Date; referencia: string; por: string; corrige: string | null }[]>`
     select d.id, d.importe::text as importe, d.en, d.referencia, u.nombre as por, d.corrige_id as corrige
@@ -974,9 +988,11 @@ function estadoDiferencia(d: { revision: string | null; decision: string | null;
  * Faltante de un retiro o de un sobre: por revisar; faltante confirmado sin decisión de Dirección (pendiente de
  * resolución); resuelto («Lo absorbe la sucursal»). Aclarada, sobrante o incidencia confirmados se cierran como antes.
  */
-function etapaFaltante(revision: string | null, resuelta: boolean): { estado: string; etapa: EtapaDiferencia } {
+function etapaFaltante(revision: string | null, resuelta: boolean, propia: boolean): { estado: string; etapa: EtapaDiferencia } {
   if (revision === null) return { estado: "Por revisar", etapa: "por_revisar" };
-  if (revision === "faltante_confirmado") return resuelta ? { estado: RESUELTA_ABSORBE, etapa: "cerrada" } : { estado: PENDIENTE_DIRECCION, etapa: "pendiente_resolucion" };
+  if (revision === "faltante_confirmado") {
+    return resuelta ? { estado: propia ? `${RESUELTA_ABSORBE} · ${MARCA_RESUELTA}` : RESUELTA_ABSORBE, etapa: "cerrada" } : { estado: PENDIENTE_DIRECCION, etapa: "pendiente_resolucion" };
+  }
   return { estado: RESULTADO[revision] ?? revision, etapa: "cerrada" };
 }
 
