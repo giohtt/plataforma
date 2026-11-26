@@ -175,6 +175,8 @@ const TITULO: Record<string, { boton: string; ayuda?: string }> = {
   autorrevision: { boton: "Autorizar que revise lo propio", ayuda: "Solo para Dirección. Máximo 90 días, renovable. Cada revisión queda marcada «Revisada por quien participó»." },
   quitar_perfil: { boton: "Quitar" }, quitar_permiso: { boton: "Quitar" }, quitar_restriccion: { boton: "Quitar restricción" },
   terminar_autorrevision: { boton: "Terminar ahora" },
+  autorresolucion: { boton: "Autorizar que resuelva lo propio", ayuda: "Solo para Dirección. Aparte de la de revisar lo propio. Máximo 90 días, se renueva solo a mano. Solo faltantes ya confirmados de retiros y sobres, con «Lo absorbe la sucursal»; cada resolución queda marcada «Resuelta por quien participó»." },
+  terminar_autorresolucion: { boton: "Terminar ahora" },
 };
 
 /**
@@ -230,8 +232,8 @@ export function FormularioCambio({ persona, tipo, catalogo, fijo, renovar = fals
           <ErrorCampo estado={estado} campo="limite" />
         </div>
       ) : null}
-      {["dar_perfil", "dar_permiso", "restringir", "autorrevision"].includes(tipo) ? (
-        <Alcance estado={estado} catalogo={catalogo} una={tipo === "autorrevision"} />
+      {["dar_perfil", "dar_permiso", "restringir", "autorrevision", "autorresolucion"].includes(tipo) ? (
+        <Alcance estado={estado} catalogo={catalogo} una={tipo === "autorrevision" || tipo === "autorresolucion"} />
       ) : null}
       {["dar_perfil", "dar_permiso", "restringir"].includes(tipo) ? (
         <div className="campo">
@@ -241,7 +243,7 @@ export function FormularioCambio({ persona, tipo, catalogo, fijo, renovar = fals
           <ErrorCampo estado={estado} campo="hasta" />
         </div>
       ) : null}
-      {tipo === "autorrevision" ? (
+      {tipo === "autorrevision" || tipo === "autorresolucion" ? (
         <div className="campo">
           <label htmlFor="hasta">Hasta</label>
           <input id="hasta" name="hasta" type="date" min={catalogo.hoy} max={catalogo.maxAutorrevision}

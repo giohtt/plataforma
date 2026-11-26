@@ -128,6 +128,17 @@ test("crear e invitar, dar un perfil y quitar un permiso con vista previa; revis
   expect(Number(x.dias)).toBeLessThanOrEqual(90);
   expect(Number(x.dias)).toBeGreaterThan(89);
   await capturar(page, "usuarios-mi-cuenta");
+  // Aparte: autorización para resolver lo propio, también a sí misma, con vista previa.
+  const r2 = page.getByTestId("autorresolucion");
+  await r2.getByTestId("abrir-autorresolucion").click();
+  const b = r2.getByTestId("formulario-autorresolucion");
+  await b.getByLabel(/^Todas las sucursales/).check();
+  await b.getByLabel("Motivo").fill("Aún no hay otra Dirección que resuelva");
+  await b.getByRole("button", { name: "Revisar cómo quedará" }).click();
+  await expect(b.getByTestId("vista-previa")).toContainText("cada resolución queda marcada «Resuelta por quien participó»");
+  await b.getByRole("button", { name: "Confirmar y guardar" }).click();
+  await expect(r2.getByTestId("autorresolucion-vigente")).toContainText("Autorizada en todas las sucursales");
+  await expect(page.getByTestId("autorrevision-vigente")).toBeVisible();
 
   // Historial: quién, cuándo, a quién, qué y motivo.
   await page.goto("/usuarios?vista=historial");
@@ -135,6 +146,7 @@ test("crear e invitar, dar un perfil y quitar un permiso con vista previa; revis
   await expect(h).toContainText(`${e.dir.nombre} · Restringió un permiso · Nueva recepcionista (prueba)`);
   await expect(h).toContainText("Motivo: «Sin retiros mientras se capacita (2 semanas)»");
   await expect(h).toContainText("Autorizó revisar lo propio");
+  await expect(h).toContainText("Autorizó resolver faltantes en los que participó");
   await page.goto("/usuarios?vista=perfiles");
   await expect(page.getByTestId("perfiles")).toContainText("Registrar retiros de efectivo");
 });

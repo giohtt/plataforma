@@ -55,16 +55,22 @@ function TarjetaDiferencia({ d, codigo, devolucion = false }: { d: DiferenciaSob
         <p className="aviso aviso-ok" data-testid="faltante-resuelto">
           Faltante resuelto por <strong>{d.resolucion.resolucion.por}</strong> (Dirección): <strong>Lo absorbe la sucursal</strong> · Motivo: «{d.resolucion.resolucion.motivo}».
           No cambió el efectivo contado ni los depósitos.
+          {d.resolucion.resolucion.propia ? <> <span className="marca-resuelta-propia" data-testid="marca-resuelta-propia">Resuelta por quien participó</span></> : null}
         </p>
       ) : d.resolucion.pendiente ? (
         <>
           <p className="aviso aviso-info" data-testid="faltante-direccion">Faltante confirmado, pendiente de resolución de Dirección. Es un caso aparte de cualquier otro faltante.</p>
-          {d.resolucion.puede ? <FormularioResolverFaltante codigo={codigo} clase="sobre" id={d.id} importe={pesos.format(Math.abs(Number(d.importe)))} /> : null}
-          {d.resolucion.participo ? (
+          {d.resolucion.participo && d.resolucion.autorizacionHasta ? (
+            <p className="aviso aviso-info" data-testid="resolver-propio">
+              Participaste en la cadena de este sobre. Lo resuelves con tu autorización personal para resolver lo propio, vigente hasta el{" "}
+              <strong>{hora.format(d.resolucion.autorizacionHasta)}</strong>; quedará marcado «Resuelta por quien participó».
+            </p>
+          ) : d.resolucion.participo ? (
             <p className="sub" data-testid="resuelve-otra-cuenta">
-              Participaste en la cadena de este sobre: lo resuelve otra cuenta de Dirección que no participó. Tu autorización para revisar lo propio no aplica a resolver.
+              Participaste en la cadena de este sobre: lo resuelve otra cuenta de Dirección que no participó, o tú con una autorización vigente para resolver lo propio. La de revisar lo propio no aplica a resolver.
             </p>
           ) : null}
+          {d.resolucion.puede ? <FormularioResolverFaltante codigo={codigo} clase="sobre" id={d.id} importe={pesos.format(Math.abs(Number(d.importe)))} /> : null}
         </>
       ) : null}
     </div>

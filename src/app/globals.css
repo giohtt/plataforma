@@ -1276,3 +1276,15 @@ td.mono {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.marca-resuelta-propia,
+.marca-propia-chip {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid #f0d49e;
+  border-radius: 6px;
+  padding: 0 6px;
+  white-space: nowrap;
+}

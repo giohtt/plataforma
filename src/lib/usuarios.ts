@@ -238,6 +238,8 @@ export type PersonaDetalle = {
   permisos: (Otorgamiento & { permiso: string; descripcion: string; todas: boolean; sucursal: string | null; limite: string | null })[];
   restricciones: (Otorgamiento & { permiso: string; descripcion: string; todas: boolean; sucursal: string | null })[];
   autorrevision: (Otorgamiento & { todas: boolean; sucursal: string | null }) | null;
+  /** Autorización aparte para resolver faltantes en los que participó (26 nov 2026). */
+  autorresolucion: (Otorgamiento & { todas: boolean; sucursal: string | null }) | null;
   esDireccion: boolean;
   resumen: ResumenPermisos;
   historial: EntradaHistorial[];
@@ -303,6 +305,11 @@ export async function pantallaPersona(sql: Sql, usuarioId: string, id: string): 
            vigente(a.vigente_desde, a.vigente_hasta, a.revocada_en) as vigente
     from autorrevision a left join sucursal s on s.id = a.sucursal_id join usuario o on o.id = a.otorgada_por
     where a.usuario_id = ${id} and a.revocada_en is null and a.vigente_hasta > now() order by a.vigente_desde desc limit 1`;
+  const [autoRes] = await sql<{ id: string; todas: boolean; sucursal: string | null; desde: Date; hasta: Date; por: string; motivo: string; vigente: boolean }[]>`
+    select a.id, a.todas_las_sucursales as todas, s.nombre as sucursal, a.vigente_desde as desde, a.vigente_hasta as hasta, o.nombre as por, a.motivo,
+           vigente(a.vigente_desde, a.vigente_hasta, a.revocada_en) as vigente
+    from autorresolucion a left join sucursal s on s.id = a.sucursal_id join usuario o on o.id = a.otorgada_por
+    where a.usuario_id = ${id} and a.revocada_en is null and a.vigente_hasta > now() order by a.vigente_desde desc limit 1`;
   const [{ direccion }] = await sql<{ direccion: boolean }[]>`
     select exists (select 1 from alcance_general g where g.usuario_id = ${id} and g.rol = 'direccion' and vigente(g.vigente_desde, g.vigente_hasta, g.revocado_en))
         or exists (select 1 from asignacion a where a.usuario_id = ${id} and a.rol = 'direccion' and vigente(a.vigente_desde, a.vigente_hasta, a.revocada_en)) as direccion`;
@@ -318,6 +325,7 @@ export async function pantallaPersona(sql: Sql, usuarioId: string, id: string): 
     asignaciones: asignaciones.map((a) => ({ ...otorg(a), nombre: NOMBRE_PERFIL[a.rol] ?? a.rol })),
     permisos: permisos.map(otorg), restricciones: restricciones.map(otorg),
     autorrevision: auto ? otorg(auto) : null,
+    autorresolucion: autoRes ? otorg(autoRes) : null,
     esDireccion: direccion,
     resumen: await resumenPermisos(sql, id),
     historial: await historialAccesos(sql, id),
@@ -341,7 +349,9 @@ const ACCIONES: Record<string, string> = {
   invitar: "Generó invitación (48 horas)", dar_perfil: "Dio un perfil", quitar_perfil: "Quitó un perfil", dar_permiso: "Dio un permiso",
   quitar_permiso: "Quitó un permiso otorgado", restringir: "Restringió un permiso", quitar_restriccion: "Quitó una restricción",
   autorrevision: "Autorizó revisar lo propio", renovar_autorrevision: "Renovó la autorización para revisar lo propio",
-  terminar_autorrevision: "Terminó la autorización para revisar lo propio", establecer_contrasena: "Fijó su contraseña",
+  terminar_autorrevision: "Terminó la autorización para revisar lo propio",
+  autorresolucion: "Autorizó resolver faltantes en los que participó", renovar_autorresolucion: "Renovó la autorización para resolver faltantes en los que participó",
+  terminar_autorresolucion: "Terminó la autorización para resolver faltantes en los que participó", establecer_contrasena: "Fijó su contraseña",
   otorgar_alcance_general: "Dio un perfil en todas las sucursales", asignar: "Dio un perfil", crear: "Creó la cuenta",
   // Acciones que registraron los datos de prueba antes de esta sección.
   asignar_perfil: "Dio un perfil", otorgar_facultad: "Dio un permiso",
@@ -491,7 +501,9 @@ export type CambioAcceso =
   | { tipo: "restringir"; permiso: string; alcance: Alcance; hasta: string; motivo: string }
   | { tipo: "quitar_restriccion"; id: string; motivo: string }
   | { tipo: "autorrevision"; alcance: Alcance; hasta: string; motivo: string }
-  | { tipo: "terminar_autorrevision"; id: string; motivo: string };
+  | { tipo: "terminar_autorrevision"; id: string; motivo: string }
+  | { tipo: "autorresolucion"; alcance: Alcance; hasta: string; motivo: string }
+  | { tipo: "terminar_autorresolucion"; id: string; motivo: string };
 
 class Deshacer extends Error {
   constructor(public resultado: unknown) { super("deshacer"); }
@@ -629,7 +641,9 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
       if (!r) return { ok: false, error: "no_vigente" };
       return { ok: true, accion: "quitar_restriccion", detalle: `Vuelve a poder: ${r.descripcion} en ${r.sucursal ?? "todas las sucursales"} (si sus perfiles o permisos lo incluyen)` };
     }
-    case "autorrevision": {
+    case "autorrevision":
+    case "autorresolucion": {
+      const resolver = c.tipo === "autorresolucion";
       if (!c.alcance.todas && c.alcance.sucursales.length !== 1) return { ok: false, error: "sucursales" };
       const s = await sucursalesValidas(tx, c.alcance);
       if (!s) return { ok: false, error: "sucursales" };
@@ -647,12 +661,21 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
                     else exists (select 1 from perfiles_en_sucursal(${personaId}, ${sucursal}::uuid) p where p = 'direccion') end as ok`;
       if (!d.ok) return { ok: false, error: "no_direccion" };
       // Renovar: se termina la vigente y empieza otra de hasta 90 días desde hoy.
+      // Cada autorización es aparte: renovar una no toca la otra.
+      const tabla = resolver ? "autorresolucion" : "autorrevision";
       const anteriores = await tx<{ id: string }[]>`
-        update autorrevision set revocada_en = now(), revocada_por = ${actor}, motivo_revocacion = 'Renovada'
+        update ${tx(tabla)} set revocada_en = now(), revocada_por = ${actor}, motivo_revocacion = 'Renovada'
         where usuario_id = ${personaId} and revocada_en is null and vigente_hasta > now() returning id`;
-      await tx`insert into autorrevision (usuario_id, sucursal_id, todas_las_sucursales, vigente_hasta, otorgada_por, motivo, renueva_a)
+      await tx`insert into ${tx(tabla)} (usuario_id, sucursal_id, todas_las_sucursales, vigente_hasta, otorgada_por, motivo, renueva_a)
                values (${personaId}, ${sucursal}, ${sucursal === null}, ${h.hasta}, ${actor}, ${motivo}, ${anteriores[0]?.id ?? null})`;
       const hasta = new Intl.DateTimeFormat("es-MX", { timeZone: ZONA, dateStyle: "long", timeStyle: "short" }).format(h.hasta);
+      if (resolver) {
+        return {
+          ok: true, accion: anteriores.length ? "renovar_autorresolucion" : "autorresolucion",
+          detalle: `Puede resolver con «Lo absorbe la sucursal» faltantes ya confirmados de retiros y sobres en los que participó, en ${textoAlcance(c.alcance, s)}, hasta el ${hasta}; `
+            + "cada resolución queda marcada «Resuelta por quien participó». No cambia dinero ni descuenta a personas; no se renueva sola",
+        };
+      }
       return {
         ok: true, accion: anteriores.length ? "renovar_autorrevision" : "autorrevision",
         detalle: `Puede revisar diferencias e incidencias en las que participó, en ${textoAlcance(c.alcance, s)}, hasta el ${hasta}; cada revisión queda marcada «Revisada por quien participó»`,
@@ -664,6 +687,13 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
                            where id = ${c.id} and usuario_id = ${personaId} and revocada_en is null and vigente_hasta > now() returning id`;
       if (!a) return { ok: false, error: "no_vigente" };
       return { ok: true, accion: "terminar_autorrevision", detalle: "Vuelve la regla: quien participó no revisa" };
+    }
+    case "terminar_autorresolucion": {
+      if (!esIdentificadorValido(c.id)) return { ok: false, error: "no_vigente" };
+      const [a] = await tx`update autorresolucion set revocada_en = now(), revocada_por = ${actor}, motivo_revocacion = ${motivo}
+                           where id = ${c.id} and usuario_id = ${personaId} and revocada_en is null and vigente_hasta > now() returning id`;
+      if (!a) return { ok: false, error: "no_vigente" };
+      return { ok: true, accion: "terminar_autorresolucion", detalle: "Vuelve la regla: quien participó no resuelve su faltante; las resoluciones ya hechas conservan su marca" };
     }
   }
 }

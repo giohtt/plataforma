@@ -3,7 +3,8 @@ import { tiempoPendiente } from "@/lib/datos-diferencia";
 import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
 import { turnoAbiertoDe, type TipoLugar } from "@/lib/turnos";
-import { estadoResolucionRetiro, TEXTO_DECISION, type EstadoResolucion } from "@/lib/resoluciones";
+import { estadoResolucionRetiro, MARCA_PROPIA, TEXTO_DECISION, type EstadoResolucion } from "@/lib/resoluciones";
+const fechaHora = (d: Date) => new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" }).format(d);
 
 /**
  * Bloque 5, paso 3: retiros de efectivo a Encargada de retiros (reglas 4 a 6; solo datos ficticios).
@@ -820,7 +821,8 @@ export async function detalleRetiro(sql: Sql, usuarioId: string, codigo: string,
   if (resolucion.resolucion) {
     historial.push({
       en: resolucion.resolucion.en, cuenta: resolucion.resolucion.por,
-      que: `Dirección resolvió el faltante: ${TEXTO_DECISION}. No cambia el efectivo contado ni los depósitos. Motivo: «${resolucion.resolucion.motivo}»`,
+      que: `Dirección resolvió el faltante: ${TEXTO_DECISION}${resolucion.resolucion.propia
+        ? ` · ${MARCA_PROPIA} (autorización vigente hasta el ${fechaHora(resolucion.resolucion.autorizadaHasta!)})` : ""}. No cambia el efectivo contado ni los depósitos. Motivo: «${resolucion.resolucion.motivo}»`,
     });
   }
   for (const d of depositos) {

@@ -735,6 +735,77 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
     await expect(sql`delete from resolucion_diferencia_sobre where diferencia_id = ${difSobre.id}`).rejects.toThrow(/no se edita/);
   });
 
+  it("autorización para resolver lo propio: quien participó resuelve el faltante del sobre con la marca permanente; vencida o terminada no", async () => {
+    const e = await escenario();
+    const [bolsa, cajon] = await cerrarDelDia(e);
+    await abrir(e);
+    expect(await recogerBuzon(sql, e.dir, e.codigo, { sobres: [
+      { sobreId: bolsa.id, estado: "correcto", folioVisto: "", motivo: "", contado: "420" },
+      { sobreId: cajon.id, estado: "correcto", folioVisto: "", motivo: "", contado: "3000" },
+    ], llave: LLAVE }, PRUEBAS)).toMatchObject({ ok: true });
+    const [difSobre] = await sql<{ id: string }[]>`select d.id from diferencia_sobre d join sobre_cierre s on s.id = d.sobre_id where s.sucursal_id = ${e.sucursalId}`;
+    const resolver = (motivo = "Prueba: lo absorbe la sucursal") => resolverFaltanteSobre(sql, e.dir, e.codigo, { diferenciaId: difSobre.id, motivo }, PRUEBAS);
+    const general = (await sql<{ id: string }[]>`select id from usuario where correo = 'direccion.general@prueba.fitnessland.invalid'`)[0].id;
+    const hasta = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date(Date.now() + 30 * 86_400_000));
+    const autorizar = () => aplicarCambio(sql, general, e.dir, { tipo: "autorresolucion", alcance: { todas: false, sucursales: [e.sucursalId] }, hasta, motivo: "Prueba: no hay otra Dirección" }, PRUEBAS);
+
+    // Antes de la revisión previa no se resuelve, aunque tenga la autorización.
+    expect(await autorizar()).toEqual({ ok: true });
+    expect(await resolver()).toEqual({ ok: false, error: "no_pendiente" });
+    const vigente = (await sql<{ id: string }[]>`select id from autorresolucion where usuario_id = ${e.dir} and revocada_en is null`)[0].id;
+    // Terminada: se bloquea (también en la base).
+    expect(await aplicarCambio(sql, general, e.dir, { tipo: "terminar_autorresolucion", id: vigente, motivo: "Prueba: se termina" }, PRUEBAS)).toEqual({ ok: true });
+    expect(await revisarDiferenciaSobre(sql, e.admin, e.codigo, { diferenciaId: difSobre.id, resultado: "faltante_confirmado", motivo: "Prueba: faltan 50 pesos" }, PRUEBAS))
+      .toEqual({ ok: true });
+    expect(await estadoResolucionSobre(sql, e.dir, difSobre.id)).toMatchObject({ pendiente: true, puede: false, participo: true, autorizacionHasta: null });
+    expect(await resolver()).toEqual({ ok: false, error: "participaste" });
+    await expect(sql`insert into resolucion_diferencia_sobre (diferencia_id, decision, motivo, resuelta_por, autorresolucion_id)
+                     values (${difSobre.id}, 'absorbe_sucursal', 'Directo en la base', ${e.dir}, ${vigente})`).rejects.toThrow(/sin autorización vigente/);
+    // Vencida: tampoco.
+    await sql`insert into autorresolucion (usuario_id, sucursal_id, vigente_desde, vigente_hasta, otorgada_por, motivo)
+              values (${e.dir}, ${e.sucursalId}, now() - interval '20 days', now() - interval '1 day', ${general}, 'Prueba: ya vencida')`;
+    expect(await resolver()).toEqual({ ok: false, error: "participaste" });
+    // La de revisar lo propio no sirve para resolver.
+    expect(await aplicarCambio(sql, general, e.dir, { tipo: "autorrevision", alcance: { todas: false, sucursales: [e.sucursalId] }, hasta, motivo: "Aún no hay personal de Administración" }, PRUEBAS))
+      .toEqual({ ok: true });
+    expect(await resolver()).toEqual({ ok: false, error: "participaste" });
+    // Sin el permiso de resolver (restringido) tampoco, aunque esté vigente la autorización.
+    expect(await autorizar()).toEqual({ ok: true });
+    expect(await estadoResolucionSobre(sql, e.dir, difSobre.id)).toMatchObject({ puede: true, participo: true, autorizacionHasta: expect.any(Date) });
+    expect(await aplicarCambio(sql, general, e.dir, { tipo: "restringir", permiso: "diferencia.resolver", alcance: { todas: false, sucursales: [e.sucursalId] }, hasta: "", motivo: "Prueba: sin resolver" }, PRUEBAS))
+      .toEqual({ ok: true });
+    expect(await resolver()).toEqual({ ok: false, error: "sin_permiso" });
+    const restriccion = (await sql<{ id: string }[]>`select id from restriccion_permiso where usuario_id = ${e.dir} and revocada_en is null`)[0].id;
+    expect(await aplicarCambio(sql, general, e.dir, { tipo: "quitar_restriccion", id: restriccion, motivo: "Prueba: vuelve a resolver" }, PRUEBAS)).toEqual({ ok: true });
+
+    // Vigente, con Dirección y el permiso: resuelve, marcada para siempre. No cambia el efectivo.
+    const antes = await caja(e.admin, e);
+    expect(await resolver()).toEqual({ ok: true });
+    const despues = await caja(e.admin, e);
+    expect(despues.visible).toBe(antes.visible);
+    expect(despues.confirmados.map((c) => [c.clase, c.saldo])).toEqual(antes.confirmados.map((c) => [c.clase, c.saldo]));
+    const d = despues.diferencias.find((x) => x.clase === "sobre")!;
+    expect(d).toMatchObject({ etapa: "cerrada", resueltaPropia: true, revisadaPropia: false,
+      estado: "Resuelta por Dirección · Lo absorbe la sucursal · Resuelta por quien participó" });
+    const [x] = await sql<{ autorresolucion_id: string | null }[]>`select autorresolucion_id from resolucion_diferencia_sobre where diferencia_id = ${difSobre.id}`;
+    expect(x.autorresolucion_id).not.toBeNull();
+    const [hist] = await sql<{ cambios: { propia: boolean } }[]>`select cambios from historial_cambio where entidad = 'diferencia_sobre' and entidad_id = ${difSobre.id} and accion = 'resolver_faltante'`;
+    expect(hist.cambios.propia).toBe(true);
+    // Al terminarla después, la marca y el historial se conservan.
+    const nueva = (await sql<{ id: string }[]>`select id from autorresolucion where usuario_id = ${e.dir} and revocada_en is null and vigente_hasta > now()`)[0].id;
+    expect(await aplicarCambio(sql, general, e.dir, { tipo: "terminar_autorresolucion", id: nueva, motivo: "Prueba: ya se resolvió" }, PRUEBAS)).toEqual({ ok: true });
+    expect((await caja(e.admin, e)).diferencias.find((x) => x.clase === "sobre")).toMatchObject({ resueltaPropia: true });
+    const det = (await detalleCaja(sql, e.admin, { codigo: e.codigo, tipo: d.enlace.tipo, id: d.enlace.id }))!.detalle;
+    expect(det.eventos.map((v) => v.texto)).toEqual(expect.arrayContaining([expect.stringMatching(/Lo absorbe la sucursal · Resuelta por quien participó/)]));
+    // En el Excel, la columna de la marca.
+    expect(await dar(e.admin, "reporte.caja_descargar", [e.sucursalId])).toEqual({ ok: true });
+    const r = await prepararDescarga(sql, e.admin, { codigo: e.codigo, formato: "xlsx", contenido: "detalle" }, PRUEBAS);
+    if (!r.ok) throw new Error(r.error);
+    const texto = await textoExcel(await excelCaja(r.archivo));
+    expect(texto).toContain("Resuelta por quien participó");
+    await guardar("resuelta-propia", r.archivo);
+  });
+
   it("diferencias de turno: «Por revisar», «Pendiente de resolución» y «Corrección pendiente» por separado, sin sumarse", async () => {
     const e = await escenario();
     const encargado = await cuenta([["encargado", e.codigo]], "Encargado");

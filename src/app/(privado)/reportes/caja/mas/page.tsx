@@ -199,6 +199,8 @@ function Diferencias({ r, c, varias }: { r: ReporteCaja; c: CajaSucursal; varias
                 <li key={`${d.clase}-${d.id}`} data-testid="diferencia">
                   <span>
                     <b>{d.clave}</b> · {d.texto}<Anterior si={d.anterior} />
+                    {d.revisadaPropia ? <> <span className="marca-propia-chip" data-testid="chip-revisada-propia">Revisada por quien participó</span></> : null}
+                    {d.resueltaPropia ? <> <span className="marca-resuelta-propia" data-testid="chip-resuelta-propia">Resuelta por quien participó</span></> : null}
                     <span className="renglon-detalle">
                       {nombreLugar(d.lugar)} · registrada {hora.format(d.registradaEn)} · {d.estado}
                       {d.referencia ? " · solo referencia de su origen (no entra en el neto)" : ""}

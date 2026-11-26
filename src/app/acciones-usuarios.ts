@@ -131,11 +131,13 @@ function leerCambio(datos: FormData): { cambio: CambioAcceso | null; valores: Re
     case "dar_perfil": return { cambio: { tipo, rol: valores.rol, alcance, ...comun }, valores };
     case "dar_permiso": return { cambio: { tipo, permiso: valores.permiso, alcance, limite: valores.limite, ...comun }, valores };
     case "restringir": return { cambio: { tipo, permiso: valores.permiso, alcance, ...comun }, valores };
-    case "autorrevision": return { cambio: { tipo, alcance, ...comun }, valores };
+    case "autorrevision":
+    case "autorresolucion": return { cambio: { tipo, alcance, ...comun }, valores };
     case "quitar_perfil": return { cambio: { tipo, id: valores.id, general: valores.general === "si", motivo }, valores };
     case "quitar_permiso":
     case "quitar_restriccion":
-    case "terminar_autorrevision": return { cambio: { tipo, id: valores.id, motivo }, valores };
+    case "terminar_autorrevision":
+    case "terminar_autorresolucion": return { cambio: { tipo, id: valores.id, motivo }, valores };
     default: return { cambio: null, valores };
   }
 }

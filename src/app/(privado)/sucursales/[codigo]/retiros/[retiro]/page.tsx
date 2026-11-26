@@ -105,18 +105,25 @@ export default async function Retiro({ params, searchParams }: PageProps<"/sucur
             <p className="aviso aviso-ok" data-testid="faltante-resuelto">
               Faltante de {pesos.format(Number(r.saldo.faltante))} resuelto por <strong>{d.resolucion.resolucion.por}</strong> (Dirección) · {hora.format(d.resolucion.resolucion.en)}:
               {" "}<strong>Lo absorbe la sucursal</strong> · Motivo: «{d.resolucion.resolucion.motivo}». No cambió el efectivo contado ni los depósitos.
+              {d.resolucion.resolucion.propia ? <> <span className="marca-resuelta-propia" data-testid="marca-resuelta-propia">Resuelta por quien participó</span></> : null}
             </p>
           ) : d.revision.resultado === "faltante_confirmado" ? (
             <>
               <p className="aviso aviso-info" data-testid="faltante-direccion">
                 Faltante de {pesos.format(Number(r.saldo.faltante))}: pendiente para Dirección (confirmado, pendiente de resolución). Los depósitos del folio ya están habilitados por el monto verificado.
               </p>
-              {d.resolucion.puede ? (
-                <FormularioResolverFaltante codigo={codigo} clase="retiro" id={r.id} importe={pesos.format(Number(r.saldo.faltante))} />
+              {d.resolucion.participo && d.resolucion.autorizacionHasta ? (
+                <p className="aviso aviso-info" data-testid="resolver-propio">
+                  Participaste en este retiro. Lo resuelves con tu autorización personal para resolver lo propio, vigente hasta el{" "}
+                  <strong>{hora.format(d.resolucion.autorizacionHasta)}</strong>; quedará marcado «Resuelta por quien participó».
+                </p>
               ) : d.resolucion.participo ? (
                 <p className="sub" data-testid="resuelve-otra-cuenta">
-                  Participaste en este retiro: lo resuelve otra cuenta de Dirección que no participó. Tu autorización para revisar lo propio no aplica a resolver.
+                  Participaste en este retiro: lo resuelve otra cuenta de Dirección que no participó, o tú con una autorización vigente para resolver lo propio. La de revisar lo propio no aplica a resolver.
                 </p>
+              ) : null}
+              {d.resolucion.puede ? (
+                <FormularioResolverFaltante codigo={codigo} clase="retiro" id={r.id} importe={pesos.format(Number(r.saldo.faltante))} />
               ) : null}
             </>
           ) : null}
