@@ -11,6 +11,12 @@ import { confirmarRetiro, generarFolio, recontarRetiro, registrarDeposito, regis
 import { abrirTurno } from "../../src/lib/turnos";
 import { aplicarCambio } from "../../src/lib/usuarios";
 
+/** Abre un grupo del menú de la sucursal (vienen cerrados salvo «Efectivo y depósitos»). */
+async function abrirGrupo(page: import("@playwright/test").Page, grupo: string) {
+  const g = page.getByTestId(`grupo-${grupo}`);
+  if ((await g.getAttribute("open")) === null) await page.getByTestId(`abrir-grupo-${grupo}`).click();
+}
+
 /**
  * Reporte de caja por sucursal y periodo (aprobado el 21 nov 2026), con datos ficticios: permisos individuales de
  * consulta y descarga desde «Usuarios, roles y permisos», dónde está el efectivo al corte, conteo a ciegas (subtotal
@@ -259,6 +265,14 @@ test("permisos de consulta y descarga, dónde está el efectivo al corte, detall
   expect(r).toEqual({ ok: true });
   await entrar(page, e.dir.correo);
   await page.goto(`/sucursales/${e.codigo}`);
+  // Menú de Dirección: solo «Efectivo y depósitos» abierto; «Lo que puedes hacer en esta sucursal», cerrado.
+  await expect(page.getByTestId("abrir-grupo-autorizaciones")).toContainText("Autorizaciones y accesos");
+  await expect(page.getByTestId("permisos-sucursal")).toBeHidden();
+  await capturar(page, "menu-direccion-cerrado");
+  await abrirGrupo(page, "autorizaciones");
+  await abrirGrupo(page, "configuracion");
+  await capturar(page, "menu-direccion-abierto");
+  await abrirGrupo(page, "reportes");
   await page.getByTestId("reporte-caja").click();
   await expect(page.getByTestId("renglon-2-importe")).toHaveText("Oculto: sin contar");
   await expect(page.getByTestId("renglon-2")).toContainText("importe oculto hasta contarlos");

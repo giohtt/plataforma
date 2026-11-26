@@ -12,6 +12,9 @@ test.afterAll(async () => sql.end({ timeout: 5 }));
 
 const CLAVE = "frase para probar las diferencias 2026";
 const letras = (n: number) => Array.from({ length: n }, () => "bcdfghjklmnpqrstvwxz"[Math.floor(Math.random() * 20)]).join("");
+const capturar = async (page: Page, nombre: string) => {
+  if (process.env.CAPTURAR) await page.screenshot({ path: `${process.env.CAPTURAR}/${nombre}-${test.info().project.name}.png`, fullPage: true });
+};
 
 async function crearCuenta(rol: string, codigo: string, nombre: string) {
   const correo = `diferencias-${randomUUID().slice(0, 8)}@prueba.fitnessland.invalid`;
@@ -94,6 +97,17 @@ test("Encargado consulta el caso: esperado, entregado y recibido por separado, y
 
   await entrar(page, e.encargado.correo);
   await page.goto(`/sucursales/${e.codigo}`);
+  // Menú por grupos: «Requiere tu acción» con el pendiente; solo «Efectivo y depósitos» viene abierto y su
+  // encabezado muestra únicamente los pendientes.
+  await expect(page.getByTestId("requiere-accion").getByTestId("accion-diferencias")).toHaveText("Diferencias de efectivo (1)");
+  await expect(page.getByTestId("grupo-efectivo")).toHaveAttribute("open", "");
+  await expect(page.getByTestId("pendientes-efectivo")).toHaveText("1 pendiente");
+  for (const g of ["autorizaciones", "reportes", "configuracion"]) {
+    const grupo = page.getByTestId(`grupo-${g}`);
+    if (await grupo.count()) await expect(grupo).not.toHaveAttribute("open", "");
+  }
+  await capturar(page, "menu-sucursal");
+  await expect(page.getByTestId("grupo-permisos")).not.toHaveAttribute("open", "");
   await expect(page.getByTestId("diferencias")).toHaveText("Diferencias de efectivo (1)");
   await page.getByTestId("diferencias").click();
   const caso = page.getByTestId("caso-diferencia").first();

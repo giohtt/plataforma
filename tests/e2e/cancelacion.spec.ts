@@ -3,6 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 import postgres from "postgres";
 import { cifrarContrasena } from "../../src/lib/contrasena";
 
+/** Abre un grupo del menú de la sucursal (vienen cerrados salvo «Efectivo y depósitos»). */
+async function abrirGrupo(page: import("@playwright/test").Page, grupo: string) {
+  const g = page.getByTestId(`grupo-${grupo}`);
+  if ((await g.getAttribute("open")) === null) await page.getByTestId(`abrir-grupo-${grupo}`).click();
+}
+
 /**
  * Bloque 4: cancelación de un cobro duplicado en efectivo, con datos ficticios. Cada prueba crea su sucursal,
  * su turno ($150 en la bolsa), una recepcionista y una persona de Dirección con la facultad (límite $150).
@@ -128,6 +134,7 @@ test("Recepción pide cancelar el duplicado de Ana y Dirección lo aprueba: la b
   // Dirección la aprueba desde la sucursal.
   await entrar(page, e.dir.correo);
   await page.goto(`/sucursales/${e.codigo}`);
+  await abrirGrupo(page, "autorizaciones");
   await page.getByTestId("cancelaciones").click();
   await expect(page.getByText("Puedes autorizar hasta $150.00 por cobro.")).toBeVisible();
   const solicitud = page.getByTestId("solicitud");

@@ -3,6 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 import postgres from "postgres";
 import { cifrarContrasena } from "../../src/lib/contrasena";
 
+/** Abre un grupo del menú de la sucursal (vienen cerrados salvo «Efectivo y depósitos»). */
+async function abrirGrupo(page: import("@playwright/test").Page, grupo: string) {
+  const g = page.getByTestId(`grupo-${grupo}`);
+  if ((await g.getAttribute("open")) === null) await page.getByTestId(`abrir-grupo-${grupo}`).click();
+}
+
 /**
  * Bloque 4: reporte «Visitas y cobros», con datos ficticios. Cada prueba crea su sucursal y su turno ($150 en la bolsa).
  */
@@ -82,6 +88,7 @@ test("Encargado ve su sucursal con periodo, confirmados, registrados y el saldo 
 
   await entrar(page, encargado.correo);
   await page.goto(`/sucursales/${e.codigo}`);
+  await abrirGrupo(page, "reportes");
   await page.getByTestId("reporte-visitas").click();
   await expect(page.getByRole("heading", { name: "Visitas y cobros" })).toBeVisible();
   await expect(page.getByTestId("filtros").getByLabel("Desde")).toHaveValue(/\d{4}-\d{2}-\d{2}/);

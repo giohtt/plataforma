@@ -78,6 +78,11 @@ test("Recepción de Tenango: ve solo Tenango y su vista de Recepción", async ({
   await expect(page.getByTestId("nombre-sucursal")).toHaveText("Tenango");
   await expect(page.locator("[data-perfil]")).toHaveCount(1);
   await expect(page.locator('[data-perfil="recepcion"]')).toContainText("Vista de Recepción");
+  // «Lo que puedes hacer en esta sucursal» viene cerrado; se abre para consultarlo.
+  await expect(page.getByTestId("grupo-permisos")).not.toHaveAttribute("open", "");
+  await expect(page.getByTestId("permisos-sucursal")).toBeHidden();
+  await page.getByTestId("abrir-grupo-permisos").click();
+  await expect(page.getByTestId("permisos-sucursal")).toBeVisible();
   await expect(page.getByTestId("permisos-sucursal")).toContainText("sucursal.consultar");
   await expect(page.getByTestId("permisos-sucursal")).not.toContainText("sucursal.editar");
 

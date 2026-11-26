@@ -320,6 +320,7 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
        - **Sobrante de $20 del 12 nov:** sigue en «Corrección pendiente» (opción C). Antes de cambiar la decisión hay que precisar qué origen se identificó y qué registro debería corregirse. Que el dinero siga en la bolsa o se deposite no demuestra por sí solo que se corrigió su origen.
        - **Pendientes:** el reporte de ingresos y cobros, el de gastos y resultados, y el aviso de 48 horas para Dirección.
      - **Falta decidir:** el cuadre completo, pendiente de los datos de Open Desk.
+   - **Menú de la sucursal por grupos** (aprobado el 26 nov 2026; en revisión): Turno y Visitantes siempre a la vista; «Requiere tu acción» solo cuando hay pendientes; grupos desplegables «Efectivo y depósitos» (abierto al entrar), «Autorizaciones y accesos», «Reportes» y «Configuración de la sucursal» (con «Custodia de sobres»). Los encabezados muestran solo la cantidad de pendientes. Cada persona ve solo lo que permiten sus permisos.
 
 ### Bloque 6. Gastos y autorizaciones
 1. Solicitud, autorización, pago desde un lugar de efectivo y comprobación.
