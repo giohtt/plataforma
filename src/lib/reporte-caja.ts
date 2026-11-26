@@ -800,6 +800,17 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
       left join usuario u on u.id = v.revisada_por where ds.recoleccion_id = ${id}`) {
       if (x.en) eventos.push(ev(x.en, `Revisó la diferencia de ${x.folio} (${signo(x.importe)}): ${RESULTADO[x.resultado!] ?? x.resultado}${x.propia ? " · Revisada por quien participó" : ""}`, x.por));
     }
+    // Resolución de Dirección y clave fija de cada diferencia de sobre de esta recolección (una vez por caso). Lo posterior
+    // al corte queda marcado «después» y no entra en los archivos.
+    for (const x of await tx<{ folio: string; en: Date; motivo: string; por: string; propia: boolean }[]>`
+      select s.folio, x.en, x.motivo, u.nombre as por, x.autorresolucion_id is not null as propia
+      from resolucion_diferencia_sobre x join diferencia_sobre ds on ds.id = x.diferencia_id join sobre_cierre s on s.id = ds.sobre_id
+      join usuario u on u.id = x.resuelta_por where ds.recoleccion_id = ${id}`) {
+      eventos.push(ev(x.en, `Dirección resolvió el faltante de ${x.folio}: Lo absorbe la sucursal${x.propia ? ` · ${MARCA_RESUELTA}` : ""} · «${x.motivo}»`, x.por));
+    }
+    const kr = await eventosClave(tx, (await tx<{ id: string }[]>`select id from diferencia_sobre where recoleccion_id = ${id} order by creada_en, id`)
+      .map((x) => ({ clase: "sobre", id: x.id })), ev);
+    eventos.push(...kr.eventos);
     const existiaAlCorte = r.existia_al_corte;
     const filas: FilaDetalle[] = !existiaAlCorte
       ? []
