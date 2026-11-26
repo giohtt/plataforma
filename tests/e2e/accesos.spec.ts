@@ -3,6 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 import postgres from "postgres";
 import { cifrarContrasena } from "../../src/lib/contrasena";
 
+/** Abre un grupo del menú de la sucursal (vienen cerrados salvo «Efectivo y depósitos»). */
+async function abrirGrupo(page: import("@playwright/test").Page, grupo: string) {
+  const g = page.getByTestId(`grupo-${grupo}`);
+  if ((await g.getAttribute("open")) === null) await page.getByTestId(`abrir-grupo-${grupo}`).click();
+}
+
 /**
  * Bloque 4: registro de accesos del piloto de Tenango, con datos ficticios. Cada prueba crea su sucursal, su
  * turno ($150 en la bolsa), dos cuentas de Recepción (una responsable de la bolsa), Encargado y Administración.
@@ -149,6 +155,7 @@ test("transferencia pendiente: Recepción pide autorización, Encargado responde
 
   await entrar(page, e.encargado.correo);
   await page.goto(`/sucursales/${e.codigo}`);
+  await abrirGrupo(page, "autorizaciones");
   await page.getByTestId("accesos").click();
   await expect(page.getByRole("heading", { name: "Accesos por autorizar" })).toBeVisible();
   await expect(page.getByTestId("por-autorizar")).toHaveCount(2);

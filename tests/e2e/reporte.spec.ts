@@ -3,6 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 import postgres from "postgres";
 import { cifrarContrasena } from "../../src/lib/contrasena";
 
+/** Abre un grupo del menú de la sucursal (vienen cerrados salvo «Efectivo y depósitos»). */
+async function abrirGrupo(page: import("@playwright/test").Page, grupo: string) {
+  const g = page.getByTestId(`grupo-${grupo}`);
+  if ((await g.getAttribute("open")) === null) await page.getByTestId(`abrir-grupo-${grupo}`).click();
+}
+
 /** Tarea 7: reporte de usuarios y accesos por sucursal, de solo consulta. */
 const sql = postgres(process.env.E2E_DATABASE_URL!, { max: 2, prepare: false, onnotice: () => {} });
 test.afterAll(async () => sql.end({ timeout: 5 }));
@@ -53,6 +59,7 @@ test("Recepción no puede abrir el reporte, ni de su sucursal ni con una solicit
 test("Encargado de Tenango consulta Tenango, pero no Santiago, ni con una solicitud directa", async ({ page }) => {
   await entrar(page, await crearCuenta([["encargado", "TEN"]]));
   await page.goto("/sucursales/TEN");
+  await abrirGrupo(page, "reportes");
   await page.getByTestId("reporte-usuarios").click();
   await expect(page).toHaveURL(/\/reportes\/usuarios\?sucursal=TEN$/);
   await expect(page.locator("#sucursal option")).toHaveText(["Tenango"]);

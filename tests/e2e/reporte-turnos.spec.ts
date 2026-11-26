@@ -3,6 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 import postgres from "postgres";
 import { cifrarContrasena } from "../../src/lib/contrasena";
 
+/** Abre un grupo del menú de la sucursal (vienen cerrados salvo «Efectivo y depósitos»). */
+async function abrirGrupo(page: import("@playwright/test").Page, grupo: string) {
+  const g = page.getByTestId(`grupo-${grupo}`);
+  if ((await g.getAttribute("open")) === null) await page.getByTestId(`abrir-grupo-${grupo}`).click();
+}
+
 /** Bloque 3: reporte de turnos abiertos y responsables (solo consulta). Cada prueba usa sus sucursales ficticias. */
 const sql = postgres(process.env.E2E_DATABASE_URL!, { max: 2, prepare: false, onnotice: () => {} });
 test.afterAll(async () => sql.end({ timeout: 5 }));
@@ -86,6 +92,7 @@ test("Encargado ve el turno abierto: apertura, quién abrió y responsables de l
 
   await entrar(page, (await crearCuenta([["encargado", codigo]])).correo);
   await page.goto(`/sucursales/${codigo}`);
+  await abrirGrupo(page, "reportes");
   await page.getByTestId("reporte-turnos").click();
   await expect(page).toHaveURL(new RegExp(`/reportes/turnos\\?sucursal=${codigo}$`));
   await expect(page.getByTestId("turnos-abiertos")).toHaveText("1");

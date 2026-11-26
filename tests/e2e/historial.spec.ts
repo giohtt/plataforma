@@ -3,6 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 import postgres from "postgres";
 import { cifrarContrasena } from "../../src/lib/contrasena";
 
+/** Abre un grupo del menú de la sucursal (vienen cerrados salvo «Efectivo y depósitos»). */
+async function abrirGrupo(page: import("@playwright/test").Page, grupo: string) {
+  const g = page.getByTestId(`grupo-${grupo}`);
+  if ((await g.getAttribute("open")) === null) await page.getByTestId(`abrir-grupo-${grupo}`).click();
+}
+
 /**
  * Bloque 4: historial del visitante entre sucursales, con datos ficticios. Dos sucursales nuevas con su turno.
  */
@@ -133,6 +139,7 @@ test("Recepción ve el detalle de su sucursal y de la otra solo conteo y última
   const dir = await crearCuenta("direccion", a.codigo, "Dirección " + letras(4));
   await entrar(page, dir.correo);
   await page.goto(`/sucursales/${a.codigo}`);
+  await abrirGrupo(page, "configuracion");
   await page.getByTestId("cobertura").click();
   await page.getByLabel("Hay datos confiables de visitas desde").fill("2026-11-04");
   await page.getByRole("button", { name: "Registrar cobertura" }).click();
@@ -140,6 +147,7 @@ test("Recepción ve el detalle de su sucursal y de la otra solo conteo y última
   await expect(page.getByTestId("cobertura-actual")).toContainText("puede haber visitas anteriores sin registrar");
   await entrar(page, admin.correo);
   await page.goto(urlHistorial);
+  await abrirGrupo(page, "configuracion");
   await expect(page.getByTestId("cobertura")).toContainText("datos confiables desde el 4 nov 2026");
   await expect(page.getByTestId("historial-incompleto")).toBeVisible();
 });

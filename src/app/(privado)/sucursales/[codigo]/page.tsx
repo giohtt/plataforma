@@ -2,7 +2,7 @@ import Link from "next/link";
 import { entradasPorConfirmar } from "@/lib/fondos";
 import { accesoRecoleccion } from "@/lib/recolecciones";
 import { notFound } from "next/navigation";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { pendientesDeRevision } from "@/lib/diferencias";
 import { temaSucursal } from "@/lib/color";
 import { obtenerBaseDatos } from "@/lib/db";
@@ -116,116 +116,132 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
         <p className="aviso aviso-info" data-testid="sucursal-inactiva">Esta sucursal está desactivada.</p>
       ) : null}
       {puedeEditar || puedeDesactivar || puedeVerUsuarios || puedeBuscarVisitantes || puedeVerExpedientes || puedeAbrirTurno || puedeVerTurno || puedeVerReporteTurnos || puedeVerReporteVisitas || puedeVerificarAbonos || puedeAutorizarCancel || puedeAutorizarAcceso || puedeRevisarAccesos || puedeCobertura || retirosRevisar !== null || retirosConfirmar !== null || puedeConfigurarCustodia || custodiaPendiente.n > 0 || puedeVerTurno || puedeReponerFondo || entradasFondo > 0 || caja !== null ? (
-        <p className="fila-acciones">
-          {puedeAbrirTurno || puedeVerTurno ? (
-            <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/turno`} data-testid="turno">
-              Turno
-            </Link>
+        <>
+          {puedeAbrirTurno || puedeBuscarVisitantes || puedeVerTurno ? (
+            <p className="fila-acciones">
+              {puedeAbrirTurno || puedeVerTurno ? (
+                <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/turno`} data-testid="turno">
+                  Turno
+                </Link>
+              ) : null}
+              {puedeBuscarVisitantes ? (
+                <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/visitantes`} data-testid="visitantes">
+                  Visitantes
+                </Link>
+              ) : null}
+            </p>
           ) : null}
-          {puedeBuscarVisitantes ? (
-            <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/visitantes`} data-testid="visitantes">
-              Visitantes
-            </Link>
+          {/* Lo que espera algo de esta persona: solo aparece si hay algo. */}
+          {apoyosPendientes.n || custodiaPendiente.n || caja?.porRecoger || entradasFondo || retirosConfirmar || retirosRevisar || diferenciasPendientes ? (
+            <section className="requiere-accion" aria-labelledby="t-accion" data-testid="requiere-accion">
+              <h2 id="t-accion">Requiere tu acción</h2>
+              <p className="fila-acciones">
+                {apoyosPendientes.n ? (
+                  <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/apoyos`} data-testid="apoyos-pendientes">
+                    Confirmar tu apoyo en un conteo ({apoyosPendientes.n})
+                  </Link>
+                ) : null}
+                {custodiaPendiente.n ? (
+                  <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/custodia`} data-testid="custodia-por-confirmar">
+                    Confirmar custodia
+                  </Link>
+                ) : null}
+                {caja?.porRecoger ? (
+                  <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/recoleccion`} data-testid="sobres-por-recoger">
+                    Recoger sobres ({caja.porRecoger})
+                  </Link>
+                ) : null}
+                {entradasFondo ? (
+                  <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/fondos`} data-testid="fondo-por-recibir">
+                    Confirmar lo que recibes del fondo ({entradasFondo})
+                  </Link>
+                ) : null}
+                {retirosConfirmar ? (
+                  <Link className="boton" href="/retiros" data-testid="accion-retiros-por-confirmar">Retiros por confirmar ({retirosConfirmar})</Link>
+                ) : null}
+                {retirosRevisar ? (
+                  <Link className="boton" href={`/sucursales/${sucursal.codigo}/retiros`} data-testid="accion-retiros">Retiros de efectivo ({retirosRevisar})</Link>
+                ) : null}
+                {diferenciasPendientes ? (
+                  <Link className="boton" href={`/sucursales/${sucursal.codigo}/diferencias`} data-testid="accion-diferencias">Diferencias de efectivo ({diferenciasPendientes})</Link>
+                ) : null}
+              </p>
+            </section>
           ) : null}
-          {puedeEditar || puedeDesactivar ? (
-            <Link className="boton" href={`/sucursales/${sucursal.codigo}/editar`} data-testid="editar-sucursal">
-              {puedeEditar ? "Editar sucursal" : sucursal.estadoOperativo === "inactiva" ? "Reactivar sucursal" : "Desactivar sucursal"}
-            </Link>
-          ) : null}
-          {puedeVerificarAbonos ? (
-            <Link className="boton" href={`/sucursales/${sucursal.codigo}/transferencias`} data-testid="transferencias">
-              Transferencias por verificar
-            </Link>
-          ) : null}
-          {apoyosPendientes.n ? (
-            <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/apoyos`} data-testid="apoyos-pendientes">
-              Confirmar tu apoyo en un conteo ({apoyosPendientes.n})
-            </Link>
-          ) : null}
-          {custodiaPendiente.n ? (
-            <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/custodia`} data-testid="custodia-por-confirmar">
-              Confirmar custodia
-            </Link>
-          ) : null}
-          {caja?.porRecoger ? (
-            <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/recoleccion`} data-testid="sobres-por-recoger">
-              Recoger sobres ({caja.porRecoger})
-            </Link>
-          ) : null}
-          {caja ? (
-            <Link className="boton" href={`/sucursales/${sucursal.codigo}/recoleccion`} data-testid="ir-caja">
-              {caja.buzon ? "Buzón de sobres" : "Caja de sobres"}{caja.sobres ? ` (${caja.sobres}${caja.conAviso ? ` · ${caja.conAviso} con aviso de 8 días` : ""})` : ""}
-            </Link>
-          ) : null}
-          {entradasFondo ? (
-            <Link className="boton boton-principal" href={`/sucursales/${sucursal.codigo}/fondos`} data-testid="fondo-por-recibir">
-              Confirmar lo que recibes del fondo ({entradasFondo})
-            </Link>
-          ) : null}
-          {puedeVerTurno || puedeReponerFondo ? (
-            <Link className="boton" href={`/sucursales/${sucursal.codigo}/fondos`} data-testid="ir-fondos">Fondos de caja</Link>
-          ) : null}
-          {puedeConfigurarCustodia ? (
-            <Link className="boton" href={`/sucursales/${sucursal.codigo}/custodia/configurar`} data-testid="configurar-custodia">
-              Custodia de sobres
-            </Link>
-          ) : null}
-          {retirosConfirmar !== null ? (
-            <Link className={retirosConfirmar ? "boton boton-principal" : "boton"} href="/retiros" data-testid="retiros-por-confirmar">
-              Retiros por confirmar{retirosConfirmar ? ` (${retirosConfirmar})` : ""}
-            </Link>
-          ) : null}
-          {retirosRevisar !== null ? (
-            <Link className="boton" href={`/sucursales/${sucursal.codigo}/retiros`} data-testid="retiros">
-              Retiros de efectivo{retirosRevisar ? ` (${retirosRevisar})` : ""}
-            </Link>
-          ) : null}
-          {diferenciasPendientes !== null ? (
-            <Link className="boton" href={`/sucursales/${sucursal.codigo}/diferencias`} data-testid="diferencias">
-              Diferencias de efectivo{diferenciasPendientes ? ` (${diferenciasPendientes})` : ""}
-            </Link>
-          ) : null}
-          {puedeCobertura ? (
-            <Link className="boton" href={`/sucursales/${sucursal.codigo}/cobertura`} data-testid="cobertura">
-              Cobertura del historial
-            </Link>
-          ) : null}
-          {puedeAutorizarAcceso || puedeRevisarAccesos ? (
-            <Link className="boton" href={`/sucursales/${sucursal.codigo}/accesos`} data-testid="accesos">
-              {puedeAutorizarAcceso ? "Accesos por autorizar" : "Registro de accesos"}
-            </Link>
-          ) : null}
-          {puedeAutorizarCancel ? (
-            <Link className="boton" href={`/sucursales/${sucursal.codigo}/cancelaciones`} data-testid="cancelaciones">
-              Cancelaciones por autorizar
-            </Link>
-          ) : null}
-          {puedeVerReporteTurnos ? (
-            <Link className="boton" href={`/reportes/turnos?sucursal=${sucursal.codigo}`} data-testid="reporte-turnos">
-              Reporte de turnos
-            </Link>
-          ) : null}
-          {puedeVerReporteCaja ? (
-            <Link className="boton" href={`/reportes/caja?sucursal=${sucursal.codigo}`} data-testid="reporte-caja">
-              Reporte de caja
-            </Link>
-          ) : null}
-          {puedeVerReporteVisitas ? (
-            <Link className="boton" href={`/reportes/visitas?sucursal=${sucursal.codigo}`} data-testid="reporte-visitas">
-              Visitas y cobros
-            </Link>
-          ) : null}
-          {puedeVerExpedientes ? (
-            <Link className="boton" href={`/reportes/expedientes?sucursal=${sucursal.codigo}`} data-testid="reporte-expedientes">
-              Reporte de expedientes
-            </Link>
-          ) : null}
-          {puedeVerUsuarios ? (
-            <Link className="boton" href={`/reportes/usuarios?sucursal=${sucursal.codigo}`} data-testid="reporte-usuarios">
-              Usuarios y accesos
-            </Link>
-          ) : null}
-        </p>
+          <Grupo clave="efectivo" titulo="Efectivo y depósitos" abierto
+            pendientes={(caja?.porRecoger ?? 0) + entradasFondo + (retirosConfirmar ?? 0) + (retirosRevisar ?? 0) + (diferenciasPendientes ?? 0)}>
+            {caja ? (
+              <Link className="boton" href={`/sucursales/${sucursal.codigo}/recoleccion`} data-testid="ir-caja">
+                {caja.buzon ? "Buzón de sobres" : "Caja de sobres"}{caja.sobres ? ` (${caja.sobres}${caja.conAviso ? ` · ${caja.conAviso} con aviso de 8 días` : ""})` : ""}
+              </Link>
+            ) : null}
+            {puedeVerTurno || puedeReponerFondo ? (
+              <Link className="boton" href={`/sucursales/${sucursal.codigo}/fondos`} data-testid="ir-fondos">Fondos de caja</Link>
+            ) : null}
+            {retirosConfirmar !== null ? (
+              <Link className="boton" href="/retiros" data-testid="retiros-por-confirmar">
+                Retiros por confirmar{retirosConfirmar ? ` (${retirosConfirmar})` : ""}
+              </Link>
+            ) : null}
+            {retirosRevisar !== null ? (
+              <Link className="boton" href={`/sucursales/${sucursal.codigo}/retiros`} data-testid="retiros">
+                Retiros de efectivo{retirosRevisar ? ` (${retirosRevisar})` : ""}
+              </Link>
+            ) : null}
+            {diferenciasPendientes !== null ? (
+              <Link className="boton" href={`/sucursales/${sucursal.codigo}/diferencias`} data-testid="diferencias">
+                Diferencias de efectivo{diferenciasPendientes ? ` (${diferenciasPendientes})` : ""}
+              </Link>
+            ) : null}
+            {puedeVerificarAbonos ? (
+              <Link className="boton" href={`/sucursales/${sucursal.codigo}/transferencias`} data-testid="transferencias">
+                Transferencias por verificar
+              </Link>
+            ) : null}
+          </Grupo>
+          <Grupo clave="autorizaciones" titulo="Autorizaciones">
+            {puedeAutorizarAcceso || puedeRevisarAccesos ? (
+              <Link className="boton" href={`/sucursales/${sucursal.codigo}/accesos`} data-testid="accesos">
+                {puedeAutorizarAcceso ? "Accesos por autorizar" : "Registro de accesos"}
+              </Link>
+            ) : null}
+            {puedeAutorizarCancel ? (
+              <Link className="boton" href={`/sucursales/${sucursal.codigo}/cancelaciones`} data-testid="cancelaciones">
+                Cancelaciones por autorizar
+              </Link>
+            ) : null}
+          </Grupo>
+          <Grupo clave="reportes" titulo="Reportes">
+            {puedeVerReporteCaja ? (
+              <Link className="boton" href={`/reportes/caja?sucursal=${sucursal.codigo}`} data-testid="reporte-caja">Reporte de caja</Link>
+            ) : null}
+            {puedeVerReporteTurnos ? (
+              <Link className="boton" href={`/reportes/turnos?sucursal=${sucursal.codigo}`} data-testid="reporte-turnos">Reporte de turnos</Link>
+            ) : null}
+            {puedeVerReporteVisitas ? (
+              <Link className="boton" href={`/reportes/visitas?sucursal=${sucursal.codigo}`} data-testid="reporte-visitas">Visitas y cobros</Link>
+            ) : null}
+            {puedeVerExpedientes ? (
+              <Link className="boton" href={`/reportes/expedientes?sucursal=${sucursal.codigo}`} data-testid="reporte-expedientes">Reporte de expedientes</Link>
+            ) : null}
+            {puedeVerUsuarios ? (
+              <Link className="boton" href={`/reportes/usuarios?sucursal=${sucursal.codigo}`} data-testid="reporte-usuarios">Usuarios y accesos</Link>
+            ) : null}
+          </Grupo>
+          <Grupo clave="configuracion" titulo="Configuración de la sucursal">
+            {puedeEditar || puedeDesactivar ? (
+              <Link className="boton" href={`/sucursales/${sucursal.codigo}/editar`} data-testid="editar-sucursal">
+                {puedeEditar ? "Editar sucursal" : sucursal.estadoOperativo === "inactiva" ? "Reactivar sucursal" : "Desactivar sucursal"}
+              </Link>
+            ) : null}
+            {puedeConfigurarCustodia ? (
+              <Link className="boton" href={`/sucursales/${sucursal.codigo}/custodia/configurar`} data-testid="configurar-custodia">Custodia de sobres</Link>
+            ) : null}
+            {puedeCobertura ? (
+              <Link className="boton" href={`/sucursales/${sucursal.codigo}/cobertura`} data-testid="cobertura">Cobertura del historial</Link>
+            ) : null}
+          </Grupo>
+        </>
       ) : null}
 
       {sucursal.perfiles.map((perfil) => {
@@ -277,5 +293,25 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
         </section>
       ) : null}
     </main>
+  );
+}
+
+/**
+ * Grupo desplegable del menú de la sucursal (aprobado el 26 nov 2026). Solo aparece si tiene algún botón (según los
+ * permisos de la persona); el encabezado muestra únicamente cuántos pendientes hay, no cuántos botones.
+ */
+function Grupo({ clave, titulo, abierto = false, pendientes = 0, children }: {
+  clave: string; titulo: string; abierto?: boolean; pendientes?: number; children: ReactNode;
+}) {
+  const botones = (Array.isArray(children) ? children : [children]).filter(Boolean);
+  if (!botones.length) return null;
+  return (
+    <details className="grupo-menu" open={abierto} data-testid={`grupo-${clave}`}>
+      <summary data-testid={`abrir-grupo-${clave}`}>
+        <span>{titulo}</span>
+        {pendientes ? <span className="grupo-pendientes" data-testid={`pendientes-${clave}`}>{pendientes} {pendientes === 1 ? "pendiente" : "pendientes"}</span> : null}
+      </summary>
+      <div className="grupo-botones">{botones}</div>
+    </details>
   );
 }

@@ -3,6 +3,12 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
 import postgres from "postgres";
 import { cifrarContrasena } from "../../src/lib/contrasena";
 
+/** Abre un grupo del menú de la sucursal (vienen cerrados salvo «Efectivo y depósitos»). */
+async function abrirGrupo(page: import("@playwright/test").Page, grupo: string) {
+  const g = page.getByTestId(`grupo-${grupo}`);
+  if ((await g.getAttribute("open")) === null) await page.getByTestId(`abrir-grupo-${grupo}`).click();
+}
+
 /**
  * Catálogo de sucursales desde el navegador: alta, edición, desactivación y reactivación,
  * quién ve cada opción, y envíos directos al servidor con la sesión de alguien sin permiso.
@@ -72,6 +78,7 @@ test("Dirección general: crea, edita, desactiva y reactiva una sucursal, y todo
   expect(await sql`select 1 from asignacion a join sucursal s on s.id = a.sucursal_id where s.codigo = ${codigo}`).toHaveLength(0);
 
   // Editar: el motivo es obligatorio.
+  await abrirGrupo(page, "configuracion");
   await page.getByTestId("editar-sucursal").click();
   await page.getByLabel("Sin color definido todavía").uncheck();
   await page.getByLabel("Color", { exact: true }).fill("#1b7a3e");
@@ -89,6 +96,7 @@ test("Dirección general: crea, edita, desactiva y reactiva una sucursal, y todo
   await expect(historial).toContainText("Motivo: Color y apertura de prueba");
 
   // Desactivar pide confirmar con la casilla.
+  await abrirGrupo(page, "configuracion");
   await page.getByTestId("editar-sucursal").click();
   const actividad = page.getByTestId("actividad");
   await actividad.getByLabel("Motivo").fill("Cierre de prueba");
@@ -100,6 +108,7 @@ test("Dirección general: crea, edita, desactiva y reactiva una sucursal, y todo
   expect((await fila(codigo)).estado_operativo).toBe("inactiva");
 
   // Reactivar.
+  await abrirGrupo(page, "configuracion");
   await page.getByTestId("editar-sucursal").click();
   await page.getByTestId("actividad").getByLabel("Motivo").fill("Reapertura de prueba");
   await page.getByRole("button", { name: "Reactivar sucursal" }).click();

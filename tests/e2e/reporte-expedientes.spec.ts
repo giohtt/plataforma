@@ -3,6 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 import postgres from "postgres";
 import { cifrarContrasena } from "../../src/lib/contrasena";
 
+/** Abre un grupo del menú de la sucursal (vienen cerrados salvo «Efectivo y depósitos»). */
+async function abrirGrupo(page: import("@playwright/test").Page, grupo: string) {
+  const g = page.getByTestId(`grupo-${grupo}`);
+  if ((await g.getAttribute("open")) === null) await page.getByTestId(`abrir-grupo-${grupo}`).click();
+}
+
 /** Bloque 2: reporte de expedientes creados y posibles duplicados (solo consulta, datos ficticios). */
 const sql = postgres(process.env.E2E_DATABASE_URL!, { max: 2, prepare: false, onnotice: () => {} });
 test.afterAll(async () => sql.end({ timeout: 5 }));
@@ -49,6 +55,7 @@ test("Recepción no tiene el reporte: sin botón y «No encontrada», también c
 test("Encargado de Tenango: expedientes creados de Tenango y el par de Valeria; no ve Santiago", async ({ page }) => {
   await entrar(page, await crearCuenta([["encargado", "TEN"]]));
   await page.goto("/sucursales/TEN");
+  await abrirGrupo(page, "reportes");
   await page.getByTestId("reporte-expedientes").click();
   await expect(page).toHaveURL(/\/reportes\/expedientes\?sucursal=TEN$/);
   await expect(page.locator("#sucursal option")).toHaveText(["Tenango"]);
