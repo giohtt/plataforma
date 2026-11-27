@@ -115,7 +115,8 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
                 <dt>Pagado al proveedor</dt><dd data-testid="anticipo-gastado">{pesos.format(Number(d.anticipo.comprobado.gastado))}</dd>
                 {Number(d.anticipo.comprobado.cambio) > 0 ? (
                   <><dt>Cambio</dt><dd data-testid="anticipo-cambio">{pesos.format(Number(d.anticipo.comprobado.cambio))}
-                    {Number(d.anticipo.pendiente) > 0
+                    {Number(d.anticipo.devuelto) === 0 ? " · por devolver a caja"
+                      : Number(d.anticipo.pendiente) > 0
                       ? ` · devuelto ${pesos.format(Number(d.anticipo.devuelto))} · falta ${pesos.format(Number(d.anticipo.pendiente))}`
                       : " · devuelto completo"}</dd>
                     {d.anticipo.cambios.length ? (
