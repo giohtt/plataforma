@@ -1,7 +1,10 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { accionCorregirGasto, accionDecidirGasto, accionSolicitarGasto, type EstadoGasto } from "@/app/acciones-gastos";
+import {
+  accionCorregirGasto, accionDecidirGasto, accionPedirExcedente, accionRegistrarComprobante, accionRegistrarPago, accionSolicitarGasto, type EstadoGasto,
+} from "@/app/acciones-gastos";
+import { NOMBRE_ORIGEN, type OrigenPago } from "@/lib/datos-gasto";
 import type { Categoria, SucursalOpcion } from "@/lib/gastos";
 
 function ErrorCampo({ estado, campo }: { estado: EstadoGasto; campo: string }) {
@@ -147,6 +150,154 @@ export function FormularioDecision({ codigo, clave, version, importe }: { codigo
         <button className="boton boton-principal" type="submit" name="decision" value="autorizado" disabled={enviando}>Autorizar</button>
         <button className="boton" type="submit" name="decision" value="rechazado" disabled={enviando}>Rechazar</button>
       </p>
+    </form>
+  );
+}
+
+/** Comprobante: ticket, nota o factura (folio opcional), o «sin comprobante» con motivo. Las fotos llegan con el almacenamiento. */
+function CamposComprobante({ estado, opcional }: { estado: EstadoGasto; opcional: boolean }) {
+  const [tipo, setTipo] = useState(estado?.valores?.tipo ?? "");
+  return (
+    <fieldset className="campo campo-grupo" data-testid="campos-comprobante">
+      <legend>Comprobante</legend>
+      <select aria-label="Tipo de comprobante" name="tipo" value={tipo} onChange={(e) => setTipo(e.target.value)} aria-invalid={estado?.errores?.tipo ? true : undefined}>
+        {opcional ? <option value="">Lo agrego después</option> : <option value="">Elige…</option>}
+        <option value="ticket">Ticket</option>
+        <option value="nota">Nota</option>
+        <option value="factura">Factura</option>
+        <option value="sin">Sin comprobante</option>
+      </select>
+      <ErrorCampo estado={estado} campo="tipo" />
+      {tipo && tipo !== "sin" ? (
+        <div className="campo">
+          <label htmlFor="folio">Folio o número (opcional)</label>
+          <input id="folio" name="folio" maxLength={60} defaultValue={estado?.valores?.folio ?? ""} />
+          <ErrorCampo estado={estado} campo="folio" />
+        </div>
+      ) : null}
+      {tipo === "sin" ? (
+        <div className="campo">
+          <label htmlFor="motivoSin">Por qué no hay comprobante (obligatorio)</label>
+          <textarea id="motivoSin" name="motivoSin" maxLength={300} defaultValue={estado?.valores?.motivoSin ?? ""} aria-invalid={estado?.errores?.motivoSin ? true : undefined} />
+          <span className="sub">Queda «Sin comprobante · por revisar · Dirección».</span>
+          <ErrorCampo estado={estado} campo="motivoSin" />
+        </div>
+      ) : null}
+      <span className="sub">Las fotos del comprobante se agregarán cuando se active el almacenamiento.</span>
+    </fieldset>
+  );
+}
+
+/** Registrar el pago de un gasto autorizado, con los orígenes que esta persona puede usar ahora. */
+export function FormularioPago({ codigo, clave, version, autorizado, origenes, proveedor, hoy }: {
+  codigo: string; clave: string; version: number; autorizado: string; origenes: OrigenPago[]; proveedor: string | null; hoy: string;
+}) {
+  const [estado, accion, enviando] = useActionState(accionRegistrarPago, null);
+  const [origen, setOrigen] = useState(estado?.valores?.origen ?? "");
+  const efectivo = origen === "bolsa_visitas" || origen === "cajon_mensualidades";
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-pago">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <input type="hidden" name="version" value={version} />
+      <h3>Registrar el pago</h3>
+      <fieldset className="campo campo-grupo" aria-invalid={estado?.errores?.origen ? true : undefined}>
+        <legend>¿De dónde salió el dinero?</legend>
+        {origenes.map((o) => (
+          <label key={o} className="opcion-revision">
+            <input type="radio" name="origen" value={o} checked={origen === o} onChange={() => setOrigen(o)} />
+            <span>{NOMBRE_ORIGEN[o]}</span>
+          </label>
+        ))}
+        {!origenes.some((o) => o === "bolsa_visitas" || o === "cajon_mensualidades")
+          ? <span className="sub">En efectivo solo paga la responsable vigente de la bolsa o el cajón, con el turno abierto.</span> : null}
+        <ErrorCampo estado={estado} campo="origen" />
+      </fieldset>
+      <div className="campos-fila">
+        <div className="campo">
+          <label htmlFor="importe-pago">Importe pagado</label>
+          <div className="importe"><span aria-hidden="true">$</span>
+            <input id="importe-pago" name="importe" inputMode="decimal" defaultValue={estado?.valores?.importe ?? autorizado} aria-invalid={estado?.errores?.importe ? true : undefined} />
+          </div>
+          <span className="sub">Lo realmente pagado; hasta {new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(autorizado))} autorizados.</span>
+          <ErrorCampo estado={estado} campo="importe" />
+        </div>
+        {origen && !efectivo ? (
+          <div className="campo">
+            <label htmlFor="pagadoEl">Fecha del pago</label>
+            <input id="pagadoEl" name="pagadoEl" type="date" max={hoy} defaultValue={estado?.valores?.pagadoEl ?? hoy} aria-invalid={estado?.errores?.pagadoEl ? true : undefined} />
+            <ErrorCampo estado={estado} campo="pagadoEl" />
+          </div>
+        ) : null}
+      </div>
+      {origen === "transferencia" || origen === "tarjeta" ? (
+        <div className="campos-fila">
+          <div className="campo">
+            <label htmlFor="cuenta">{origen === "tarjeta" ? "Tarjeta (nombre corto)" : "Cuenta de origen (nombre corto)"}</label>
+            <input id="cuenta" name="cuenta" maxLength={40} defaultValue={estado?.valores?.cuenta ?? ""} aria-invalid={estado?.errores?.cuenta ? true : undefined} />
+            <span className="sub">Sin números de cuenta ni de tarjeta.</span>
+            <ErrorCampo estado={estado} campo="cuenta" />
+          </div>
+          <div className="campo">
+            <label htmlFor="referencia">{origen === "transferencia" ? "Referencia de la operación" : "Referencia del voucher (opcional)"}</label>
+            <input id="referencia" name="referencia" maxLength={60} defaultValue={estado?.valores?.referencia ?? ""} aria-invalid={estado?.errores?.referencia ? true : undefined} />
+            <ErrorCampo estado={estado} campo="referencia" />
+          </div>
+        </div>
+      ) : null}
+      <div className="campo">
+        <label htmlFor="aQuien">A quién se pagó (opcional)</label>
+        <input id="aQuien" name="aQuien" maxLength={120} defaultValue={estado?.valores?.aQuien ?? proveedor ?? ""} aria-invalid={estado?.errores?.aQuien ? true : undefined} />
+        <ErrorCampo estado={estado} campo="aQuien" />
+      </div>
+      <CamposComprobante estado={estado} opcional />
+      <p className="sub">
+        {efectivo ? "La salida se registra una sola vez y baja el esperado de la bolsa (en el cajón se registra; su esperado espera a Open Desk)."
+          : origen === "dinero_personal" ? "No sale de caja: queda pendiente de reembolso, que revisa Dirección."
+          : origen ? "No toca efectivo." : ""}
+      </p>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Registrando…" : "Registrar pago"}</button>
+    </form>
+  );
+}
+
+export function FormularioComprobante({ codigo, clave }: { codigo: string; clave: string }) {
+  const [estado, accion, enviando] = useActionState(accionRegistrarComprobante, null);
+  const [abierto, setAbierto] = useState(false);
+  if (!abierto && !estado) return <button className="boton" type="button" onClick={() => setAbierto(true)} data-testid="abrir-comprobante">Agregar comprobante</button>;
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-comprobante">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <CamposComprobante estado={estado} opcional={false} />
+      <button className="boton boton-principal" type="submit" disabled={enviando}>Guardar comprobante</button>
+    </form>
+  );
+}
+
+/** Costó más de lo autorizado: pedir autorización por el excedente (una solicitud ligada a la misma compra). */
+export function FormularioExcedente({ codigo, clave, autorizado }: { codigo: string; clave: string; autorizado: string }) {
+  const [estado, accion, enviando] = useActionState(accionPedirExcedente, null);
+  const [envio] = useState(() => crypto.randomUUID());
+  const [abierto, setAbierto] = useState(false);
+  if (!abierto && !estado) return <button className="boton" type="button" onClick={() => setAbierto(true)} data-testid="abrir-excedente">¿Costó más? Pedir autorización por el excedente</button>;
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-excedente">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <input type="hidden" name="envio" value={envio} />
+      <div className="campo">
+        <label htmlFor="importeReal">Cuánto cuesta en realidad</label>
+        <div className="importe"><span aria-hidden="true">$</span>
+          <input id="importeReal" name="importeReal" inputMode="decimal" defaultValue={estado?.valores?.importeReal ?? ""} aria-invalid={estado?.errores?.importeReal ? true : undefined} />
+        </div>
+        <span className="sub">Se pide autorización solo por lo que pase de {autorizado}, como parte de la misma compra. Lo autorizado se paga aparte.</span>
+        <ErrorCampo estado={estado} campo="importeReal" />
+      </div>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>Pedir autorización por el excedente</button>
     </form>
   );
 }

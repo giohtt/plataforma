@@ -2,6 +2,10 @@ import type postgres from "postgres";
 import { leerImporte } from "@/lib/datos-turno";
 import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
+import { NOMBRE_ORIGEN, type Comprobacion, type EstadoGasto, type Impedimento, type OrigenPago } from "@/lib/datos-gasto";
+
+export { NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, NOMBRE_ORIGEN, TEXTO_IMPEDIMENTO } from "@/lib/datos-gasto";
+export type { Comprobacion, EstadoGasto, Impedimento, OrigenPago } from "@/lib/datos-gasto";
 
 /**
  * Solicitudes de gasto (bloque 6, PR 3; acordado el 27 nov 2026; solo datos ficticios).
@@ -28,14 +32,13 @@ type Tx = postgres.TransactionSql;
 export type ErrorGasto =
   | "sin_permiso" | "no_encontrada" | "concepto" | "categoria" | "importe" | "proveedor" | "nota" | "sucursal_paga"
   | "compra" | "motivo" | "version" | "sin_cambio" | "repetida" | "bloqueado_produccion"
-  | "decision" | "ya_decidido" | "propio" | "de_direccion" | "sin_facultad" | "limite" | "diario";
+  | "decision" | "ya_decidido" | "propio" | "de_direccion" | "sin_facultad" | "limite" | "diario"
+  | "no_autorizado" | "ya_pagado" | "origen" | "excede" | "fecha" | "cuenta" | "referencia" | "a_quien" | "autorizo"
+  | "sin_turno" | "no_responsable" | "entrega_en_curso" | "comprobante" | "folio" | "no_excede";
 
-/** Por qué una persona no puede decidir un gasto (impedimento_decision_gasto). */
-export type Impedimento = "ya_decidido" | "propio" | "de_direccion" | "sin_facultad" | "limite" | "diario";
-export type EstadoGasto = "por_autorizar" | "autorizado" | "rechazado";
-export const NOMBRE_ESTADO_GASTO: Record<EstadoGasto, string> = {
-  por_autorizar: "Por autorizar", autorizado: "Autorizado", rechazado: "Rechazado",
-};
+
+
+
 
 export type CamposGasto = { concepto: string; categoria: string; importe: string; proveedor: string; nota: string };
 export type Categoria = { clave: string; nombre: string; dePrueba: boolean };
@@ -48,6 +51,8 @@ export type GastoResumen = {
   estado: EstadoGasto; decididoPor: string | null; decididoEn: Date | null; motivoDecision: string | null;
   /** null: esta persona puede decidirlo ahora. */
   impedimento: Impedimento | null;
+  /** Pago registrado (null si no se ha pagado) y su comprobación. */
+  origenPago: OrigenPago | null; importePagado: string | null; comprobacion: Comprobacion | null;
 };
 
 const CODIGO = /^[A-Z0-9]{2,5}$/;
@@ -75,8 +80,14 @@ const RESUMEN = (db: Sql | Tx, usuarioId: string) => db`
          o.clave as "compraDe", u.nombre as "solicitadoPor", g.solicitado_en as "solicitadoEn",
          g.solicitado_por = ${usuarioId} as propia,
          coalesce(d.decision, 'por_autorizar') as estado, du.nombre as "decididoPor", d.en as "decididoEn", d.motivo as "motivoDecision",
-         impedimento_decision_gasto(${usuarioId}, g.id) as impedimento
+         impedimento_decision_gasto(${usuarioId}, g.id) as impedimento,
+         pg.origen as "origenPago", pg.importe::text as "importePagado",
+         case when pg.id is null then null
+              when exists (select 1 from comprobante_gasto c where c.gasto_id = g.id) then 'comprobado'
+              when exists (select 1 from sin_comprobante_gasto c where c.gasto_id = g.id) then 'sin_comprobante'
+              else 'por_comprobar' end as comprobacion
   from gasto g
+  left join pago_gasto pg on pg.gasto_id = g.id
   join lateral (select * from gasto_version x where x.gasto_id = g.id order by x.version desc limit 1) v on true
   left join decision_gasto d on d.gasto_id = g.id and d.version = v.version
   left join usuario du on du.id = d.por
@@ -85,6 +96,17 @@ const RESUMEN = (db: Sql | Tx, usuarioId: string) => db`
   join sucursal p on p.id = g.sucursal_paga_id
   join usuario u on u.id = g.solicitado_por
   left join gasto o on o.id = g.compra_de`;
+
+/**
+ * Quien paga (gasto.pagar en la sucursal que paga) ve los gastos autorizados por pagar ahí y los que él mismo pagó, aunque
+ * no consulte todos los gastos (Recepción).
+ */
+const VE_PARA_PAGAR = (db: Sql | Tx, usuarioId: string) => db`(
+  (tiene_permiso(${usuarioId}, 'gasto.pagar', g.sucursal_paga_id)
+   and exists (select 1 from decision_gasto dd where dd.gasto_id = g.id and dd.decision = 'autorizado'
+               and dd.version = (select max(x.version) from gasto_version x where x.gasto_id = g.id))
+   and not exists (select 1 from pago_gasto pp where pp.gasto_id = g.id))
+  or exists (select 1 from pago_gasto pp where pp.gasto_id = g.id and pp.registrado_por = ${usuarioId}))`;
 
 /** Puede ver todos los gastos ligados a esa sucursal (beneficiada o que paga). */
 const puedeConsultar = (db: Sql | Tx, usuarioId: string, sucursalId: string) =>
@@ -127,7 +149,7 @@ export async function pantallaGastos(sql: Sql, usuarioId: string, codigo: string
     ${RESUMEN(sql, usuarioId)}
     where (g.sucursal_id = ${s.id} or g.sucursal_paga_id = ${s.id})
       and (tiene_permiso(${usuarioId}, 'gasto.consultar', g.sucursal_id) or tiene_permiso(${usuarioId}, 'gasto.consultar', g.sucursal_paga_id)
-           or g.solicitado_por = ${usuarioId})
+           or g.solicitado_por = ${usuarioId} or ${VE_PARA_PAGAR(sql, usuarioId)})
     order by g.solicitado_en desc, g.numero desc limit 200`;
   return {
     sucursal: { id: s.id, codigo: s.codigo, nombre: s.nombre }, puedeSolicitar: s.solicitar, consultaTodos: s.consultar,
@@ -151,7 +173,46 @@ export type DetalleGasto = {
   puedenDecidir: string[];
   puedeCorregir: boolean;
   categorias: Categoria[];
+  pago: { origen: OrigenPago; importe: string; pagadoEl: string; pagadoPor: string; registradoPor: string; en: Date;
+          aQuien: string | null; cuenta: string | null; referencia: string | null } | null;
+  comprobantes: { tipo: "ticket" | "nota" | "factura"; folio: string | null; registradoPor: string; en: Date }[];
+  sinComprobante: { motivo: string; registradoPor: string; en: Date } | null;
+  /** Orígenes con los que esta persona puede registrar el pago ahora (vacío si no puede). */
+  puedePagar: OrigenPago[];
+  /** Lo autorizado en la versión vigente (tope del pago). */
+  autorizado: string | null;
+  puedeComprobar: boolean;
+  puedePedirExcedente: boolean;
 };
+
+/** Con qué orígenes puede esta persona pagar el gasto ahora mismo (servidor; la base lo vuelve a comprobar). */
+async function opcionesPago(db: Sql | Tx, usuarioId: string, gastoId: string): Promise<{ origenes: OrigenPago[]; autorizado: string | null }> {
+  const [o] = await db<{ autorizado: string | null; pagado: boolean; puede: boolean; autorizo: boolean; direccion: boolean; admin: boolean;
+                         bolsa: boolean; cajon: boolean; entrega: boolean }[]>`
+    with g as (select * from gasto where id = ${gastoId}),
+         v as (select version from gasto_version where gasto_id = ${gastoId} order by version desc limit 1),
+         d as (select * from decision_gasto where gasto_id = ${gastoId} and version = (select version from v)),
+         t as (select id from turno where sucursal_id = (select sucursal_paga_id from g) and cerrado_en is null)
+    select (select importe::text from d where decision = 'autorizado') as autorizado,
+           exists (select 1 from pago_gasto where gasto_id = ${gastoId}) as pagado,
+           tiene_permiso(${usuarioId}, 'gasto.pagar', (select sucursal_paga_id from g)) as puede,
+           coalesce((select por = ${usuarioId} from d), false) as autorizo,
+           exists (select 1 from perfiles_en_sucursal(${usuarioId}, (select sucursal_paga_id from g)) r where r = 'direccion') as direccion,
+           exists (select 1 from perfiles_en_sucursal(${usuarioId}, (select sucursal_paga_id from g)) r
+                   where r in ('administracion', 'gestion_administrativa', 'direccion')) as admin,
+           exists (select 1 from responsable_lugar r join lugar_efectivo l on l.id = r.lugar_id
+                   where r.turno_id = (select id from t) and r.hasta is null and r.usuario_id = ${usuarioId} and l.tipo = 'bolsa_visitas') as bolsa,
+           exists (select 1 from responsable_lugar r join lugar_efectivo l on l.id = r.lugar_id
+                   where r.turno_id = (select id from t) and r.hasta is null and r.usuario_id = ${usuarioId} and l.tipo = 'cajon_mensualidades') as cajon,
+           exists (select 1 from entrega_turno e where e.turno_id = (select id from t) and e.estado in ('pendiente', 'recuento')) as entrega`;
+  if (!o.autorizado || o.pagado || !o.puede || (o.autorizo && !o.direccion)) return { origenes: [], autorizado: o.autorizado };
+  const origenes: OrigenPago[] = [];
+  if (o.bolsa && !o.entrega) origenes.push("bolsa_visitas");
+  if (o.cajon && !o.entrega) origenes.push("cajon_mensualidades");
+  if (o.admin) origenes.push("transferencia");
+  origenes.push("tarjeta", "dinero_personal");
+  return { origenes, autorizado: o.autorizado };
+}
 
 /** Detalle con todas sus versiones. Sin permiso, la misma respuesta que si no existiera. */
 export async function detalleGasto(sql: Sql, usuarioId: string, codigo: string, clave: string): Promise<DetalleGasto | null> {
@@ -165,7 +226,8 @@ export async function detalleGasto(sql: Sql, usuarioId: string, codigo: string, 
     join lateral (select * from gasto_version x where x.gasto_id = g2.id order by x.version desc limit 1) v on true
     where g2.sucursal_id = ${s.id} or g2.sucursal_paga_id = ${s.id}`;
   if (!g) return null;
-  const ve = g.propia || (await puedeConsultar(sql, usuarioId, g.sucursalId)) || (await puedeConsultar(sql, usuarioId, g.pagaId));
+  const [{ paraPagar }] = await sql<{ paraPagar: boolean }[]>`select ${VE_PARA_PAGAR(sql, usuarioId)} as "paraPagar" from gasto g where g.id = ${g.id}`;
+  const ve = g.propia || paraPagar || (await puedeConsultar(sql, usuarioId, g.sucursalId)) || (await puedeConsultar(sql, usuarioId, g.pagaId));
   if (!ve) return null;
   const versiones = await sql<VersionGasto[]>`
     select v.version, v.concepto, c.nombre as categoria, v.importe::text as importe, v.proveedor, v.nota, v.motivo,
@@ -188,11 +250,29 @@ export async function detalleGasto(sql: Sql, usuarioId: string, codigo: string, 
       and impedimento_decision_gasto(u.id, ${g.id}) is null
     order by u.nombre`).map((x) => x.nombre) : [];
   const [{ total }] = await sql<{ total: string }[]>`select total_compra_gasto(${g.id})::text as total`;
+  const [pago] = await sql<NonNullable<DetalleGasto["pago"]>[]>`
+    select p.origen, p.importe::text as importe, to_char(p.pagado_el, 'YYYY-MM-DD') as "pagadoEl", a.nombre as "pagadoPor",
+           r.nombre as "registradoPor", p.en, p.a_quien as "aQuien", p.cuenta, p.referencia
+    from pago_gasto p join usuario a on a.id = p.pagado_por join usuario r on r.id = p.registrado_por where p.gasto_id = ${g.id}`;
+  const comprobantes = await sql<DetalleGasto["comprobantes"]>`
+    select c.tipo, c.folio, u.nombre as "registradoPor", c.en from comprobante_gasto c join usuario u on u.id = c.registrado_por
+    where c.gasto_id = ${g.id} order by c.en`;
+  const [sinComprobante] = await sql<NonNullable<DetalleGasto["sinComprobante"]>[]>`
+    select c.motivo, u.nombre as "registradoPor", c.en from sin_comprobante_gasto c join usuario u on u.id = c.registrado_por where c.gasto_id = ${g.id}`;
+  const op = await opcionesPago(sql, usuarioId, g.id);
+  const [{ comprueba }] = await sql<{ comprueba: boolean }[]>`
+    select exists (select 1 from pago_gasto p where p.gasto_id = ${g.id} and (p.registrado_por = ${usuarioId} or ${g.propia}))
+           and not exists (select 1 from sin_comprobante_gasto c where c.gasto_id = ${g.id}) as comprueba`;
+  const [{ solicita }] = await sql<{ solicita: boolean }[]>`select tiene_permiso(${usuarioId}, 'gasto.solicitar', ${g.sucursalId}) as solicita`;
   const { sucursalId, pagaId, ...resto } = g;
-  void sucursalId; void pagaId;
+  void pagaId;
+  void sucursalId;
   return {
     gasto: { ...resto, partes: [...partes], totalCompra: total }, versiones: [...versiones], decisiones: [...decisiones], puedenDecidir,
-    puedeCorregir: g.propia, categorias: [...categorias],
+    puedeCorregir: g.propia && !pago, categorias: [...categorias],
+    pago: pago ?? null, comprobantes: [...comprobantes], sinComprobante: sinComprobante ?? null,
+    puedePagar: op.origenes, autorizado: op.autorizado, puedeComprobar: comprueba,
+    puedePedirExcedente: Boolean(op.autorizado) && !pago && solicita && g.estado === "autorizado",
   };
 }
 
@@ -250,6 +330,7 @@ export async function corregirGasto(
       select id, solicitado_por from gasto where clave = ${d.clave} and (sucursal_id = ${s.id} or sucursal_paga_id = ${s.id}) for update`;
     if (!g) return { ok: false as const, error: "no_encontrada" as const };
     if (g.solicitado_por !== usuarioId) return { ok: false as const, error: "sin_permiso" as const };
+    if ((await tx`select 1 from pago_gasto where gasto_id = ${g.id}`).length) return { ok: false as const, error: "ya_pagado" as const };
     const [u] = await tx<{ version: number; concepto: string; categoria: string; importe: string; proveedor: string | null; nota: string | null }[]>`
       select version, concepto, categoria, importe::text as importe, proveedor, nota from gasto_version where gasto_id = ${g.id} order by version desc limit 1`;
     if (u.version !== d.version) return { ok: false as const, error: "version" as const };
@@ -352,12 +433,187 @@ export async function gastosPorDecidir(sql: Sql, usuarioId: string, sucursalId: 
   return n;
 }
 
-/** Texto para quien no puede decidir un gasto, y a quién le llega. */
-export const TEXTO_IMPEDIMENTO: Record<Impedimento, string> = {
-  ya_decidido: "Esta versión ya se decidió.",
-  propio: "Tú solicitaste este gasto: lo decide otra persona con facultad suficiente.",
-  de_direccion: "Lo solicitó Dirección: solo lo decide Dirección.",
-  sin_facultad: "No tienes facultad vigente para autorizar gastos aquí (en la sucursal beneficiada y, si es otra, en la que paga).",
-  limite: "La compra pasa tu límite por gasto: la decide quien tenga facultad suficiente (Gestión administrativa o Dirección).",
-  diario: "Con este gasto pasarías tu acumulado de hoy: lo decide quien tenga facultad suficiente (Gestión administrativa o Dirección).",
-};
+
+
+const TIPOS_COMPROBANTE = ["ticket", "nota", "factura"] as const;
+export type DatosComprobante = { tipo: string; folio: string; motivoSin: string };
+
+/** Valida el comprobante: ticket, nota o factura (folio opcional), o «sin comprobante» con motivo. Vacío: se agrega después. */
+function leerComprobante(c: DatosComprobante): { ok: true; v: { tipo: "ticket" | "nota" | "factura"; folio: string | null } | { sin: string } | null } | { ok: false; error: ErrorGasto } {
+  if (!c.tipo) return { ok: true, v: null };
+  if (c.tipo === "sin") {
+    const m = texto(c.motivoSin);
+    if (m.length < 5 || m.length > 300) return { ok: false, error: "motivo" };
+    return { ok: true, v: { sin: m } };
+  }
+  const tipo = TIPOS_COMPROBANTE.find((t) => t === c.tipo);
+  if (!tipo) return { ok: false, error: "comprobante" };
+  const folio = texto(c.folio);
+  if (folio.length > 60) return { ok: false, error: "folio" };
+  return { ok: true, v: { tipo, folio: folio || null } };
+}
+
+async function guardarComprobante(tx: Tx, usuarioId: string, gastoId: string, v: { tipo: "ticket" | "nota" | "factura"; folio: string | null } | { sin: string }) {
+  if ("sin" in v) await tx`insert into sin_comprobante_gasto (gasto_id, motivo, registrado_por) values (${gastoId}, ${v.sin}, ${usuarioId})`;
+  else await tx`insert into comprobante_gasto (gasto_id, tipo, folio, registrado_por) values (${gastoId}, ${v.tipo}, ${v.folio}, ${usuarioId})`;
+}
+
+/**
+ * Registra el pago de un gasto autorizado (y, si se da, su comprobante). Efectivo: la salida de la bolsa o el cajón del
+ * turno abierto, una sola vez. Dinero personal: queda pendiente de reembolso (no sale de caja).
+ */
+export async function registrarPago(
+  sql: Sql, usuarioId: string, codigo: string,
+  d: { clave: string; version: number; origen: string; importe: string; aQuien: string; pagadoEl: string; cuenta: string; referencia: string } & DatosComprobante,
+  { entorno }: { entorno: Entorno },
+): Promise<{ ok: true } | { ok: false; error: ErrorGasto }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!CODIGO.test(codigo) || !CLAVE.test(d.clave)) return { ok: false, error: "no_encontrada" };
+  const origen = (Object.keys(NOMBRE_ORIGEN) as OrigenPago[]).find((o) => o === d.origen);
+  if (!origen) return { ok: false, error: "origen" };
+  const i = leerImporte(d.importe);
+  if (!i.ok || Number(i.valor) <= 0) return { ok: false, error: "importe" };
+  const aQuien = texto(d.aQuien);
+  if (aQuien && (aQuien.length < 2 || aQuien.length > 120)) return { ok: false, error: "a_quien" };
+  const efectivo = origen === "bolsa_visitas" || origen === "cajon_mensualidades";
+  const cuenta = texto(d.cuenta);
+  const referencia = texto(d.referencia);
+  if (origen === "transferencia" || origen === "tarjeta") {
+    if (cuenta.length < 2 || cuenta.length > 40 || /\d{4}/.test(cuenta)) return { ok: false, error: "cuenta" };
+    if (referencia.length > 60 || (origen === "transferencia" && referencia.length < 3) || (referencia && referencia.length < 3)) return { ok: false, error: "referencia" };
+  }
+  if (!efectivo && !/^\d{4}-\d{2}-\d{2}$/.test(d.pagadoEl)) return { ok: false, error: "fecha" };
+  const c = leerComprobante(d);
+  if (!c.ok) return c;
+  try {
+    return await sql.begin(async (tx) => {
+      const s = await sucursalDe(tx, usuarioId, codigo);
+      if (!s) return { ok: false as const, error: "no_encontrada" as const };
+      const [g] = await tx<{ id: string; sucursal_paga_id: string; ve: boolean }[]>`
+        select id, sucursal_paga_id,
+               solicitado_por = ${usuarioId} or tiene_permiso(${usuarioId}, 'gasto.consultar', sucursal_id)
+                 or tiene_permiso(${usuarioId}, 'gasto.consultar', sucursal_paga_id) or tiene_permiso(${usuarioId}, 'gasto.pagar', sucursal_paga_id) as ve
+        from gasto where clave = ${d.clave} and (sucursal_id = ${s.id} or sucursal_paga_id = ${s.id}) for update`;
+      if (!g || !g.ve) return { ok: false as const, error: "no_encontrada" as const };
+      const [v] = await tx<{ version: number }[]>`select version from gasto_version where gasto_id = ${g.id} order by version desc limit 1`;
+      if (v.version !== d.version) return { ok: false as const, error: "version" as const };
+      if ((await tx`select 1 from pago_gasto where gasto_id = ${g.id}`).length) return { ok: false as const, error: "ya_pagado" as const };
+      const op = await opcionesPago(tx, usuarioId, g.id);
+      if (!op.autorizado) return { ok: false as const, error: "no_autorizado" as const };
+      if (Number(i.valor) > Number(op.autorizado)) return { ok: false as const, error: "excede" as const };
+      if (!op.origenes.includes(origen)) {
+        const [x] = await tx<{ autorizo: boolean; puede: boolean }[]>`
+          select exists (select 1 from decision_gasto dd where dd.gasto_id = ${g.id} and dd.version = ${v.version} and dd.por = ${usuarioId}) as autorizo,
+                 tiene_permiso(${usuarioId}, 'gasto.pagar', ${g.sucursal_paga_id}) as puede`;
+        if (!x.puede) return { ok: false as const, error: "sin_permiso" as const };
+        if (x.autorizo && !op.origenes.length) return { ok: false as const, error: "autorizo" as const };
+        if (efectivo) {
+          const [t] = await tx<{ id: string }[]>`select id from turno where sucursal_id = ${g.sucursal_paga_id} and cerrado_en is null`;
+          if (!t) return { ok: false as const, error: "sin_turno" as const };
+          if ((await tx`select 1 from entrega_turno where turno_id = ${t.id} and estado in ('pendiente', 'recuento')`).length) {
+            return { ok: false as const, error: "entrega_en_curso" as const };
+          }
+          return { ok: false as const, error: "no_responsable" as const };
+        }
+        return { ok: false as const, error: "origen" as const };
+      }
+      let pagadoEl = d.pagadoEl;
+      if (efectivo) {
+        const [h] = await tx<{ hoy: string }[]>`select to_char(dia_en_sucursal(${g.sucursal_paga_id}, now()), 'YYYY-MM-DD') as hoy`;
+        pagadoEl = h.hoy;
+      } else {
+        const [f] = await tx<{ ok: boolean }[]>`
+          select ${pagadoEl}::date between dia_en_sucursal(${g.sucursal_paga_id}, (select en from decision_gasto where gasto_id = ${g.id} and version = ${v.version}))
+                                       and dia_en_sucursal(${g.sucursal_paga_id}, now()) as ok`;
+        if (!f.ok) return { ok: false as const, error: "fecha" as const };
+      }
+      const [p] = await tx<{ id: string }[]>`
+        insert into pago_gasto (gasto_id, version, origen, importe, pagado_el, pagado_por, registrado_por, a_quien, cuenta, referencia)
+        values (${g.id}, ${v.version}, ${origen}, ${i.valor}, ${pagadoEl}, ${usuarioId}, ${usuarioId}, ${aQuien || null},
+                ${origen === "transferencia" || origen === "tarjeta" ? cuenta : null}, ${referencia || null})
+        returning id`;
+      if (efectivo) {
+        const [t] = await tx<{ id: string }[]>`select id from turno where sucursal_id = ${g.sucursal_paga_id} and cerrado_en is null for update`;
+        const [r] = await tx<{ lugar_id: string }[]>`
+          select r.lugar_id from responsable_lugar r join lugar_efectivo l on l.id = r.lugar_id
+          where r.turno_id = ${t.id} and r.hasta is null and l.tipo = ${origen} and r.usuario_id = ${usuarioId}`;
+        await tx`insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, pago_gasto_id, responsable_id, registrado_por)
+                 values (${r.lugar_id}, ${t.id}, 'salida_pago_gasto', ${(-Number(i.valor)).toFixed(2)}, ${p.id}, ${usuarioId}, ${usuarioId})`;
+      }
+      if (c.v) await guardarComprobante(tx, usuarioId, g.id, c.v);
+      return { ok: true as const };
+    });
+  } catch (e) {
+    if (e instanceof Error && "code" in e && e.code === "23505") return { ok: false, error: "ya_pagado" };
+    throw e;
+  }
+}
+
+/** Agrega un comprobante después del pago (o registra «sin comprobante» con motivo, para revisión de Dirección). */
+export async function registrarComprobante(
+  sql: Sql, usuarioId: string, codigo: string, d: { clave: string } & DatosComprobante, { entorno }: { entorno: Entorno },
+): Promise<{ ok: true } | { ok: false; error: ErrorGasto }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!CODIGO.test(codigo) || !CLAVE.test(d.clave)) return { ok: false, error: "no_encontrada" };
+  const c = leerComprobante(d);
+  if (!c.ok) return c;
+  if (!c.v) return { ok: false, error: "comprobante" };
+  return sql.begin(async (tx) => {
+    const s = await sucursalDe(tx, usuarioId, codigo);
+    if (!s) return { ok: false as const, error: "no_encontrada" as const };
+    const [g] = await tx<{ id: string; registrado_por: string | null; solicitado_por: string; sin: boolean }[]>`
+      select g.id, p.registrado_por, g.solicitado_por, exists (select 1 from sin_comprobante_gasto x where x.gasto_id = g.id) as sin
+      from gasto g left join pago_gasto p on p.gasto_id = g.id
+      where g.clave = ${d.clave} and (g.sucursal_id = ${s.id} or g.sucursal_paga_id = ${s.id}) for update of g`;
+    if (!g) return { ok: false as const, error: "no_encontrada" as const };
+    if (!g.registrado_por) return { ok: false as const, error: "no_autorizado" as const };
+    if (usuarioId !== g.registrado_por && usuarioId !== g.solicitado_por) return { ok: false as const, error: "sin_permiso" as const };
+    if (g.sin) return { ok: false as const, error: "comprobante" as const };
+    if (c.v && "sin" in c.v && (await tx`select 1 from comprobante_gasto where gasto_id = ${g.id}`).length) return { ok: false as const, error: "comprobante" as const };
+    await guardarComprobante(tx, usuarioId, g.id, c.v!);
+    return { ok: true as const };
+  });
+}
+
+/**
+ * Costó más de lo autorizado: se pide autorización por el excedente como parte de la misma compra (otra solicitud
+ * ligada a la original, con su propia clave). Lo autorizado se paga aparte.
+ */
+export async function pedirExcedente(
+  sql: Sql, usuarioId: string, codigo: string, d: { clave: string; importeReal: string; envio: string }, { entorno }: { entorno: Entorno },
+): Promise<{ ok: true; clave: string } | { ok: false; error: ErrorGasto }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!CODIGO.test(codigo) || !CLAVE.test(d.clave)) return { ok: false, error: "no_encontrada" };
+  const i = leerImporte(d.importeReal);
+  if (!i.ok || Number(i.valor) <= 0) return { ok: false, error: "importe" };
+  const [g] = await sql<{ id: string; raiz: string; codigo: string; paga: string; concepto: string; categoria: string; proveedor: string | null; autorizado: string | null; pagado: boolean }[]>`
+    select g.id, coalesce(g.compra_de, g.id) as raiz, b.codigo, g.sucursal_paga_id as paga, v.concepto, v.categoria, v.proveedor,
+           (select d.importe::text from decision_gasto d where d.gasto_id = g.id and d.version = v.version and d.decision = 'autorizado') as autorizado,
+           exists (select 1 from pago_gasto p where p.gasto_id = g.id) as pagado
+    from gasto g join sucursal b on b.id = g.sucursal_id
+    join lateral (select * from gasto_version x where x.gasto_id = g.id order by x.version desc limit 1) v on true
+    where g.clave = ${d.clave}`;
+  if (!g) return { ok: false, error: "no_encontrada" };
+  if (!g.autorizado || g.pagado) return { ok: false, error: "no_autorizado" };
+  const excedente = Math.round((Number(i.valor) - Number(g.autorizado)) * 100) / 100;
+  if (excedente <= 0) return { ok: false, error: "no_excede" };
+  const r = await solicitarGasto(sql, usuarioId, g.codigo, {
+    concepto: `Excedente de ${d.clave}: ${g.concepto}`.slice(0, 120), categoria: g.categoria, importe: excedente.toFixed(2),
+    proveedor: g.proveedor ?? "", nota: `Costó ${i.valor}; autorizado ${g.autorizado}.`, pagaId: g.paga, compraDe: g.raiz, envio: d.envio,
+  }, { entorno });
+  return r;
+}
+
+/** Gastos autorizados sin pagar que esta persona puede pagar en efectivo ahora (responsable vigente con turno abierto). */
+export async function gastosPorPagar(sql: Sql, usuarioId: string, sucursalId: string): Promise<number> {
+  const [{ n }] = await sql<{ n: number }[]>`
+    select count(*)::int as n from gasto g
+    join lateral (select version from gasto_version x where x.gasto_id = g.id order by x.version desc limit 1) v on true
+    join decision_gasto d on d.gasto_id = g.id and d.version = v.version and d.decision = 'autorizado'
+    where g.sucursal_paga_id = ${sucursalId} and d.por <> ${usuarioId}
+      and not exists (select 1 from pago_gasto p where p.gasto_id = g.id)
+      and tiene_permiso(${usuarioId}, 'gasto.pagar', ${sucursalId})
+      and exists (select 1 from turno t join responsable_lugar r on r.turno_id = t.id and r.hasta is null
+                  where t.sucursal_id = ${sucursalId} and t.cerrado_en is null and r.usuario_id = ${usuarioId})`;
+  return n;
+}

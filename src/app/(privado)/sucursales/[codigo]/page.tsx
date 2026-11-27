@@ -5,7 +5,7 @@ import { notFound } from "next/navigation";
 import type { CSSProperties, ReactNode } from "react";
 import { devolucionesPendientes, pendientesDeRevision } from "@/lib/diferencias";
 import { temaSucursal } from "@/lib/color";
-import { gastosPorDecidir } from "@/lib/gastos";
+import { gastosPorDecidir, gastosPorPagar } from "@/lib/gastos";
 import { obtenerBaseDatos } from "@/lib/db";
 import { historialSucursal } from "@/lib/catalogo-sucursales";
 import { NOMBRE_PERFIL, sucursalAccesiblePorCodigo, tienePermiso, type Rol } from "@/lib/permisos";
@@ -66,7 +66,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo, caja, puedeVerReporteCaja, devoluciones, puedeSolicitarGasto, puedeConsultarGastos, gastosDecidir] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo, caja, puedeVerReporteCaja, devoluciones, puedeSolicitarGasto, puedeConsultarGastos, gastosDecidir, gastosPagar] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -99,6 +99,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     tienePermiso(sql, sesion.usuarioId, "gasto.solicitar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "gasto.consultar", sucursal.id),
     gastosPorDecidir(sql, sesion.usuarioId, sucursal.id),
+    gastosPorPagar(sql, sesion.usuarioId, sucursal.id),
   ]);
 
   const permisos = await sql<{ clave: string; descripcion: string }[]>`
@@ -137,10 +138,13 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
             </p>
           ) : null}
           {/* Lo que espera algo de esta persona: solo aparece si hay algo. */}
-          {apoyosPendientes.n || custodiaPendiente.n || caja?.porRecoger || entradasFondo || retirosConfirmar || retirosRevisar || diferenciasPendientes || devoluciones?.vencidas || gastosDecidir ? (
+          {apoyosPendientes.n || custodiaPendiente.n || caja?.porRecoger || entradasFondo || retirosConfirmar || retirosRevisar || diferenciasPendientes || devoluciones?.vencidas || gastosDecidir || gastosPagar ? (
             <section className="requiere-accion" aria-labelledby="t-accion" data-testid="requiere-accion">
               <h2 id="t-accion">Requiere tu acción</h2>
               <p className="fila-acciones">
+                {gastosPagar ? (
+                  <Link className="boton" href={`/sucursales/${sucursal.codigo}/gastos`} data-testid="accion-gastos-pagar">Gastos autorizados por pagar ({gastosPagar})</Link>
+                ) : null}
                 {gastosDecidir ? (
                   <Link className="boton" href={`/sucursales/${sucursal.codigo}/gastos`} data-testid="accion-gastos">Gastos por autorizar ({gastosDecidir})</Link>
                 ) : null}
@@ -212,7 +216,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
               </Link>
             ) : null}
           </Grupo>
-          <Grupo clave="gastos" titulo="Gastos" pendientes={gastosDecidir}>
+          <Grupo clave="gastos" titulo="Gastos" pendientes={gastosDecidir + gastosPagar}>
             {puedeSolicitarGasto || puedeConsultarGastos ? (
               <Link className="boton" href={`/sucursales/${sucursal.codigo}/gastos`} data-testid="gastos">
                 {puedeConsultarGastos ? "Gastos de la sucursal" : "Solicitar gasto"}

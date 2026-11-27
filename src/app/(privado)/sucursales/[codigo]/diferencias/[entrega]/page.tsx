@@ -309,6 +309,11 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
                   <td>{c.desglose.devoluciones.cuantas} {c.desglose.devoluciones.cuantas === 1 ? "devolución" : "devoluciones"} · no cambian el ingreso</td>
                   <td>− {pesos.format(Math.abs(Number(c.desglose.devoluciones.importe)))}</td></tr>
               ) : null}
+              {c.desglose.gastos.cuantos ? (
+                <tr data-testid="desglose-gastos"><td>Gastos autorizados pagados de la bolsa</td>
+                  <td>{c.desglose.gastos.cuantos} {c.desglose.gastos.cuantos === 1 ? "pago" : "pagos"}</td>
+                  <td>− {pesos.format(Math.abs(Number(c.desglose.gastos.importe)))}</td></tr>
+              ) : null}
               <tr><td><strong>Saldo esperado al entregar</strong></td><td></td><td data-testid="desglose-total"><strong>{pesos.format(Number(c.desglose.calculado))}</strong></td></tr>
             </tbody>
           </table>

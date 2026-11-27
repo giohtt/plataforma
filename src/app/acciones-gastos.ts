@@ -7,7 +7,7 @@
 import { redirect } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
-import { corregirGasto, decidirGasto, solicitarGasto, TEXTO_IMPEDIMENTO, type ErrorGasto } from "@/lib/gastos";
+import { corregirGasto, decidirGasto, pedirExcedente, registrarComprobante, registrarPago, solicitarGasto, TEXTO_IMPEDIMENTO, type ErrorGasto } from "@/lib/gastos";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
 
 export type EstadoGasto = { error?: string; errores?: Partial<Record<string, string>>; valores?: Record<string, string>; intento: number } | null;
@@ -30,10 +30,27 @@ const MENSAJES: Record<ErrorGasto, string> = {
   decision: "Elige autorizar o rechazar.",
   ...TEXTO_IMPEDIMENTO,
   ya_decidido: "Esta versión ya se decidió (quizá otra persona la decidió al mismo tiempo). Recarga la página.",
+  no_autorizado: "Solo se paga un gasto autorizado en su versión vigente.",
+  ya_pagado: "Este gasto ya tiene su pago registrado.",
+  origen: "Elige de dónde salió el dinero (solo los orígenes que puedes usar).",
+  excede: "No puedes registrar más de lo autorizado. Si costó más, pide autorización por el excedente.",
+  fecha: "La fecha del pago va desde el día de la autorización hasta hoy.",
+  cuenta: "Escribe el nombre corto de la cuenta o tarjeta (de 2 a 40 caracteres), sin números de cuenta ni de tarjeta.",
+  referencia: "Escribe la referencia de la operación (de 3 a 60 caracteres).",
+  a_quien: "A quién se pagó debe tener de 2 a 120 caracteres (o déjalo vacío).",
+  autorizo: "Tú autorizaste este gasto: lo paga otra persona.",
+  sin_turno: "Para pagar en efectivo debe haber un turno abierto en la sucursal que paga.",
+  no_responsable: "Para pagar en efectivo debes ser la responsable vigente de ese lugar en el turno abierto.",
+  entrega_en_curso: "Hay un cambio de turno en curso: termina la entrega antes de pagar en efectivo.",
+  comprobante: "Elige ticket, nota o factura, o «Sin comprobante» con motivo (si ya quedó «sin comprobante», lo revisa Dirección).",
+  folio: "El folio puede tener hasta 60 caracteres.",
+  no_excede: "Ese importe no pasa de lo autorizado: registra el pago directamente.",
 };
 const CAMPO: Partial<Record<ErrorGasto, string>> = {
   concepto: "concepto", categoria: "categoria", importe: "importe", proveedor: "proveedor", nota: "nota",
   sucursal_paga: "paga", compra: "compra", motivo: "motivo",
+  origen: "origen", excede: "importe", fecha: "pagadoEl", cuenta: "cuenta", referencia: "referencia", a_quien: "aQuien", comprobante: "tipo", folio: "folio",
+  no_excede: "importeReal",
 };
 
 async function inicio() {
@@ -94,5 +111,47 @@ export async function accionDecidirGasto(previo: EstadoGasto, datos: FormData): 
   const r = await decidirGasto(sql, sesion.usuarioId, codigo, { clave, version: Number(leer("version", 8)), decision, motivo: valores.motivo }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=${decision}`);
   if (r.error === "motivo") return { error: "Revisa los campos marcados.", errores: { motivo: "El motivo debe tener de 5 a 300 caracteres." }, valores, intento };
+  return conError(r.error, valores, intento);
+}
+
+const comprobante = (leer: ReturnType<typeof lector>) => ({ tipo: leer("tipo", 12), folio: leer("folio", 80), motivoSin: leer("motivoSin", 400) });
+
+export async function accionRegistrarPago(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const clave = leer("clave", 20);
+  const valores = { origen: leer("origen", 30), importe: leer("importe", 20), aQuien: leer("aQuien", 200), pagadoEl: leer("pagadoEl", 10),
+                    cuenta: leer("cuenta", 60), referencia: leer("referencia", 80), ...comprobante(leer) };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await registrarPago(sql, sesion.usuarioId, codigo, { ...valores, clave, version: Number(leer("version", 8)) }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=pagado`);
+  if (r.error === "motivo") return { error: "Revisa los campos marcados.", errores: { motivoSin: "Escribe por qué no hay comprobante (de 5 a 300 caracteres)." }, valores, intento };
+  return conError(r.error, valores, intento);
+}
+
+export async function accionRegistrarComprobante(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const clave = leer("clave", 20);
+  const valores = comprobante(leer);
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await registrarComprobante(sql, sesion.usuarioId, codigo, { ...valores, clave }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=comprobante`);
+  if (r.error === "motivo") return { error: "Revisa los campos marcados.", errores: { motivoSin: "Escribe por qué no hay comprobante (de 5 a 300 caracteres)." }, valores, intento };
+  return conError(r.error, valores, intento);
+}
+
+export async function accionPedirExcedente(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const valores = { importeReal: leer("importeReal", 20) };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await pedirExcedente(sql, sesion.usuarioId, codigo, { clave: leer("clave", 20), importeReal: valores.importeReal, envio: leer("envio", 40) },
+    { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${r.clave}?aviso=excedente`);
+  if (r.error === "importe") return { error: "Revisa los campos marcados.", errores: { importeReal: MENSAJES.importe }, valores, intento };
   return conError(r.error, valores, intento);
 }
