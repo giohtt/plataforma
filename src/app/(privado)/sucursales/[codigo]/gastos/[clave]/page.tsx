@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { FormularioComprobante, FormularioCorreccion, FormularioDecision, FormularioExcedente, FormularioPago } from "@/components/Gastos";
+import {
+  FormularioCambioAnticipo, FormularioComprobante, FormularioComprobarAnticipo, FormularioConfirmarAnticipo, FormularioCorreccion, FormularioDecision,
+  FormularioEntregarAnticipo, FormularioExcedente, FormularioPago,
+} from "@/components/Gastos";
 import { obtenerBaseDatos } from "@/lib/db";
 import { detalleGasto, NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, NOMBRE_ORIGEN, TEXTO_IMPEDIMENTO } from "@/lib/gastos";
 import { requerirSesion } from "@/lib/sesion-servidor";
@@ -17,6 +20,13 @@ const AVISO: Record<string, string> = {
   pagado: "Pago registrado. Si fue en efectivo, la salida quedó registrada una sola vez en el turno.",
   comprobante: "Comprobante registrado.",
   excedente: "Se pidió autorización por el excedente, como parte de la misma compra. Lo autorizado se paga aparte.",
+  anticipo: "Anticipo entregado. Salió de caja una sola vez; falta que quien lo recibió lo confirme desde su cuenta.",
+  anticipo_recibido: "Recibiste el anticipo: queda a tu cargo hasta comprobar la compra.",
+  anticipo_comprobado: "Anticipo comprobado: se pagó justo lo entregado.",
+  anticipo_cambio: "Anticipo comprobado. Devuelve el cambio a la responsable de caja: ella lo cuenta y lo recibe.",
+  anticipo_excedente: "Anticipo comprobado. Se pidió autorización por el excedente, como parte de la misma compra.",
+  cambio_recibido: "Cambio recibido completo: entró a caja una sola vez y el anticipo quedó cerrado.",
+  cambio_parcial: "Devolución parcial recibida: entró a caja una sola vez. El anticipo sigue abierto por lo que falta.",
 };
 const TIPO_COMPROBANTE = { ticket: "Ticket", nota: "Nota", factura: "Factura" } as const;
 const hoyDe = (f: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(f);
@@ -43,6 +53,8 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
           <span className={`chip-estado ${CLASE_ESTADO[g.estado]}`}>{NOMBRE_ESTADO_GASTO[g.estado]}</span>
           {g.decididoPor ? ` por ${g.decididoPor}` : ""}{ultima.version > 1 ? ` · versión ${ultima.version}` : ""}
           {g.origenPago ? <> · <span className="chip-estado chip-vigente" data-testid="pagado">Pagado</span></> : null}
+          {d.anticipo && !d.anticipo.comprobado ? <> · <span className="chip-estado chip-programada" data-testid="anticipo-por-comprobar">Fuera de caja: anticipo por comprobar</span></> : null}
+          {d.anticipo && Number(d.anticipo.pendiente) > 0 ? <> · <span className="chip-estado chip-programada" data-testid="cambio-pendiente">Fuera de caja: cambio por devolver {pesos.format(Number(d.anticipo.pendiente))}</span></> : null}
         </p>
         {g.motivoDecision ? <p className="sub" data-testid="motivo-decision">Motivo: «{g.motivoDecision}»</p> : null}
         <dl className="datos-expediente">
@@ -56,6 +68,11 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
             <><dt>Partes de esta compra</dt><dd data-testid="partes">{g.partes.map((x) => `${x.clave} (${pesos.format(Number(x.importe))})`).join(", ")}</dd></>
           ) : null}
           {g.partes.length || g.compraDe ? <><dt>Total de la compra</dt><dd data-testid="total-compra">{pesos.format(Number(g.totalCompra))} · se compara con el límite por gasto</dd></> : null}
+          {(g.partes.length || g.compraDe) && d.pagosCompra.length ? (
+            <><dt>Pagado de la compra</dt>
+              <dd data-testid="pagado-compra">{pesos.format(Number(d.totalPagadoCompra))}
+                <span className="sub"> · {d.pagosCompra.map((p) => `${p.clave}: ${pesos.format(Number(p.importe))} (${NOMBRE_ORIGEN[p.origen]})`).join(" + ")}</span></dd></>
+          ) : null}
           <dt>Solicitó</dt><dd>{g.solicitadoPor} · {fechaHora.format(g.solicitadoEn)}</dd>
           {g.nota ? <><dt>Nota</dt><dd>{g.nota}</dd></> : null}
         </dl>
@@ -74,7 +91,11 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
         ) : null}
         {d.puedePagar.length && d.autorizado ? (
           <FormularioPago codigo={codigo} clave={g.clave} version={ultima.version} autorizado={d.autorizado} origenes={d.puedePagar}
-            proveedor={g.proveedor} hoy={hoyMx()} />
+            proveedor={g.proveedor} hoy={hoyMx()} deAnticipo={d.excedenteDeAnticipo} />
+        ) : null}
+        {d.entregarAnticipo && d.autorizado ? (
+          <FormularioEntregarAnticipo codigo={codigo} clave={g.clave} version={ultima.version} autorizado={d.autorizado}
+            lugares={d.entregarAnticipo.lugares} personas={d.entregarAnticipo.personas} />
         ) : null}
         {d.puedePedirExcedente && d.autorizado ? <FormularioExcedente codigo={codigo} clave={g.clave} autorizado={pesos.format(Number(d.autorizado))} /> : null}
         {d.puedeCorregir ? (
@@ -82,6 +103,45 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
             actual={{ concepto: ultima.concepto, categoria: g.categoriaClave, importe: ultima.importe, proveedor: ultima.proveedor, nota: ultima.nota }} />
         ) : null}
       </section>
+      {d.anticipo ? (
+        <section className="tarjeta" aria-labelledby="t-anticipo" data-testid="anticipo-gasto">
+          <h2 id="t-anticipo" className="titulo-seccion">Anticipo</h2>
+          <dl className="datos-expediente">
+            <dt>Entregado</dt><dd data-testid="anticipo-entregado">{pesos.format(Number(d.anticipo.importe))} · {NOMBRE_ORIGEN[d.anticipo.lugar]}</dd>
+            <dt>Entregó</dt><dd>{d.anticipo.entregadoPor} · {fechaHora.format(d.anticipo.en)}</dd>
+            <dt>A cargo de</dt><dd data-testid="anticipo-recibe">{d.anticipo.recibe}{d.anticipo.recibidoEn ? ` · confirmó ${fechaHora.format(d.anticipo.recibidoEn)}` : " · falta que confirme que lo recibió"}</dd>
+            {d.anticipo.comprobado ? (
+              <>
+                <dt>Pagado al proveedor</dt><dd data-testid="anticipo-gastado">{pesos.format(Number(d.anticipo.comprobado.gastado))}</dd>
+                {Number(d.anticipo.comprobado.cambio) > 0 ? (
+                  <><dt>Cambio</dt><dd data-testid="anticipo-cambio">{pesos.format(Number(d.anticipo.comprobado.cambio))}
+                    {Number(d.anticipo.devuelto) === 0 ? " · por devolver a caja"
+                      : Number(d.anticipo.pendiente) > 0
+                      ? ` · devuelto ${pesos.format(Number(d.anticipo.devuelto))} · falta ${pesos.format(Number(d.anticipo.pendiente))}`
+                      : " · devuelto completo"}</dd>
+                    {d.anticipo.cambios.length ? (
+                      <><dt>Devoluciones</dt><dd><ul className="lista-simple" data-testid="devoluciones-cambio">
+                        {d.anticipo.cambios.map((c, i) => <li key={i}>{pesos.format(Number(c.importe))} · recibió {c.recibidoPor} · {fechaHora.format(c.en)}</li>)}
+                      </ul></dd></>
+                    ) : null}</>
+                ) : null}
+                {Number(d.anticipo.comprobado.excedente) > 0 ? (
+                  <><dt>Excedente</dt><dd data-testid="anticipo-excedente">{pesos.format(Number(d.anticipo.comprobado.excedente))}
+                    {d.anticipo.comprobado.excedenteClave ? <> · <Link href={`/sucursales/${codigo}/gastos/${d.anticipo.comprobado.excedenteClave}`}>{d.anticipo.comprobado.excedenteClave}</Link> (se autoriza y se paga aparte)</> : null}</dd></>
+                ) : null}
+              </>
+            ) : null}
+          </dl>
+          {d.puedeConfirmarAnticipo ? <FormularioConfirmarAnticipo codigo={codigo} clave={g.clave} importe={d.anticipo.importe} /> : null}
+          {d.puedeComprobarAnticipo ? (
+            <FormularioComprobarAnticipo codigo={codigo} clave={g.clave} entregado={d.anticipo.importe} proveedor={g.proveedor} desde={hoyDe(d.anticipo.en)} hoy={hoyMx()} />
+          ) : null}
+          {d.puedeRecibirCambio && d.anticipo.comprobado ? (
+            <FormularioCambioAnticipo codigo={codigo} clave={g.clave} pendiente={d.anticipo.pendiente} recibe={d.anticipo.recibe} />
+          ) : null}
+          <p className="sub">Lo pagado con el anticipo se cuenta una sola vez: la entrega sale de caja, el cambio vuelve, y el excedente se paga con su propia solicitud.</p>
+        </section>
+      ) : null}
       {d.pago ? (
         <section className="tarjeta" aria-labelledby="t-pago" data-testid="pago-gasto">
           <h2 id="t-pago" className="titulo-seccion">Pago</h2>
@@ -136,6 +196,15 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
                   ) : null,
                 ];
               })}
+              {d.anticipo ? (
+                <tr data-testid="anticipo-historial"><td data-etiqueta="Fecha y hora">{fechaHora.format(d.anticipo.en)}</td>
+                  <td data-etiqueta="Qué pasó">Anticipo entregado · {NOMBRE_ORIGEN[d.anticipo.lugar]} · {pesos.format(Number(d.anticipo.importe))} · a {d.anticipo.recibe}</td>
+                  <td data-etiqueta="Cuenta">{d.anticipo.entregadoPor}</td></tr>
+              ) : null}
+              {d.anticipo?.recibidoEn ? (
+                <tr><td data-etiqueta="Fecha y hora">{fechaHora.format(d.anticipo.recibidoEn)}</td>
+                  <td data-etiqueta="Qué pasó">Confirmó que recibió el anticipo</td><td data-etiqueta="Cuenta">{d.anticipo.recibe}</td></tr>
+              ) : null}
               {d.pago ? (
                 <tr data-testid="pago-historial">
                   <td data-etiqueta="Fecha y hora">{fechaHora.format(d.pago.en)}</td>
@@ -152,6 +221,11 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
                 <tr><td data-etiqueta="Fecha y hora">{fechaHora.format(d.sinComprobante.en)}</td>
                   <td data-etiqueta="Qué pasó">Sin comprobante · «{d.sinComprobante.motivo}»</td><td data-etiqueta="Cuenta">{d.sinComprobante.registradoPor}</td></tr>
               ) : null}
+              {d.anticipo?.cambios.map((c, i) => (
+                <tr key={`k${i}`}><td data-etiqueta="Fecha y hora">{fechaHora.format(c.en)}</td>
+                  <td data-etiqueta="Qué pasó">Cambio del anticipo recibido en caja · {pesos.format(Number(c.importe))}</td>
+                  <td data-etiqueta="Cuenta">{c.recibidoPor}</td></tr>
+              ))}
             </tbody>
           </table>
         </div>

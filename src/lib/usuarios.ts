@@ -706,7 +706,8 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
       return {
         ok: true, accion: "facultad_gasto",
         detalle: `Autorizar gastos en ${textoAlcance(c.alcance, s)} · ${montos}${h.valor ? ` · hasta ${h.valor}` : ""}. `
-          + "Lo que pase de ahí se escala; nunca se aprueba en parte. Quien solicita o paga un gasto no lo autoriza (salvo Dirección, lo propio)",
+          + (c.sinLimite ? "" : "Lo que pase de ahí se escala; nunca se aprueba en parte. ")
+          + "Quien solicita o paga un gasto no lo autoriza (salvo Dirección, lo propio)",
       };
     }
     case "delegacion_gasto": {

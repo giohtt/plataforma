@@ -2,9 +2,10 @@
 
 import { useActionState, useState } from "react";
 import {
-  accionCorregirGasto, accionDecidirGasto, accionPedirExcedente, accionRegistrarComprobante, accionRegistrarPago, accionSolicitarGasto, type EstadoGasto,
+  accionComprobarAnticipo, accionConfirmarAnticipo, accionCorregirGasto, accionDecidirGasto, accionEntregarAnticipo, accionPedirExcedente,
+  accionRecibirCambioAnticipo, accionRegistrarComprobante, accionRegistrarPago, accionSolicitarGasto, type EstadoGasto,
 } from "@/app/acciones-gastos";
-import { NOMBRE_ORIGEN, type OrigenPago } from "@/lib/datos-gasto";
+import { NOMBRE_ORIGEN, type LugarAnticipo, type OrigenPago } from "@/lib/datos-gasto";
 import type { Categoria, SucursalOpcion } from "@/lib/gastos";
 
 function ErrorCampo({ estado, campo }: { estado: EstadoGasto; campo: string }) {
@@ -189,11 +190,13 @@ function CamposComprobante({ estado, opcional }: { estado: EstadoGasto; opcional
 }
 
 /** Registrar el pago de un gasto autorizado, con los orígenes que esta persona puede usar ahora. */
-export function FormularioPago({ codigo, clave, version, autorizado, origenes, proveedor, hoy }: {
+export function FormularioPago({ codigo, clave, version, autorizado, origenes, proveedor, hoy, deAnticipo }: {
   codigo: string; clave: string; version: number; autorizado: string; origenes: OrigenPago[]; proveedor: string | null; hoy: string;
+  /** Excedente de un anticipo: ya se pagó al proveedor ese día con dinero de alguien. */
+  deAnticipo?: { clave: string; pagadoEl: string } | null;
 }) {
   const [estado, accion, enviando] = useActionState(accionRegistrarPago, null);
-  const [origen, setOrigen] = useState(estado?.valores?.origen ?? "");
+  const [origen, setOrigen] = useState(estado?.valores?.origen ?? (deAnticipo ? "dinero_personal" : ""));
   const efectivo = origen === "bolsa_visitas" || origen === "cajon_mensualidades";
   return (
     <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-pago">
@@ -202,6 +205,12 @@ export function FormularioPago({ codigo, clave, version, autorizado, origenes, p
       <input type="hidden" name="clave" value={clave} />
       <input type="hidden" name="version" value={version} />
       <h3>Registrar el pago</h3>
+      {deAnticipo ? (
+        <p className="aviso aviso-info" data-testid="pago-excedente-anticipo">
+          Es el excedente del anticipo de {deAnticipo.clave}: ya se pagó al proveedor el {deAnticipo.pagadoEl.split("-").reverse().join("/")} con dinero de
+          quien recibió el anticipo. Lo registra esa persona como dinero personal y queda pendiente de reembolso; lo que salga de caja para devolvérselo es su reembolso.
+        </p>
+      ) : null}
       <fieldset className="campo campo-grupo" aria-invalid={estado?.errores?.origen ? true : undefined}>
         <legend>¿De dónde salió el dinero?</legend>
         {origenes.map((o) => (
@@ -210,7 +219,7 @@ export function FormularioPago({ codigo, clave, version, autorizado, origenes, p
             <span>{NOMBRE_ORIGEN[o]}</span>
           </label>
         ))}
-        {!origenes.some((o) => o === "bolsa_visitas" || o === "cajon_mensualidades")
+        {!deAnticipo && !origenes.some((o) => o === "bolsa_visitas" || o === "cajon_mensualidades")
           ? <span className="sub">En efectivo solo paga la responsable vigente de la bolsa o el cajón, con el turno abierto.</span> : null}
         <ErrorCampo estado={estado} campo="origen" />
       </fieldset>
@@ -223,7 +232,7 @@ export function FormularioPago({ codigo, clave, version, autorizado, origenes, p
           <span className="sub">Lo realmente pagado; hasta {new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(autorizado))} autorizados.</span>
           <ErrorCampo estado={estado} campo="importe" />
         </div>
-        {origen && !efectivo ? (
+        {deAnticipo ? <input type="hidden" name="pagadoEl" value={deAnticipo.pagadoEl} /> : origen && !efectivo ? (
           <div className="campo">
             <label htmlFor="pagadoEl">Fecha del pago</label>
             <input id="pagadoEl" name="pagadoEl" type="date" max={hoy} defaultValue={estado?.valores?.pagadoEl ?? hoy} aria-invalid={estado?.errores?.pagadoEl ? true : undefined} />
@@ -298,6 +307,130 @@ export function FormularioExcedente({ codigo, clave, autorizado }: { codigo: str
         <ErrorCampo estado={estado} campo="importeReal" />
       </div>
       <button className="boton boton-principal" type="submit" disabled={enviando}>Pedir autorización por el excedente</button>
+    </form>
+  );
+}
+
+const pesosMx = (v: string) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(v));
+
+/** La responsable vigente entrega un anticipo, por lo autorizado, a otra persona de la sucursal que paga. */
+export function FormularioEntregarAnticipo({ codigo, clave, version, autorizado, lugares, personas }: {
+  codigo: string; clave: string; version: number; autorizado: string; lugares: LugarAnticipo[]; personas: { id: string; nombre: string }[];
+}) {
+  const [estado, accion, enviando] = useActionState(accionEntregarAnticipo, null);
+  const [abierto, setAbierto] = useState(false);
+  if (!abierto && !estado) return <button className="boton" type="button" onClick={() => setAbierto(true)} data-testid="abrir-anticipo">Entregar anticipo para la compra</button>;
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-anticipo">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <input type="hidden" name="version" value={version} />
+      <h3>Entregar anticipo de {pesosMx(autorizado)}</h3>
+      <fieldset className="campo campo-grupo" aria-invalid={estado?.errores?.lugar ? true : undefined}>
+        <legend>¿De dónde sale el anticipo?</legend>
+        {lugares.map((l) => (
+          <label key={l} className="opcion-revision">
+            <input type="radio" name="lugar" value={l} defaultChecked={estado?.valores?.lugar === l || lugares.length === 1} />
+            <span>{NOMBRE_ORIGEN[l]}</span>
+          </label>
+        ))}
+        <ErrorCampo estado={estado} campo="lugar" />
+      </fieldset>
+      <div className="campo">
+        <label htmlFor="recibe">Quién lo recibe para comprar</label>
+        <select id="recibe" name="recibe" defaultValue={estado?.valores?.recibe ?? ""} aria-invalid={estado?.errores?.recibe ? true : undefined}>
+          <option value="">Elige a la persona…</option>
+          {personas.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+        </select>
+        <span className="sub">Lo confirma desde su cuenta y queda a su cargo hasta comprobarlo.</span>
+        <ErrorCampo estado={estado} campo="recibe" />
+      </div>
+      <p className="sub">Sale de caja al entregarse y baja el esperado una sola vez. El anticipo es por lo autorizado.</p>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Registrando…" : "Entregar anticipo"}</button>
+    </form>
+  );
+}
+
+export function FormularioConfirmarAnticipo({ codigo, clave, importe }: { codigo: string; clave: string; importe: string }) {
+  const [estado, accion, enviando] = useActionState(accionConfirmarAnticipo, null);
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-confirmar-anticipo">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <p>Cuenta el dinero antes de confirmar. Al confirmar, los {pesosMx(importe)} quedan a tu cargo hasta comprobar la compra.</p>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>Confirmo que recibí {pesosMx(importe)}</button>
+    </form>
+  );
+}
+
+/** Quien recibió el anticipo comprueba la compra: lo pagado al proveedor, cuándo, a quién y su comprobante. */
+export function FormularioComprobarAnticipo({ codigo, clave, entregado, proveedor, desde, hoy }: {
+  codigo: string; clave: string; entregado: string; proveedor: string | null; desde: string; hoy: string;
+}) {
+  const [estado, accion, enviando] = useActionState(accionComprobarAnticipo, null);
+  const [envio] = useState(() => crypto.randomUUID());
+  const [gastado, setGastado] = useState(estado?.valores?.gastado ?? "");
+  const g = Number(gastado.replace(/,/g, ""));
+  const diferencia = Number.isFinite(g) && g > 0 ? Math.round((g - Number(entregado)) * 100) / 100 : null;
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-comprobar-anticipo">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <input type="hidden" name="envio" value={envio} />
+      <h3>Comprobar el anticipo</h3>
+      <div className="campos-fila">
+        <div className="campo">
+          <label htmlFor="gastado">Cuánto se pagó al proveedor</label>
+          <div className="importe"><span aria-hidden="true">$</span>
+            <input id="gastado" name="gastado" inputMode="decimal" value={gastado} onChange={(e) => setGastado(e.target.value)} aria-invalid={estado?.errores?.gastado ? true : undefined} />
+          </div>
+          <span className="sub" data-testid="diferencia-anticipo">
+            {diferencia === null ? `Recibiste ${pesosMx(entregado)}.`
+              : diferencia < 0 ? `Sobran ${pesosMx(String(-diferencia))}: los devuelves a la responsable de caja, que los cuenta y los recibe.`
+              : diferencia > 0 ? `Faltan ${pesosMx(String(diferencia))}: se pide autorización por el excedente, como parte de la misma compra.`
+              : "Justo lo entregado: no hay cambio."}
+          </span>
+          <ErrorCampo estado={estado} campo="gastado" />
+        </div>
+        <div className="campo">
+          <label htmlFor="pagadoEl-anticipo">Fecha del pago al proveedor</label>
+          <input id="pagadoEl-anticipo" name="pagadoEl" type="date" min={desde} max={hoy} defaultValue={estado?.valores?.pagadoEl ?? hoy} aria-invalid={estado?.errores?.pagadoEl ? true : undefined} />
+          <span className="sub">Es la fecha del gasto.</span>
+          <ErrorCampo estado={estado} campo="pagadoEl" />
+        </div>
+      </div>
+      <div className="campo">
+        <label htmlFor="aQuien-anticipo">A quién se pagó (opcional)</label>
+        <input id="aQuien-anticipo" name="aQuien" maxLength={120} defaultValue={estado?.valores?.aQuien ?? proveedor ?? ""} aria-invalid={estado?.errores?.aQuien ? true : undefined} />
+        <ErrorCampo estado={estado} campo="aQuien" />
+      </div>
+      <CamposComprobante estado={estado} opcional={false} />
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Registrando…" : "Comprobar anticipo"}</button>
+    </form>
+  );
+}
+
+/** La responsable vigente del lugar cuenta y recibe el cambio; puede ser una parte de lo que falta. */
+export function FormularioCambioAnticipo({ codigo, clave, pendiente, recibe }: { codigo: string; clave: string; pendiente: string; recibe: string }) {
+  const [estado, accion, enviando] = useActionState(accionRecibirCambioAnticipo, null);
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-cambio-anticipo">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <h3>Recibir el cambio de {recibe}</h3>
+      <div className="campo">
+        <label htmlFor="importe-cambio">Cuánto contaste</label>
+        <div className="importe"><span aria-hidden="true">$</span>
+          <input id="importe-cambio" name="importe" inputMode="decimal" defaultValue={estado?.valores?.importe ?? ""} aria-invalid={estado?.errores?.importe ? true : undefined} />
+        </div>
+        <span className="sub">Faltan {pesosMx(pendiente)}. Si te devuelve una parte, registra lo que contaste: el anticipo sigue abierto por el resto. Entra a caja y sube el esperado una sola vez.</span>
+        <ErrorCampo estado={estado} campo="importe" />
+      </div>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>Recibir cambio</button>
     </form>
   );
 }

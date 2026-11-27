@@ -7,7 +7,10 @@
 import { redirect } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
-import { corregirGasto, decidirGasto, pedirExcedente, registrarComprobante, registrarPago, solicitarGasto, TEXTO_IMPEDIMENTO, type ErrorGasto } from "@/lib/gastos";
+import {
+  comprobarAnticipo, confirmarAnticipo, corregirGasto, decidirGasto, entregarAnticipo, pedirExcedente, recibirCambioAnticipo, registrarComprobante, registrarPago,
+  solicitarGasto, TEXTO_IMPEDIMENTO, type ErrorGasto,
+} from "@/lib/gastos";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
 
 export type EstadoGasto = { error?: string; errores?: Partial<Record<string, string>>; valores?: Record<string, string>; intento: number } | null;
@@ -45,6 +48,14 @@ const MENSAJES: Record<ErrorGasto, string> = {
   comprobante: "Elige ticket, nota o factura, o «Sin comprobante» con motivo (si ya quedó «sin comprobante», lo revisa Dirección).",
   folio: "El folio puede tener hasta 60 caracteres.",
   no_excede: "Ese importe no pasa de lo autorizado: registra el pago directamente.",
+  con_anticipo: "Este gasto ya tiene un anticipo entregado: se paga al comprobar el anticipo.",
+  lugar: "Elige de dónde sale el anticipo: bolsa de visitas o cajón de mensualidades.",
+  recibe: "Elige a otra persona de la sucursal que paga (no puede ser quien autorizó el gasto, salvo Dirección).",
+  no_recibe: "Solo quien recibió el anticipo lo confirma y lo comprueba, desde su cuenta.",
+  anticipo_estado: "El anticipo ya avanzó a otro paso (quizá desde otra pantalla). Recarga la página.",
+  cambio: "Es más de lo que falta por devolver. Cuenta otra vez el dinero antes de recibirlo.",
+  devuelve: "Tú devuelves el cambio: lo recibe la responsable vigente del lugar.",
+  excedente_anticipo: "Este excedente ya se pagó al proveedor con dinero de quien recibió el anticipo: lo registra esa persona, como dinero personal. Lo que salga de caja para devolvérselo es su reembolso.",
 };
 const CAMPO: Partial<Record<ErrorGasto, string>> = {
   concepto: "concepto", categoria: "categoria", importe: "importe", proveedor: "proveedor", nota: "nota",
@@ -153,5 +164,58 @@ export async function accionPedirExcedente(previo: EstadoGasto, datos: FormData)
     { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/gastos/${r.clave}?aviso=excedente`);
   if (r.error === "importe") return { error: "Revisa los campos marcados.", errores: { importeReal: MENSAJES.importe }, valores, intento };
+  return conError(r.error, valores, intento);
+}
+
+export async function accionEntregarAnticipo(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const clave = leer("clave", 20);
+  const valores = { lugar: leer("lugar", 30), recibe: leer("recibe", 40) };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await entregarAnticipo(sql, sesion.usuarioId, codigo, { ...valores, clave, version: Number(leer("version", 8)) }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=anticipo`);
+  if (r.error === "lugar" || r.error === "recibe") return { error: "Revisa los campos marcados.", errores: { [r.error]: MENSAJES[r.error] }, valores, intento };
+  return conError(r.error, valores, intento);
+}
+
+export async function accionConfirmarAnticipo(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const clave = leer("clave", 20);
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await confirmarAnticipo(sql, sesion.usuarioId, codigo, { clave }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=anticipo_recibido`);
+  return conError(r.error, {}, intento);
+}
+
+export async function accionComprobarAnticipo(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const clave = leer("clave", 20);
+  const valores = { gastado: leer("gastado", 20), pagadoEl: leer("pagadoEl", 10), aQuien: leer("aQuien", 200), ...comprobante(leer) };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await comprobarAnticipo(sql, sesion.usuarioId, codigo, { ...valores, clave, envio: leer("envio", 40) }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=${r.excedente ? "anticipo_excedente" : Number(r.cambio) > 0 ? "anticipo_cambio" : "anticipo_comprobado"}`);
+  if (r.error === "importe") return { error: "Revisa los campos marcados.", errores: { gastado: MENSAJES.importe }, valores, intento };
+  if (r.error === "fecha") return { error: "Revisa los campos marcados.", errores: { pagadoEl: "La fecha del pago al proveedor va desde el día de la entrega del anticipo hasta hoy." }, valores, intento };
+  if (r.error === "motivo") return { error: "Revisa los campos marcados.", errores: { motivoSin: "Escribe por qué no hay comprobante (de 5 a 300 caracteres)." }, valores, intento };
+  if (r.error === "comprobante") return { error: "Revisa los campos marcados.", errores: { tipo: "Para comprobar, elige ticket, nota o factura, o «Sin comprobante» con motivo." }, valores, intento };
+  return conError(r.error, valores, intento);
+}
+
+export async function accionRecibirCambioAnticipo(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const clave = leer("clave", 20);
+  const valores = { importe: leer("importe", 20) };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await recibirCambioAnticipo(sql, sesion.usuarioId, codigo, { clave, importe: valores.importe }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=${Number(r.pendiente) > 0 ? "cambio_parcial" : "cambio_recibido"}`);
+  if (r.error === "cambio" || r.error === "importe") return { error: "Revisa los campos marcados.", errores: { importe: MENSAJES[r.error] }, valores, intento };
   return conError(r.error, valores, intento);
 }
