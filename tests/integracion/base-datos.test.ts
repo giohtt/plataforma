@@ -104,14 +104,14 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
   });
 
   describe("usuarios, roles y asignaciones", () => {
-    it("el catálogo tiene los ocho perfiles de los manuales y Encargada de retiros (bloque 5); cinco disponibles", async () => {
+    it("el catálogo tiene los ocho perfiles de los manuales, Encargada de retiros (bloque 5) y Gestión administrativa (bloque 6); seis disponibles", async () => {
       const roles = await sql`select clave, disponible_en_bloque_1 from rol order by clave`;
       expect(roles.map((r) => r.clave)).toEqual([
-        "administracion", "contabilidad", "direccion", "encargada_retiros", "encargado",
+        "administracion", "contabilidad", "direccion", "encargada_retiros", "encargado", "gestion_administrativa",
         "mantenimiento", "marketing", "recepcion", "soporte",
       ]);
       expect(roles.filter((r) => r.disponible_en_bloque_1).map((r) => r.clave).sort()).toEqual([
-        "administracion", "direccion", "encargada_retiros", "encargado", "recepcion",
+        "administracion", "direccion", "encargada_retiros", "encargado", "gestion_administrativa", "recepcion",
       ]);
     });
 

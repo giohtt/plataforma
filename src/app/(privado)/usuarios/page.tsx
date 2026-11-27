@@ -9,7 +9,7 @@ export const metadata = { title: "Usuarios, roles y permisos · Fitnessland" };
 const fecha = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium" });
 const fechaHora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
 const VISTAS = { personas: "Personas", perfiles: "Perfiles", historial: "Historial" } as const;
-const ORDEN_ROLES = ["recepcion", "encargado", "encargada_retiros", "administracion", "direccion"];
+const ORDEN_ROLES = ["recepcion", "encargado", "encargada_retiros", "administracion", "gestion_administrativa", "direccion"];
 
 /** Sección para administrar cuentas, perfiles y permisos. El servidor comprueba los permisos en cada consulta y operación. */
 export default async function Usuarios({ searchParams }: PageProps<"/usuarios">) {

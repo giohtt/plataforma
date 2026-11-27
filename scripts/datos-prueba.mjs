@@ -75,9 +75,11 @@ export const ASIGNACIONES_PRUEBA = [
 /** Alcance general (todas las sucursales), otorgado aparte de la asignación. */
 export const ALCANCES_PRUEBA = [{ correo: `direccion.general${D}`, rol: "direccion" }];
 
-/** Facultades de autorización, otorgadas aparte y con un límite ficticio. */
+/**
+ * Facultades de autorización, otorgadas aparte y con un límite ficticio. Autorizar gastos ya no se carga aquí
+ * (27 nov 2026): lleva límite por gasto y acumulado diario, y Dirección lo configura desde la plataforma.
+ */
 export const FACULTADES_PRUEBA = [
-  { correo: `direccion.general${D}`, permiso: "autorizacion.gasto", limite: 1000 },
   // Indicado el 8 nov 2026, solo para la prueba: Dirección Tenango autoriza cancelaciones hasta $150, solo en Tenango.
   { correo: `direccion${D}`, permiso: "autorizacion.devolucion", limite: 150, codigo: "TEN" },
   // Respaldo de Encargado para autorizar accesos (sin importe): permiso explícito, solo en Tenango.

@@ -55,11 +55,11 @@ describe.skipIf(!URL_ADMIN)("reporte de usuarios y asignaciones por sucursal", (
     await asignar(fer, "recepcion", "RPT");
     await sql`update usuario set activo = false where id = ${fer}`;
     const gabi = await usuario("Gabi Facultad Santiago"); // facultad solo de Santiago: no aparece en RPT
-    await sql`insert into facultad_otorgada (usuario_id, permiso, sucursal_id, limite_monto, motivo)
-              values (${gabi}, 'autorizacion.gasto', ${ids.STG}, 300, 'Prueba')`;
+    await sql`insert into facultad_otorgada (usuario_id, permiso, sucursal_id, limite_monto, limite_diario, motivo)
+              values (${gabi}, 'autorizacion.gasto', ${ids.STG}, 300, 600, 'Prueba')`;
     const hugo = await usuario("Hugo Facultad Local"); // facultad de RPT con límite
-    await sql`insert into facultad_otorgada (usuario_id, permiso, sucursal_id, limite_monto, motivo, otorgada_por)
-              values (${hugo}, 'autorizacion.gasto', ${ids.RPT}, 250, 'Prueba', ${otorgante})`;
+    await sql`insert into facultad_otorgada (usuario_id, permiso, sucursal_id, limite_monto, limite_diario, motivo, otorgada_por)
+              values (${hugo}, 'autorizacion.gasto', ${ids.RPT}, 250, 500, 'Prueba', ${otorgante})`;
   });
   afterAll(async () => cerrar?.());
 
@@ -103,7 +103,6 @@ describe.skipIf(!URL_ADMIN)("reporte de usuarios y asignaciones por sucursal", (
     ]);
     // Solo facultades de RPT o de todas; la de Santiago no aparece.
     expect(r.facultades.map((f) => [f.nombre, f.permiso, f.todas, f.limite])).toEqual([
-      ["Dirección general (prueba)", "autorizacion.gasto", true, "1000.00"],
       ["Hugo Facultad Local", "autorizacion.gasto", false, "250.00"],
     ]);
     expect(r.incluyeAnteriores).toBe(false);
@@ -111,9 +110,9 @@ describe.skipIf(!URL_ADMIN)("reporte de usuarios y asignaciones por sucursal", (
 
   it("quien tiene acceso por dos vías cuenta una sola vez en el total de personas", async () => {
     const r = (await reporteUsuariosSucursal(sql, lector, "RPT", { anteriores: false }))!;
-    // Ana, Beto (local y general), Lectora, Dirección general (general y facultad), Hugo.
+    // Ana, Beto (local y general), Lectora, Dirección general (general), Hugo (facultad).
     expect(r.totalPersonas).toBe(5);
-    expect(r.locales.length + r.generales.length + r.facultades.length).toBe(7);
+    expect(r.locales.length + r.generales.length + r.facultades.length).toBe(6);
   });
 
   it("muestra quién otorgó el acceso solo cuando está registrado", async () => {

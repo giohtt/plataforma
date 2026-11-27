@@ -306,7 +306,8 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
     expect(suya.ocultos).toBe(1);
   });
 
-  it("descarga: solo con las sucursales que puede descargar, nombra las excluidas y queda en el historial", async () => {
+  // Varios cambios de acceso con vista previa: con toda la suite en paralelo pasaba de 5 s (27 nov 2026).
+  it("descarga: solo con las sucursales que puede descargar, nombra las excluidas y queda en el historial", { timeout: 20_000 }, async () => {
     const e = await escenario();
     const otra = await escenario();
     // Puede consultar las dos, pero descargar solo la primera.
@@ -740,7 +741,7 @@ describe.skipIf(!URL_ADMIN)("reporte de caja por sucursal y periodo", () => {
     await expect(sql`delete from resolucion_diferencia_sobre where diferencia_id = ${difSobre.id}`).rejects.toThrow(/no se edita/);
   });
 
-  it("autorización para resolver lo propio: quien participó resuelve el faltante del sobre con la marca permanente; vencida o terminada no", async () => {
+  it("autorización para resolver lo propio: quien participó resuelve el faltante del sobre con la marca permanente; vencida o terminada no", { timeout: 20_000 }, async () => {
     const e = await escenario();
     const [bolsa, cajon] = await cerrarDelDia(e);
     await abrir(e);
@@ -954,7 +955,9 @@ describe.skipIf(!URL_ADMIN)("claves fijas para los casos que ya existían", () =
     url.pathname = `/${nombre}`;
     sql = postgresCliente(url.toString(), { max: 6, prepare: false, onnotice: () => {} });
     previas = await mkdtemp(path.join(tmpdir(), "migraciones-"));
-    for (const a of (await readdir(DIRECTORIO_MIGRACIONES)).filter((a) => a < "0044")) await copyFile(path.join(DIRECTORIO_MIGRACIONES, a), path.join(previas, a));
+    // Antes de las claves (0044) y de lo que depende de ellas (0045). Las posteriores que no dependen de ellas (desde
+    // 0046, gastos) se aplican desde el principio para que el código actual de accesos funcione con estos datos.
+    for (const a of (await readdir(DIRECTORIO_MIGRACIONES)).filter((a) => a < "0044" || a >= "0046")) await copyFile(path.join(DIRECTORIO_MIGRACIONES, a), path.join(previas, a));
     await aplicarMigraciones(sql, { directorio: previas });
     await cargarDatosPrueba(sql, { entorno: "pruebas" });
     for (const x of await sql<{ id: string; correo: string }[]>`select id, correo from usuario`) u[x.correo.replace("@prueba.fitnessland.invalid", "")] = x.id;

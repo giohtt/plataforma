@@ -130,7 +130,11 @@ export default async function ReporteUsuarios({ searchParams }: PageProps<"/repo
                   <tr key={f.id}>
                     <td data-etiqueta="Nombre">{f.nombre}</td><td data-etiqueta="Facultad">{f.descripcion}</td>
                     <td data-etiqueta="Alcance">{f.todas ? "Todas las sucursales" : "Esta sucursal"}</td>
-                    <td data-etiqueta="Límite">{f.limite ? pesos.format(Number(f.limite)) : <span className="sub">Sin límite</span>}</td>
+                    <td data-etiqueta="Límite">{f.permiso === "autorizacion.gasto"
+                      ? f.sinLimite ? "Sin límite (Dirección)"
+                        : f.diario ? `${pesos.format(Number(f.limite))} por gasto · ${pesos.format(Number(f.diario))} al día`
+                        : <span className="sub">{pesos.format(Number(f.limite))} · incompleta, sin acumulado diario: no autoriza gastos</span>
+                      : f.limite ? pesos.format(Number(f.limite)) : <span className="sub">Sin límite</span>}</td>
                     <td data-etiqueta="Vigencia"><Vigencia {...f} /></td><td data-etiqueta="Estado"><Estado estado={f.estado} /></td>
                     <td data-etiqueta="Otorgada por">{quien(f.otorgadoPor)}</td>
                   </tr>

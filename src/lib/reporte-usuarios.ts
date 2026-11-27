@@ -36,6 +36,9 @@ export type FacultadEnSucursal = Comun & {
   esAutorizacion: boolean;
   todas: boolean;
   limite: string | null;
+  /** Gastos: acumulado diario y «sin límite» explícito (27 nov 2026). */
+  diario: string | null;
+  sinLimite: boolean;
 };
 
 export type ReporteUsuarios = {
@@ -109,7 +112,7 @@ export async function reporteUsuariosSucursal(
     const facultades = await tx<FacultadEnSucursal[]>`
       select f.id::text, u.id as "usuarioId", u.nombre, f.permiso, p.descripcion, p.es_autorizacion as "esAutorizacion",
              f.todas_las_sucursales as todas, f.limite_monto::text as limite,
-             f.vigente_desde as desde, f.vigente_hasta as hasta, f.revocada_en as "revocadaEn",
+             f.limite_diario::text as diario, f.sin_limite as "sinLimite", f.vigente_desde as desde, f.vigente_hasta as hasta, f.revocada_en as "revocadaEn",
              o.nombre as "otorgadoPor", r.nombre as "revocadoPor",
              ${tx.unsafe(ESTADO("f", "revocada_en"))} as estado
       from facultad_otorgada f

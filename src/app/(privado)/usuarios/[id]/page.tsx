@@ -5,7 +5,7 @@ import {
 } from "@/components/Usuarios";
 import { obtenerBaseDatos } from "@/lib/db";
 import { requerirSesion } from "@/lib/sesion-servidor";
-import { AREAS, pantallaPersona, textoDonde } from "@/lib/usuarios";
+import { AREAS, etiquetaLimite, pantallaPersona, textoDonde } from "@/lib/usuarios";
 
 export const metadata = { title: "Persona · Usuarios, roles y permisos · Fitnessland" };
 
@@ -30,6 +30,8 @@ export default async function Persona({ params, searchParams }: PageProps<"/usua
   if (!p) notFound();
   const f = p.facultades;
   const per = p.persona;
+  const gastos = p.permisos.filter((x) => x.permiso === "autorizacion.gasto");
+  const otros = p.permisos.filter((x) => x.permiso !== "autorizacion.gasto");
   return (
     <main className="contenedor contenedor-medio">
       <p className="sub"><Link href="/usuarios">← Usuarios, roles y permisos</Link></p>
@@ -66,7 +68,7 @@ export default async function Persona({ params, searchParams }: PageProps<"/usua
           Se suman o se quitan a lo que dan sus perfiles. Un permiso quitado (restricción) <strong>prevalece</strong> sobre todos sus perfiles y
           permisos. Los permisos de autorizar siempre llevan límite de monto.
         </p>
-        {p.permisos.map((x) => (
+        {otros.map((x) => (
           <div key={x.id} className="lista-grupo" data-testid={`permiso-${x.permiso}`}>
             <p>+ <strong>{x.descripcion}</strong> · {x.todas ? "todas las sucursales" : x.sucursal}{x.limite ? ` · límite ${pesos.format(Number(x.limite))}` : ""}<br />
               <Vigencia {...x} /> · {x.otorgadoPor ?? "—"} · «{x.motivo}»</p>
@@ -80,8 +82,28 @@ export default async function Persona({ params, searchParams }: PageProps<"/usua
             {f.asignar ? <FormularioCambio persona={per.id} tipo="quitar_restriccion" catalogo={p.catalogo} fijo={{ id: x.id, etiqueta: `${x.descripcion} (${x.todas ? "todas" : x.sucursal})` }} /> : null}
           </div>
         ))}
-        {!p.permisos.length && !p.restricciones.length ? <p className="sub">Ninguno: solo lo que dan sus perfiles.</p> : null}
+        {!otros.length && !p.restricciones.length ? <p className="sub">Ninguno: solo lo que dan sus perfiles.</p> : null}
         {f.asignar ? <p className="fila-acciones"><FormularioCambio persona={per.id} tipo="dar_permiso" catalogo={p.catalogo} /><FormularioCambio persona={per.id} tipo="restringir" catalogo={p.catalogo} /></p> : null}
+      </section>
+
+      <section className="tarjeta" aria-labelledby="t-gastos" data-testid="facultad-gasto">
+        <h2 id="t-gastos" className="titulo-seccion">Autorizar gastos</h2>
+        <p className="sub">
+          Se otorga a la persona, por sucursal, con <strong>límite por gasto</strong> y <strong>acumulado diario</strong>. «Sin límite» es solo para Dirección y
+          se marca a propósito. Nadie autoriza gastos por omisión. Quien solicita o paga un gasto no lo autoriza (salvo Dirección, lo propio).
+        </p>
+        {gastos.map((x) => (
+          <div key={x.id} className="lista-grupo" data-testid="facultad-gasto-vigente">
+            <p><strong>{x.todas ? "Todas las sucursales" : x.sucursal}</strong> ·{" "}
+              {x.sinLimite ? <strong>sin límite</strong>
+                : x.diario ? <>{etiquetaLimite(`${x.limite}|${x.diario}`)}</>
+                : <span className="chip-estado chip-revocada" data-testid="facultad-gasto-incompleta">Incompleta: límite {pesos.format(Number(x.limite))} sin acumulado diario · no autoriza gastos</span>}
+              <br /><Vigencia {...x} /> · {x.otorgadoPor ?? "—"} · «{x.motivo}»</p>
+            {f.asignar ? <FormularioCambio persona={per.id} tipo="quitar_permiso" catalogo={p.catalogo} fijo={{ id: x.id, etiqueta: `Autorizar gastos (${x.todas ? "todas" : x.sucursal})` }} /> : null}
+          </div>
+        ))}
+        {!gastos.length ? <p className="sub" data-testid="facultad-gasto-sin">Sin facultad: no autoriza gastos.</p> : null}
+        {f.asignar ? <FormularioCambio persona={per.id} tipo="facultad_gasto" catalogo={p.catalogo} /> : null}
       </section>
 
       {p.esDireccion || p.autorrevision ? (

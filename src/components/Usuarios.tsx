@@ -147,7 +147,9 @@ function Alcance({ estado, catalogo, una = false, soloTodas = false }: { estado:
   );
 }
 
-function SelectorPermiso({ estado, catalogo, alElegir }: { estado: EstadoUsuarios; catalogo: Catalogo; alElegir?: (clave: string) => void }) {
+function SelectorPermiso({ estado, catalogo, alElegir, excluir = [] }: {
+  estado: EstadoUsuarios; catalogo: Catalogo; alElegir?: (clave: string) => void; excluir?: string[];
+}) {
   const areas = [...new Set(catalogo.permisos.map((p) => p.area))];
   return (
     <div className="campo">
@@ -157,7 +159,7 @@ function SelectorPermiso({ estado, catalogo, alElegir }: { estado: EstadoUsuario
         <option value="">Elige un permiso…</option>
         {areas.map((a) => (
           <optgroup key={a} label={a}>
-            {catalogo.permisos.filter((p) => p.area === a).map((p) => (
+            {catalogo.permisos.filter((p) => p.area === a && !excluir.includes(p.clave)).map((p) => (
               <option key={p.clave} value={p.clave}>{p.tipo} · {p.descripcion}{p.general ? " (general)" : ""}</option>
             ))}
           </optgroup>
@@ -177,6 +179,7 @@ const TITULO: Record<string, { boton: string; ayuda?: string }> = {
   terminar_autorrevision: { boton: "Terminar ahora" },
   autorresolucion: { boton: "Autorizar que resuelva lo propio", ayuda: "Solo para Dirección. Aparte de la de revisar lo propio. Máximo 90 días, se renueva solo a mano. Solo faltantes ya confirmados de retiros y sobres, con «Lo absorbe la sucursal»; cada resolución queda marcada «Resuelta por quien participó»." },
   terminar_autorresolucion: { boton: "Terminar ahora" },
+  facultad_gasto: { boton: "Autorizar gastos" },
 };
 
 /**
@@ -194,6 +197,7 @@ export function FormularioCambio({ persona, tipo, catalogo, fijo, renovar = fals
   // Si cambia algún dato después de revisar, se oculta la vista previa y hay que volver a revisar.
   const [cambiadoEn, setCambiadoEn] = useState<number | null>(null);
   const [permiso, setPermiso] = useState(estado?.valores?.permiso ?? "");
+  const [sinLimite, setSinLimite] = useState(estado?.valores?.sinLimite === "si");
   const esAutorizacion = catalogo.permisos.find((p) => p.clave === permiso)?.esAutorizacion ?? false;
   const vista = estado?.vista && cambiadoEn !== estado.intento ? estado.vista : null;
   if (!mostrar && !estado) {
@@ -222,7 +226,37 @@ export function FormularioCambio({ persona, tipo, catalogo, fijo, renovar = fals
           <ErrorCampo estado={estado} campo="rol" />
         </div>
       ) : null}
-      {tipo === "dar_permiso" || tipo === "restringir" ? <SelectorPermiso estado={estado} catalogo={catalogo} alElegir={setPermiso} /> : null}
+      {tipo === "dar_permiso" || tipo === "restringir"
+        ? <SelectorPermiso estado={estado} catalogo={catalogo} alElegir={setPermiso} excluir={tipo === "dar_permiso" ? ["autorizacion.gasto"] : []} />
+        : null}
+      {tipo === "facultad_gasto" ? (
+        <>
+          <label className="opcion-revision">
+            <input type="checkbox" name="sinLimite" value="si" checked={sinLimite} onChange={(e) => setSinLimite(e.target.checked)} />
+            <span><strong>Sin límite</strong> · solo para una cuenta con Dirección en esas sucursales</span>
+          </label>
+          {sinLimite ? null : (
+            <div className="campos-fila">
+              <div className="campo">
+                <label htmlFor="limite">Límite por gasto</label>
+                <div className="importe"><span aria-hidden="true">$</span>
+                  <input id="limite" name="limite" inputMode="decimal" defaultValue={estado?.valores?.limite ?? ""} aria-invalid={estado?.errores?.limite ? true : undefined} />
+                </div>
+                <ErrorCampo estado={estado} campo="limite" />
+              </div>
+              <div className="campo">
+                <label htmlFor="diario">Acumulado diario</label>
+                <div className="importe"><span aria-hidden="true">$</span>
+                  <input id="diario" name="diario" inputMode="decimal" defaultValue={estado?.valores?.diario ?? ""} aria-invalid={estado?.errores?.diario ? true : undefined} />
+                </div>
+                <span className="sub">Suma de lo que autoriza en un día en esa sucursal.</span>
+                <ErrorCampo estado={estado} campo="diario" />
+              </div>
+            </div>
+          )}
+          {sinLimite ? <ErrorCampo estado={estado} campo="limite" /> : null}
+        </>
+      ) : null}
       {tipo === "dar_permiso" && (esAutorizacion || estado?.valores?.limite) ? (
         <div className="campo">
           <label htmlFor="limite">Límite de monto por autorización</label>
@@ -232,10 +266,10 @@ export function FormularioCambio({ persona, tipo, catalogo, fijo, renovar = fals
           <ErrorCampo estado={estado} campo="limite" />
         </div>
       ) : null}
-      {["dar_perfil", "dar_permiso", "restringir", "autorrevision", "autorresolucion"].includes(tipo) ? (
+      {["dar_perfil", "dar_permiso", "restringir", "autorrevision", "autorresolucion", "facultad_gasto"].includes(tipo) ? (
         <Alcance estado={estado} catalogo={catalogo} una={tipo === "autorrevision" || tipo === "autorresolucion"} />
       ) : null}
-      {["dar_perfil", "dar_permiso", "restringir"].includes(tipo) ? (
+      {["dar_perfil", "dar_permiso", "restringir", "facultad_gasto"].includes(tipo) ? (
         <div className="campo">
           <label htmlFor="hasta">Hasta (opcional)</label>
           <input id="hasta" name="hasta" type="date" min={catalogo.hoy} defaultValue={estado?.valores?.hasta ?? ""} aria-invalid={estado?.errores?.hasta ? true : undefined} />
