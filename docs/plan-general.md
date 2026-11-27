@@ -221,8 +221,8 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
      - El rechazo de un depósito mayor que el saldo del folio queda **verificado en pruebas automáticas** (integración y e2e); las capturas de esta prueba solo muestran el depósito aceptado.
      - Antes, el 13 nov, el retiro `TEN-1113-02` (folio escrito a mano) quedó confirmado al registrarse un conteo de $2,300; no se usó para la prueba de la diferencia y conserva $2,300 sin destino.
    - **Ajuste del 16 nov 2026:** en la página del turno, la acción de retiros está justo debajo de «Turno abierto», con el botón **«Entregar efectivo»**, para no confundirla con «Entregar el turno».
-   - **Resolución de un faltante confirmado** (indicado el 25 nov 2026; en revisión): Dirección elige **«Lo absorbe la sucursal»**, con motivo obligatorio. Cierra el caso y queda en el historial. No cambia el efectivo contado, los depósitos ni el monto habilitado, y no descuenta nada a ninguna persona. Lo resuelve Dirección con el permiso «Resolver faltantes o sobrantes confirmados» que no participó en el retiro. La autorización personal para revisar lo propio **no** se extiende a resolver. Lo mismo aplica al faltante confirmado de un sobre recogido, como caso aparte.
-     - **Autorización para resolver lo propio** (aprobada el 26 nov 2026; PR en revisión): individual y temporal, **aparte** de la de revisar lo propio (una no amplía la otra). La otorga expresamente quien administra accesos, también a sí misma, con vista previa, sucursal (o todas), vigencia de **máximo 90 días**, motivo e historial; se **renueva solo a mano** y nunca se activa ni se renueva sola. Para resolver deben seguir vigentes el perfil de Dirección, el permiso «Resolver faltantes o sobrantes confirmados» y esta autorización en la sucursal del caso; se exige la revisión previa. Alcance: solo faltantes ya confirmados de retiros y sobres, con «Lo absorbe la sucursal», sin modificar dinero ni descontar a personas. Cada resolución hecha así queda marcada para siempre **«Resuelta por quien participó»** en el caso, el reporte (pantalla, Excel y PDF) y el historial; el reporte también marca «Revisada por quien participó». Al vencer o terminarla se bloquean nuevas resoluciones propias y se conserva todo el historial. El 26 nov 2026 Dirección (prueba) se la otorgó a sí misma en todas las sucursales (hasta el 24 feb 2027, 11:38 a.m.) y resolvió C4 con la marca. Ajustes de presentación aprobados el mismo día: en la lista de Diferencias la marca va solo como etiqueta (en archivos e historial sigue en el texto) y los sobrantes llevan «+».
+   - **Resolución de un faltante confirmado** (indicado el 25 nov 2026; unido en el PR #65): Dirección elige **«Lo absorbe la sucursal»**, con motivo obligatorio. Cierra el caso y queda en el historial. No cambia el efectivo contado, los depósitos ni el monto habilitado, y no descuenta nada a ninguna persona. Lo resuelve Dirección con el permiso «Resolver faltantes o sobrantes confirmados» que no participó en el retiro. La autorización personal para revisar lo propio **no** se extiende a resolver. Lo mismo aplica al faltante confirmado de un sobre recogido, como caso aparte.
+     - **Autorización para resolver lo propio** (aprobada el 26 nov 2026; unida en el PR #66): individual y temporal, **aparte** de la de revisar lo propio (una no amplía la otra). La otorga expresamente quien administra accesos, también a sí misma, con vista previa, sucursal (o todas), vigencia de **máximo 90 días**, motivo e historial; se **renueva solo a mano** y nunca se activa ni se renueva sola. Para resolver deben seguir vigentes el perfil de Dirección, el permiso «Resolver faltantes o sobrantes confirmados» y esta autorización en la sucursal del caso; se exige la revisión previa. Alcance: solo faltantes ya confirmados de retiros y sobres, con «Lo absorbe la sucursal», sin modificar dinero ni descontar a personas. Cada resolución hecha así queda marcada para siempre **«Resuelta por quien participó»** en el caso, el reporte (pantalla, Excel y PDF) y el historial; el reporte también marca «Revisada por quien participó». Al vencer o terminarla se bloquean nuevas resoluciones propias y se conserva todo el historial. El 26 nov 2026 Dirección (prueba) se la otorgó a sí misma en todas las sucursales (hasta el 24 feb 2027, 11:38 a.m.) y resolvió C4 con la marca. Ajustes de presentación aprobados el mismo día: en la lista de Diferencias la marca va solo como etiqueta (en archivos e historial sigue en el texto) y los sobrantes llevan «+».
    - **Para después:** foto del comprobante; otros destinos.
 4. **Cierre del día y custodia nocturna (regla 7), con la comparación en la siguiente apertura.** Unido en el PR #56 y probado en el sitio, con la maqueta aprobada el 16 nov 2026 y estas reglas para la primera versión:
    - **Lugar y acceso.** Dirección define por sucursal dónde se guardan los sobres y quién tiene acceso («Custodia de sobres»). Nada viene marcado por omisión y sin esa configuración no se puede cerrar. Cada cierre guarda la configuración vigente; un cambio posterior no altera cierres anteriores.
@@ -287,7 +287,7 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
        - **Compra e instalación del buzón:** decisión de Dirección (no se contrata nada desde la plataforma).
    - **Para después:** retiro desde la custodia durante la noche; reasignar una apertura que quedó en recuento si quien la empezó no puede terminarla; que un aumento lo entregue una persona distinta de quien lo autoriza.
 5. **Reporte básico:** cierres con efectivo esperado, contado, diferencia y entregas; diferencias pendientes de revisión.
-   - **Reporte de caja por sucursal y periodo** (estructura aprobada el 21 nov 2026; permisos y descargas aprobados el mismo día; programado en pruebas, en revisión):
+   - **Reporte de caja por sucursal y periodo** (estructura aprobada el 21 nov 2026; permisos y descargas aprobados el mismo día; unido en el PR #63):
      - **Dónde está el efectivo al corte**, en cinco etapas, con cada peso en una sola: 1) en la sucursal, bolsa y cajón por separado (en el turno o lo guardado al cerrar); 2) sobres por recoger; 3) entregado, pendiente de confirmar (separado de lo confirmado); 4) confirmado, por depositar; 5) depositado en el periodo, que ya salió de la custodia y no se suma. Lo recogido cuenta con lo contado, no con lo anotado.
      - **Cajón:** muestra la fecha de su último conteo y que la información está incompleta. **Junto al total** se señala siempre que está incompleto mientras falten los datos de mensualidades de Open Desk.
      - **Aparte, sin sumarse:** diferencias (las del periodo y las anteriores que siguen abiertas al corte) y sobres por investigar.
@@ -298,7 +298,7 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
      - **Conteo a ciegas:** quien puede recoger sobres no ve lo anotado de los sobres sin contar, tampoco en detalles, historiales ni archivos. Con importes ocultos el recuadro es «Subtotal visible», no «Total». Encargada de retiros tampoco ve el importe de un retiro suyo pendiente de confirmar.
      - **Permisos individuales**, asignables por sucursal o en todas desde «Usuarios, roles y permisos». Ningún perfil los trae, tampoco Dirección. Son «Consultar el reporte de caja» y «Descargar el reporte de caja». Descargar exige poder consultar esa sucursal: se comprueba al darlo, al descargar y en la base. El resumen de la persona solo muestra la descarga donde tiene efecto.
      - **Descargas en Excel y PDF**, resumen o resumen con detalle, con el mismo corte y las advertencias de información incompleta. Quien no recoge descarga los importes que puede ver, con la leyenda «Contiene importes anotados de sobres sin contar» (opción B). Con «Todas mis sucursales», el reporte avisa cuáles se incluyen y el archivo se calcula solo con las que puede descargar. Cada descarga queda en un historial que no se edita: quién, cuándo, sucursales, periodo, corte, formato y si llevaba importes ocultos o anotados.
-     - **Rediseño «Caja y depósitos»** (estructura aprobada el 25 nov 2026 con las maquetas 1, 2, 5, 6 y 7; programado en pruebas, en revisión; no cambia permisos ni reglas operativas):
+     - **Rediseño «Caja y depósitos»** (estructura aprobada el 25 nov 2026 con las maquetas 1, 2, 5, 6 y 7; unido en el PR #64; no cambia permisos ni reglas operativas):
        - **Arriba, cuatro cifras al corte:** en la sucursal, sobres por recoger, entregado pendiente de confirmar y confirmado por depositar. Cada cifra abre su lista por folio. Lo depositado durante el periodo va aparte y no se suma.
        - **Recuadro del total:** «Total registrado al corte» si todo se conoce. «Subtotal visible al corte» si hay importes conocidos y faltan datos u ocultos, diciendo qué falta. «Sin datos» si no hay ningún importe conocido. Un cero registrado se muestra como $0.00; sin sobres registrados al corte, $0.00 y «0 sobres registrados».
        - **Requiere atención:** retiros con 48 horas o más sin depositar, diferencias por revisar o resolver, correcciones pendientes, sobres por investigar y entradas al fondo sin confirmar. Van aparte y no se suman.
@@ -316,33 +316,81 @@ En este bloque, la persona que recoge el efectivo se nombra por su cargo: **«En
          - **«Descargar»** está arriba. Al tocarlo muestra sus opciones y una forma visible de cerrarlas.
          - **Segundo nivel:** movimientos, por folio, origen y destino, diferencias e historial de descargas. En «Origen y destino» hay una fila corta por origen (depositado en el periodo y saldo al corte); sus depósitos, fechas e historial se abren al seleccionarla.
          - **Archivos:** la primera página del PDF sigue la misma lectura. El Excel conserva sus tablas para analizar.
-       - **Diferencias por etapa (25 nov 2026, en revisión):** «Por revisar» (nadie la ha revisado), «Pendiente de resolución» (confirmada, falta la decisión de Dirección: cambios de turno, retiros y sobres, cada uno como caso aparte) y «Corrección pendiente» (ya tiene decisión, falta completarla). Cada caso se muestra con su importe. No se suman entre sí, no se suman al efectivo ni se descuentan a nadie.
+       - **Diferencias por etapa (25 nov 2026; unido):** «Por revisar» (nadie la ha revisado), «Pendiente de resolución» (confirmada, falta la decisión de Dirección: cambios de turno, retiros y sobres, cada uno como caso aparte) y «Corrección pendiente» (ya tiene decisión, falta completarla). Cada caso se muestra con su importe. No se suman entre sí, no se suman al efectivo ni se descuentan a nadie.
        - **Sobrante de $20 del 12 nov:** sigue en «Corrección pendiente» (opción C). Antes de cambiar la decisión hay que precisar qué origen se identificó y qué registro debería corregirse. Que el dinero siga en la bolsa o se deposite no demuestra por sí solo que se corrigió su origen.
        - **Pendientes:** el reporte de ingresos y cobros, el de gastos y resultados, y el aviso de 48 horas para Dirección.
      - **Falta decidir:** el cuadre completo, pendiente de los datos de Open Desk.
-   - **Cambio mal entregado: devolución a la persona visitante** (aprobado el 26 nov 2026; en revisión): al revisar un sobrante de la bolsa se puede ligar al cobro en efectivo donde faltó cambio (visita identificada, con «Recibido», misma bolsa y turno; coincidencia exacta con el sobrante). Dirección que no participó autoriza cada devolución (sin autorización personal). Los $ siguen en el efectivo, desglosados como «por devolver». Recepción, con la bolsa del turno abierto y solo en la sucursal del cobro, entrega y registra que lo recibió la persona; sale una sola vez, baja el esperado y no cambia el ingreso. Un cobro no autoriza dos devoluciones. A los 30 días de la autorización, recordatorio para Dirección; el caso sigue pendiente, sin otra decisión. Pendiente para después: visitante no identificado, importes que no coinciden y qué decide Dirección tras el recordatorio. TEN-D4 sigue intacto.
-   - **Clave fija por caso de diferencia** (aprobada el 26 nov 2026; en revisión): formato código de sucursal + D + número (TEN-D7), numeración por sucursal en orden de registro. Se asigna una sola vez al registrarse el caso y nunca se reutiliza, cambia ni borra; conserva el código original aunque cambie el de la sucursal. Es la misma en pantalla, Excel, PDF, la pantalla del caso y su historial («Clave asignada»). Los casos que ya existían la reciben en el mismo orden, con la fecha de asignación aparte y sin cambiar su fecha original. Las descargas anteriores conservan sus claves D-n.
-   - **Menú de la sucursal por grupos** (aprobado el 26 nov 2026; en revisión): Turno y Visitantes siempre a la vista; «Requiere tu acción» solo cuando hay pendientes; grupos desplegables «Efectivo y depósitos» (abierto al entrar), «Autorizaciones y accesos», «Reportes» y «Configuración de la sucursal» (con «Custodia de sobres»). Los encabezados muestran solo la cantidad de pendientes. Cada persona ve solo lo que permiten sus permisos.
+   - **Cambio mal entregado: devolución a la persona visitante** (aprobado el 26 nov 2026; unido en el PR #72; falta recorrerlo en el sitio): al revisar un sobrante de la bolsa se puede ligar al cobro en efectivo donde faltó cambio (visita identificada, con «Recibido», misma bolsa y turno; coincidencia exacta con el sobrante). Dirección que no participó autoriza cada devolución (sin autorización personal). Los $ siguen en el efectivo, desglosados como «por devolver». Recepción, con la bolsa del turno abierto y solo en la sucursal del cobro, entrega y registra que lo recibió la persona; sale una sola vez, baja el esperado y no cambia el ingreso. Un cobro no autoriza dos devoluciones. A los 30 días de la autorización, recordatorio para Dirección; el caso sigue pendiente, sin otra decisión. Pendiente para después: visitante no identificado, importes que no coinciden y qué decide Dirección tras el recordatorio. TEN-D4 sigue intacto.
+   - **Clave fija por caso de diferencia** (aprobada el 26 nov 2026; unida en el PR #69): formato código de sucursal + D + número (TEN-D7), numeración por sucursal en orden de registro. Se asigna una sola vez al registrarse el caso y nunca se reutiliza, cambia ni borra; conserva el código original aunque cambie el de la sucursal. Es la misma en pantalla, Excel, PDF, la pantalla del caso y su historial («Clave asignada»). Los casos que ya existían la reciben en el mismo orden, con la fecha de asignación aparte y sin cambiar su fecha original. Las descargas anteriores conservan sus claves D-n.
+   - **Menú de la sucursal por grupos** (aprobado el 26 nov 2026; unido en el PR #68): Turno y Visitantes siempre a la vista; «Requiere tu acción» solo cuando hay pendientes; grupos desplegables «Efectivo y depósitos» (abierto al entrar), «Autorizaciones y accesos», «Reportes» y «Configuración de la sucursal» (con «Custodia de sobres»). Los encabezados muestran solo la cantidad de pendientes. Cada persona ve solo lo que permiten sus permisos.
 
-### Bloque 6. Gastos y autorizaciones
-1. Solicitud, autorización, pago desde un lugar de efectivo y comprobación.
-2. Bandeja de autorizaciones. Mientras no haya límites ni delegaciones configurados, todo va a Dirección.
-3. Sucursal que paga y sucursal beneficiada.
-4. **Regla obligatoria para autorizar un gasto**, comprobada en el servidor en el momento de aprobar,
-   dentro de la misma transacción que registra la aprobación (no basta con ocultar el botón):
-   - **Sucursal:** la facultad `autorizacion.gasto` de quien aprueba cubre la sucursal del gasto
-     (otorgada para esa sucursal o para todas).
-   - **Vigencia:** la facultad está vigente en ese momento (no vencida, no futura, no revocada) y la
-     persona sigue activa.
-   - **Importe:** el importe del gasto es menor o igual que el `limite_monto` de esa facultad. Si supera
-     el límite, la solicitud se escala; nunca se aprueba parcialmente.
-   - **Separación:** quien solicita o paga un gasto no lo aprueba.
-   - Si el importe u otra condición cambia después de aprobar, la aprobación deja de valer y se pide de nuevo.
-   - `tiene_permiso` solo responde si la persona tiene la facultad en la sucursal; **no compara importes**.
-     La comparación con el límite se agrega en el bloque 6, con pruebas de importe igual al límite,
-     superior al límite, facultad vencida, facultad de otra sucursal y solicitud directa al servidor.
+### Bloque 6. Gastos y autorizaciones (en curso, solo datos ficticios)
+Acuerdos del 27 nov 2026 sobre las maquetas de las partes 1 (versión 3), 2 (versión 2) y 3 (versión 1). Marcas: **Acordado**, **Propuesta** (sin aprobar) y **Falta decidir**. Ningún límite, plazo, facultad ni monto queda configurado por omisión.
+
+**Parte 1. Quién solicita y quién autoriza**
+- **Acordado:**
+  - Solicitan Recepción, Encargados, Administración, Gestión administrativa y Dirección, dentro de sus sucursales.
+  - **«Gestión administrativa»** es el cargo que se muestra en pantalla para la persona que autoriza gastos junto con Dirección (no se usa su nombre).
+  - Autorizan Dirección, Gestión administrativa y los Encargados, cada uno desde su propia cuenta. Nadie autoriza por omisión: sin facultad configurada no hay botón y el servidor lo rechaza.
+  - La facultad de Dirección es explícita, sin límite y en todas las sucursales. Dirección puede registrar y autorizar sus propios gastos y tiene la decisión final; Gestión administrativa no autoriza los gastos ni las decisiones de Dirección.
+  - Gestión administrativa y los Encargados autorizan solo dentro de los límites y las sucursales que Dirección les asigne. Gestión administrativa no autoriza lo que ella solicita o paga: lo autoriza Dirección.
+  - Ningún Encargado autoriza hasta que Dirección configure su límite. Límite **por gasto** y **acumulado diario**, por persona y sucursal. Una misma compra no se divide para evadirlos.
+  - Lo que pasa el límite del Encargado, o lo que él mismo solicita o paga, llega a Gestión administrativa y a Dirección si tienen facultad suficiente; la primera que decide lo resuelve y queda visible para ambas. Si nadie más tiene facultad suficiente, queda por autorizar para Dirección.
+  - Para pagar por otra sucursal, quien autoriza debe tener facultad suficiente en la sucursal que paga y en la beneficiada; si no, llega a Dirección.
+  - Delegaciones temporales con inicio y fin; rechazos con motivo; se conservan todas las versiones de cada solicitud. Si cambia el importe u otro dato después de autorizar, la autorización deja de valer y se pide de nuevo.
+  - **Avisar no es autorizar:** todo gasto aparece en la bandeja de Dirección aunque lo autorice otra persona, sin segunda aprobación. Gestión administrativa tiene bandeja dentro de su alcance.
+  - **«Pagado sin autorización previa»** solo cuando no hubo una aprobación válida: registrada antes del pago, desde la cuenta de quien autoriza, con facultad vigente en esa sucursal, dentro de sus límites, por al menos lo pagado y sin haber solicitado ni pagado ese gasto (salvo Dirección).
+  - **Gastos ya pagados:** los registran Gestión administrativa, Encargados y Administración (Recepción no; avisa a su Encargado), con quién pagó, de dónde salió el dinero, importe, motivo, fecha y comprobante. Registrar no es aprobar ni autorizar un reembolso; Dirección revisa todos esos casos.
+  - **Pago de un turno cerrado:** se conservan los registros originales de ese turno y no se descuenta del turno actual.
+- **Propuesta:** compra dividida (pregunta «¿Es parte de una compra ya solicitada?» y suma de solicitudes del mismo día, sucursal y proveedor); quién puede rechazar; vista previa e historial al configurar facultades; solo Dirección otorga delegaciones; marca «nuevo para ti» en la bandeja; registro como «Pago de un turno cerrado» con nota en ese turno sin cambiar importes; búsqueda de faltantes del mismo lugar desde el pago, sin ligar nada sola, y decisión de Dirección «Relacionado con…» o «Sin relación» con motivo, sin cambiar el importe ni cerrar la diferencia.
+- **Falta decidir:** montos por gasto y diarios de cada Encargado; monto y sucursales de Gestión administrativa; límite de una delegación; qué decide Dirección al revisar un gasto registrado después de pagarse.
+
+**Parte 2. Cómo se entrega y se comprueba el dinero**
+- **Acordado:**
+  - Cinco orígenes distintos: bolsa de visitas, cajón de mensualidades, transferencia, tarjeta y dinero personal pendiente de reembolso.
+  - **Las salidas del cajón se registran, pero su saldo esperado sigue sin calcularse mientras falten los datos de Open Desk.**
+  - Se registra lo realmente pagado; si pasa de lo autorizado, se pide autorización por el excedente.
+  - Comprobantes: ticket, nota o factura, con fotos (hasta 5 por comprobante; una foto equivocada no se borra: se marca «No corresponde» con motivo). Sin comprobante: se registra con motivo y queda pendiente de revisión de Dirección.
+  - **Anticipos:** si se gasta menos, se comprueba lo real y se registra el cambio recibido; si se necesita más, el excedente requiere nueva autorización. Se separa el excedente autorizado del efectivamente entregado; lo que alguien cubra con su dinero queda como reembolso pendiente, no como salida de caja.
+  - **Reembolsos:** ligados al gasto original, sin duplicar el gasto ni sus comprobantes. Se guardan por separado el pago del reembolso y la confirmación de quien lo recibió. Registrar el pago con dinero personal no autoriza el reembolso.
+  - **Fotos:** incluidas en el bloque, pendientes de activar el almacenamiento. Condiciones de Vercel Blob revisadas el 27 nov 2026 (plan gratuito: 1 GB; si se rebasa no cobra, se pausa 30 días; almacenamiento privado disponible). No se activa ni se contrata nada sin la aprobación de Dirección. Los términos de Vercel limitan el plan gratuito a uso personal o no comercial: se revisa junto con los respaldos antes de datos reales.
+- **Propuesta:** cuentas y tarjetas solo por un nombre corto, sin números; pagar en efectivo solo con la solicitud autorizada y turno abierto, registrando la salida al pagar; el cambio de un anticipo lo cuenta y lo recibe la responsable vigente del lugar; mientras el excedente no se autorice no se entrega nada más.
+- **Falta decidir:** plazos para comprobar y para devolver el cambio, y qué pasa al vencer; si una persona puede tener dos anticipos abiertos; qué decide Dirección al revisar gastos sin comprobante y reembolsos; XML de facturas; almacenamiento para datos reales.
+
+**Parte 3. Cómo aparece en los reportes**
+- **Acordado:**
+  - Cada gasto se suma una sola vez, aunque tenga varios pendientes. Anticipo y reembolso son pasos del mismo dinero, no gastos nuevos.
+  - En anticipos, la fecha del gasto es la del pago al proveedor; se conservan también la entrega del anticipo y la comprobación.
+  - Clave fija por gasto y sucursal (por ejemplo TEN-G12), en pantalla, Excel y PDF.
+  - Caja sigue a la sucursal que paga; Gastos, a la beneficiada.
+  - Un anticipo sin comprobar queda a cargo de quien lo recibió y se muestra como «Fuera de caja: anticipos por comprobar», separado del efectivo en la sucursal y sin sumarse otra vez.
+  - Vistas por estado, sucursal, lugar de efectivo, quién autorizó, origen del dinero y categoría.
+  - Quién ve qué: Dirección todo; Gestión administrativa sus sucursales asignadas; Encargado su sucursal; Administración sus sucursales asignadas; Recepción solo lo de su turno.
+  - Las fotos quedan fuera del Excel y el PDF; se indica cuántas hay y la clave para consultarlas en la plataforma.
+- **Propuesta:** el periodo por la fecha del pago, mostrando también la de registro; nada registrado después del corte aparece en un reporte con ese corte; filas nuevas en Movimientos y Pendientes de Caja; hojas Gastos, Anticipos, Reembolsos e Historial de gastos.
+- **Falta decidir:** lista de categorías (mientras tanto, categorías marcadas «de prueba»); reporte de resultados, pendiente de los ingresos de Open Desk.
+
+**Orden de trabajo (PR pequeños, cada uno abierto hasta su revisión):**
+1. Acuerdos del bloque en este plan.
+2. Cargo «Gestión administrativa» y facultad para autorizar gastos: límite por gasto, acumulado diario, «sin límite» explícito, sucursales y vigencia; delegaciones temporales. Sin facultades ni montos configurados.
+3. Solicitudes con clave fija, versiones, rechazos y sucursal que paga y beneficiada.
+4. Ruta de autorización y bandejas.
+5. Pagos y comprobantes (sin fotos).
+6. Anticipos.
+7. Reembolsos.
+8. Gastos ya pagados y pagos de turnos cerrados.
+9. Reportes de gastos y de caja; Excel y PDF.
+10. Fotos de comprobantes, cuando Dirección active el almacenamiento.
+11. Al final: prueba de carga con datos ficticios para 50 y 100 sucursales.
+
+**Regla obligatoria para autorizar un gasto**, comprobada en el servidor en el momento de aprobar, dentro de la misma transacción que registra la aprobación (no basta con ocultar el botón):
+- **Sucursal:** la facultad `autorizacion.gasto` de quien aprueba cubre la sucursal del gasto (otorgada para esa sucursal o para todas); si paga una sucursal por otra, cubre ambas.
+- **Vigencia:** la facultad está vigente en ese momento (no vencida, no futura, no revocada) y la persona sigue activa.
+- **Importe:** el importe es menor o igual que el límite por gasto y, sumado a lo que esa persona autorizó ese día en esa sucursal, no pasa del acumulado diario. Si supera un límite, la solicitud se escala; nunca se aprueba parcialmente. La facultad «sin límite» se otorga de forma explícita.
+- **Separación:** quien solicita o paga un gasto no lo aprueba, salvo Dirección con sus propios gastos (acordado el 27 nov 2026).
+- Si el importe u otra condición cambia después de aprobar, la aprobación deja de valer y se pide de nuevo.
+- `tiene_permiso` solo responde si la persona tiene la facultad en la sucursal; **no compara importes**. Pruebas: importe igual al límite, superior al límite, acumulado diario rebasado, facultad vencida, facultad de otra sucursal y solicitud directa al servidor.
 - **Reporte básico:** gastos por estado, sucursal, lugar de efectivo y autorizador.
-- **Decisiones que necesita:** cómo aprobará Gloria dentro del programa; límites y suplentes; comprobantes y plazos.
 
 ### Bloque 7. Promociones y beneficios
 1. Catálogo de promociones con versiones, historial y permiso de administración.
