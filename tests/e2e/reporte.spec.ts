@@ -84,8 +84,10 @@ test("vigentes por defecto; «Incluir anteriores» agrega la vencida; quien tien
   // Dirección general: asignación en Tenango y acceso general. Aparece en ambas listas, cuenta una vez.
   await expect(locales).toContainText("Dirección general (prueba)");
   await expect(page.getByTestId("generales")).toContainText("Dirección general (prueba)");
-  await expect(page.getByTestId("facultades-sucursal")).toContainText("Todas las sucursales");
-  await expect(page.getByTestId("facultades-sucursal")).toContainText("$1,000.00");
+  // Facultades de prueba: Dirección (prueba) autoriza cancelaciones en Tenango hasta $150. Autorizar gastos ya no viene
+  // cargado por omisión (27 nov 2026).
+  await expect(page.getByTestId("facultades-sucursal")).toContainText("$150.00");
+  await expect(page.getByTestId("facultades-sucursal")).not.toContainText("Autorizar gastos");
 
   const [{ total }] = await sql<{ total: number }[]>`
     select count(*)::int as total from usuario u, sucursal s
