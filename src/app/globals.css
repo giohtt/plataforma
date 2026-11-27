@@ -1337,7 +1337,7 @@ td.mono {
 .campos-fila {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 0 16px;
+  gap: 12px 16px;
 }
 @media (min-width: 640px) {
   .campos-fila { grid-template-columns: 1fr 1fr; }

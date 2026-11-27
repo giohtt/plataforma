@@ -87,6 +87,18 @@ export const FACULTADES_PRUEBA = [
 ];
 
 /**
+ * Categorías de gasto solo para pruebas (27 nov 2026): la lista real sigue pendiente de Dirección. Van marcadas
+ * «de prueba» en el nombre y en el catálogo.
+ */
+export const CATEGORIAS_PRUEBA = [
+  { clave: "prueba_limpieza", nombre: "Limpieza (de prueba)", orden: 1 },
+  { clave: "prueba_agua", nombre: "Agua (de prueba)", orden: 2 },
+  { clave: "prueba_mantenimiento", nombre: "Mantenimiento (de prueba)", orden: 3 },
+  { clave: "prueba_papeleria", nombre: "Papelería (de prueba)", orden: 4 },
+  { clave: "prueba_otros", nombre: "Otros (de prueba)", orden: 5 },
+];
+
+/**
  * Expedientes de visitantes ficticios para probar búsqueda y coincidencias: dos homónimas, un teléfono
  * compartido, un nombre con acentos y uno sin teléfono. Los teléfonos empiezan con 0: ningún número
  * de México empieza así, de modo que no pueden pertenecer a nadie.
@@ -228,7 +240,14 @@ export async function cargarDatosPrueba(sql, { entorno }) {
         returning id`;
       distintos += filas.length;
     }
-    return { sucursales, usuarios, asignaciones, alcances, facultades, visitantes, distintos };
+    let categorias = 0;
+    for (const c of CATEGORIAS_PRUEBA) {
+      const filas = await tx`
+        insert into categoria_gasto (clave, nombre, de_prueba, orden) values (${c.clave}, ${c.nombre}, true, ${c.orden})
+        on conflict do nothing returning clave`;
+      categorias += filas.length;
+    }
+    return { sucursales, usuarios, asignaciones, alcances, facultades, visitantes, distintos, categorias };
   });
 }
 

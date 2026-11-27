@@ -343,7 +343,8 @@ Acuerdos del 27 nov 2026 sobre las maquetas de las partes 1 (versión 3), 2 (ver
   - **Gastos ya pagados:** los registran Gestión administrativa, Encargados y Administración (Recepción no; avisa a su Encargado), con quién pagó, de dónde salió el dinero, importe, motivo, fecha y comprobante. Registrar no es aprobar ni autorizar un reembolso; Dirección revisa todos esos casos.
   - **Pago de un turno cerrado:** se conservan los registros originales de ese turno y no se descuenta del turno actual.
 - **Propuesta:** compra dividida (pregunta «¿Es parte de una compra ya solicitada?» y suma de solicitudes del mismo día, sucursal y proveedor); quién puede rechazar; vista previa e historial al configurar facultades; solo Dirección otorga delegaciones; marca «nuevo para ti» en la bandeja; registro como «Pago de un turno cerrado» con nota en ese turno sin cambiar importes; búsqueda de faltantes del mismo lugar desde el pago, sin ligar nada sola, y decisión de Dirección «Relacionado con…» o «Sin relación» con motivo, sin cambiar el importe ni cerrar la diferencia.
-- **Falta decidir:** montos por gasto y diarios de cada Encargado; monto y sucursales de Gestión administrativa; límite de una delegación; qué decide Dirección al revisar un gasto registrado después de pagarse.
+- **Delegaciones temporales (acordado el 27 nov 2026, 13:17):** Dirección fija expresamente los límites y las sucursales al otorgarlas; no se heredan de quien delega. Siempre llevan inicio y fin.
+- **Falta decidir:** montos por gasto y diarios de cada Encargado; monto y sucursales de Gestión administrativa; qué decide Dirección al revisar un gasto registrado después de pagarse.
 
 **Parte 2. Cómo se entrega y se comprueba el dinero**
 - **Acordado:**
@@ -372,9 +373,9 @@ Acuerdos del 27 nov 2026 sobre las maquetas de las partes 1 (versión 3), 2 (ver
 
 **Orden de trabajo (PR pequeños, cada uno abierto hasta su revisión):**
 1. Acuerdos del bloque en este plan.
-2. Cargo «Gestión administrativa» y facultad para autorizar gastos: límite por gasto, acumulado diario, «sin límite» explícito, sucursales y vigencia; delegaciones temporales. Sin facultades ni montos configurados.
-3. Solicitudes con clave fija, versiones, rechazos y sucursal que paga y beneficiada.
-4. Ruta de autorización y bandejas.
+2. ~~Cargo «Gestión administrativa» y facultad para autorizar gastos~~ (unido en el PR #74): límite por gasto, acumulado diario, «sin límite» explícito y solo para Dirección, sucursales y vigencia. Sin facultades ni montos configurados.
+3. Solicitudes con clave fija (por sucursal beneficiada: TEN-G1), versiones con motivo, sucursal que paga y beneficiada, y «parte de una compra ya solicitada». Recepción ve lo que ella solicitó; Encargado, Administración, Gestión administrativa y Dirección, los gastos de sus sucursales. Solicitar no mueve dinero ni autoriza.
+4. Ruta de autorización, rechazos con motivo, bandejas y delegaciones temporales (límites y sucursales fijados por Dirección, con inicio y fin).
 5. Pagos y comprobantes (sin fotos).
 6. Anticipos.
 7. Reembolsos.
