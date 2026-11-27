@@ -65,6 +65,11 @@ test("reembolso: Dirección lo autoriza, Recepción lo paga de la bolsa una vez 
   await expect(fila.getByTestId("reembolso-bandeja")).toHaveText("Reembolso por decidir · Dirección");
   await fila.getByRole("link", { name: r.clave }).click();
   await expect(page.getByTestId("estado-reembolso")).toHaveText("Reembolso por decidir · Dirección");
+  const rv = page.getByTestId("revision-reembolso");
+  await expect(rv).toContainText(`${r.clave} · Focos ficticios`);
+  await expect(rv).toContainText(`${adm.nombre} · $120.00`);
+  await expect(rv).toContainText(`$120.00 por ${enc.nombre}`);
+  await expect(rv.getByTestId("revision-comprobantes")).toHaveText("Ticket");
   const f = page.getByTestId("formulario-decision-reembolso");
   await expect(f).toContainText(`Decidir el reembolso de $120.00 a ${adm.nombre}`);
   await capturar(page, "reembolso-decidir");
@@ -98,4 +103,45 @@ test("reembolso: Dirección lo autoriza, Recepción lo paga de la bolsa una vez 
   await expect(page.getByTestId("estado-reembolso")).toHaveText("Reembolso recibido");
   await expect(page.getByTestId("importe-pagado")).toHaveText("$120.00");
   await capturar(page, "reembolso-recibido");
+
+  // Sin comprobante: queda señalado; autorizar exige motivo. Se rechaza, se presenta de nuevo y se decide otra vez.
+  const r2 = await solicitarGasto(sql, rec.id, codigo, { concepto: "Cinta ficticia", categoria: "prueba_mantenimiento", importe: "45",
+    proveedor: "", nota: "", pagaId: "", compraDe: "", envio: randomUUID() }, PRUEBAS);
+  if (!r2.ok) throw new Error(r2.error);
+  const d2 = await decidirGasto(sql, enc.id, codigo, { clave: r2.clave, version: 1, decision: "autorizado", motivo: "" }, PRUEBAS);
+  if (!d2.ok) throw new Error(d2.error);
+  const p2 = await registrarPago(sql, adm.id, codigo, { clave: r2.clave, version: 1, origen: "dinero_personal", importe: "45", aQuien: "", pagadoEl: hoyMx(),
+    cuenta: "", referencia: "", tipo: "", folio: "", motivoSin: "" }, PRUEBAS);
+  if (!p2.ok) throw new Error(p2.error);
+  await entrar(page, dir.correo);
+  await page.goto(`/sucursales/${codigo}/gastos/${r2.clave}`);
+  await expect(page.getByTestId("falta-comprobante")).toContainText("Falta comprobante");
+  await page.getByTestId("formulario-decision-reembolso").getByRole("button", { name: "Autorizar reembolso" }).click();
+  await expect(page.getByText("Falta comprobante: para autorizar el reembolso así, escribe expresamente el motivo")).toBeVisible();
+  await capturar(page, "reembolso-sin-comprobante");
+  const f2 = page.getByTestId("formulario-decision-reembolso");
+  await f2.getByLabel(/Motivo/).fill("Prueba ficticia: falta el ticket de la cinta");
+  await f2.getByRole("button", { name: "Rechazar reembolso" }).click();
+  await expect(page.getByTestId("estado-reembolso")).toHaveText("Reembolso rechazado · puede presentarse de nuevo");
+  await entrar(page, adm.correo);
+  await page.goto(`/sucursales/${codigo}/gastos/${r2.clave}`);
+  const pn = page.getByTestId("formulario-presentar-reembolso");
+  await pn.getByLabel("Qué corregiste o qué información agregas").fill("Prueba ficticia: el proveedor no dio ticket; anexo la explicación");
+  await pn.getByRole("button", { name: "Presentar de nuevo" }).click();
+  await expect(page.getByRole("status")).toHaveText("Reembolso presentado de nuevo. El rechazo anterior se conserva; lo decide Dirección.");
+  await expect(page.getByTestId("estado-reembolso")).toHaveText("Reembolso presentado de nuevo · por decidir · Dirección");
+  await expect(page.getByTestId("formulario-presentar-reembolso")).toHaveCount(0);
+  await entrar(page, dir.correo);
+  await page.goto("/gastos?vista=reembolsos");
+  await expect(page.getByTestId("fila-bandeja").filter({ hasText: r2.clave })).toHaveCount(1);
+  await page.goto(`/sucursales/${codigo}/gastos/${r2.clave}`);
+  const f3 = page.getByTestId("formulario-decision-reembolso");
+  await f3.getByLabel(/Motivo/).fill("Prueba ficticia: se acepta la explicación");
+  await f3.getByRole("button", { name: "Autorizar reembolso" }).click();
+  await expect(page.getByTestId("rondas-reembolso").getByRole("listitem")).toHaveCount(3);
+  await expect(page.getByTestId("rondas-reembolso")).toContainText("Rechazado por");
+  await expect(page.getByTestId("rondas-reembolso")).toContainText("Presentado de nuevo por");
+  await expect(page.getByTestId("rondas-reembolso")).toContainText("Autorizado por");
+  await expect(page.getByTestId("rondas-reembolso")).toContainText("sin comprobante");
+  await capturar(page, "reembolso-rondas");
 });

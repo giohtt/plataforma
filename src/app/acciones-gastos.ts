@@ -9,7 +9,7 @@ import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import {
   comprobarAnticipo, confirmarAnticipo, confirmarReembolso, corregirGasto, decidirGasto, decidirReembolso, entregarAnticipo, pagarReembolso, pedirExcedente,
-  recibirCambioAnticipo, registrarComprobante, registrarPago, solicitarGasto, TEXTO_IMPEDIMENTO, type ErrorGasto,
+  presentarReembolso, recibirCambioAnticipo, registrarComprobante, registrarPago, solicitarGasto, TEXTO_IMPEDIMENTO, type ErrorGasto,
 } from "@/lib/gastos";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
 
@@ -61,6 +61,8 @@ const MENSAJES: Record<ErrorGasto, string> = {
   reembolso_no_autorizado: "Solo se paga un reembolso autorizado por Dirección.",
   ya_reembolsado: "Este reembolso ya se pagó.",
   propio_reembolso: "Tú recibes este reembolso: lo paga otra persona.",
+  motivo_sin_comprobante: "Falta comprobante: para autorizar el reembolso así, escribe expresamente el motivo (de 5 a 300 caracteres).",
+  no_rechazado: "Solo se presenta de nuevo un reembolso rechazado (y una vez por rechazo). Recarga la página.",
   excedente_anticipo: "Este excedente ya se pagó al proveedor con dinero de quien recibió el anticipo: lo registra esa persona, como dinero personal. Lo que salga de caja para devolvérselo es su reembolso.",
 };
 const CAMPO: Partial<Record<ErrorGasto, string>> = {
@@ -239,6 +241,7 @@ export async function accionDecidirReembolso(previo: EstadoGasto, datos: FormDat
   }
   const r = await decidirReembolso(sql, sesion.usuarioId, codigo, { clave, decision, motivo: valores.motivo }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=reembolso_${decision}`);
+  if (r.error === "motivo_sin_comprobante") return { error: "Revisa los campos marcados.", errores: { motivo: MENSAJES.motivo_sin_comprobante }, valores, intento };
   if (r.error === "motivo") return { error: "Revisa los campos marcados.", errores: { motivo: "El motivo debe tener de 5 a 300 caracteres." }, valores, intento };
   return conError(r.error, valores, intento);
 }
@@ -264,4 +267,17 @@ export async function accionConfirmarReembolso(previo: EstadoGasto, datos: FormD
   const r = await confirmarReembolso(sql, sesion.usuarioId, codigo, { clave }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=reembolso_recibido`);
   return conError(r.error, {}, intento);
+}
+
+export async function accionPresentarReembolso(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const clave = leer("clave", 20);
+  const valores = { nota: leer("nota", 400) };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await presentarReembolso(sql, sesion.usuarioId, codigo, { clave, nota: valores.nota }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=reembolso_presentado`);
+  if (r.error === "nota") return { error: "Revisa los campos marcados.", errores: { nota: "Escribe qué corregiste o qué información agregas (de 5 a 300 caracteres)." }, valores, intento };
+  return conError(r.error, valores, intento);
 }

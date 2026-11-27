@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from "react";
 import {
-  accionComprobarAnticipo, accionConfirmarAnticipo, accionConfirmarReembolso, accionCorregirGasto, accionDecidirReembolso, accionPagarReembolso, accionDecidirGasto, accionEntregarAnticipo, accionPedirExcedente,
+  accionComprobarAnticipo, accionConfirmarAnticipo, accionConfirmarReembolso, accionCorregirGasto, accionDecidirReembolso, accionPagarReembolso, accionPresentarReembolso, accionDecidirGasto, accionEntregarAnticipo, accionPedirExcedente,
   accionRecibirCambioAnticipo, accionRegistrarComprobante, accionRegistrarPago, accionSolicitarGasto, type EstadoGasto,
 } from "@/app/acciones-gastos";
 import { NOMBRE_ORIGEN, type LugarAnticipo, type OrigenPago, type OrigenReembolso } from "@/lib/datos-gasto";
@@ -435,8 +435,10 @@ export function FormularioCambioAnticipo({ codigo, clave, pendiente, recibe }: {
   );
 }
 
-/** Dirección decide el reembolso de lo pagado con dinero personal. Rechazar exige motivo. */
-export function FormularioDecisionReembolso({ codigo, clave, importe, beneficiario }: { codigo: string; clave: string; importe: string; beneficiario: string }) {
+/** Dirección decide el reembolso de lo pagado con dinero personal. Rechazar exige motivo; si falta comprobante, autorizar también. */
+export function FormularioDecisionReembolso({ codigo, clave, importe, beneficiario, sinComprobante }: {
+  codigo: string; clave: string; importe: string; beneficiario: string; sinComprobante: boolean;
+}) {
   const [estado, accion, enviando] = useActionState(accionDecidirReembolso, null);
   return (
     <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-decision-reembolso">
@@ -445,7 +447,7 @@ export function FormularioDecisionReembolso({ codigo, clave, importe, beneficiar
       <input type="hidden" name="clave" value={clave} />
       <h3>Decidir el reembolso de {pesosMx(importe)} a {beneficiario}</h3>
       <div className="campo">
-        <label htmlFor="motivo-reembolso">Motivo (obligatorio para rechazar)</label>
+        <label htmlFor="motivo-reembolso">{sinComprobante ? "Motivo (obligatorio: falta comprobante)" : "Motivo (obligatorio para rechazar)"}</label>
         <textarea id="motivo-reembolso" name="motivo" maxLength={300} defaultValue={estado?.valores?.motivo ?? ""} aria-invalid={estado?.errores?.motivo ? true : undefined} />
         <ErrorCampo estado={estado} campo="motivo" />
       </div>
@@ -516,6 +518,26 @@ export function FormularioConfirmarReembolso({ codigo, clave, importe }: { codig
       <input type="hidden" name="codigo" value={codigo} />
       <input type="hidden" name="clave" value={clave} />
       <button className="boton boton-principal" type="submit" disabled={enviando}>Confirmo que recibí el reembolso de {pesosMx(importe)}</button>
+    </form>
+  );
+}
+
+/** Después de un rechazo, quien puso el dinero lo presenta de nuevo con lo que corrigió. */
+export function FormularioPresentarReembolso({ codigo, clave }: { codigo: string; clave: string }) {
+  const [estado, accion, enviando] = useActionState(accionPresentarReembolso, null);
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-presentar-reembolso">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <h3>Presentar de nuevo el reembolso</h3>
+      <div className="campo">
+        <label htmlFor="nota-reembolso">Qué corregiste o qué información agregas</label>
+        <textarea id="nota-reembolso" name="nota" maxLength={300} defaultValue={estado?.valores?.nota ?? ""} aria-invalid={estado?.errores?.nota ? true : undefined} />
+        <span className="sub">Si faltaba el comprobante, agrégalo primero en «Pago». El rechazo anterior se conserva.</span>
+        <ErrorCampo estado={estado} campo="nota" />
+      </div>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>Presentar de nuevo</button>
     </form>
   );
 }

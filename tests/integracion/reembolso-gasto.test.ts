@@ -3,7 +3,7 @@ import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   comprobarAnticipo, confirmarAnticipo, confirmarReembolso, decidirGasto, decidirReembolso, detalleGasto, entregarAnticipo, pagarReembolso,
-  reembolsosPendientes, registrarPago, solicitarGasto, bandejaGastos,
+  presentarReembolso, reembolsosPendientes, registrarComprobante, registrarPago, solicitarGasto, bandejaGastos,
 } from "@/lib/gastos";
 import { abrirTurno, estadoTurno } from "@/lib/turnos";
 import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
@@ -37,8 +37,9 @@ async function autorizado(importe: string) {
   if (!d.ok) throw new Error(d.error);
   return r.clave;
 }
-const personal = (u: string, clave: string, importe: string) => registrarPago(sql, u, codigo, { clave, version: 1, origen: "dinero_personal", importe,
-  aQuien: "", pagadoEl: hoyMx(), cuenta: "", referencia: "", tipo: "ticket", folio: "", motivoSin: "" }, PRUEBAS);
+const personal = (u: string, clave: string, importe: string, tipo = "ticket") => registrarPago(sql, u, codigo, { clave, version: 1, origen: "dinero_personal", importe,
+  aQuien: "", pagadoEl: hoyMx(), cuenta: "", referencia: "", tipo, folio: "", motivoSin: "" }, PRUEBAS);
+const autorizadoHoy = async (u: string) => (await sql<{ v: string }[]>`select autorizado_hoy(${u}, ${sucursal})::text as v`)[0].v;
 const decidir = (u: string, clave: string, decision: string, motivo = "") => decidirReembolso(sql, u, codigo, { clave, decision, motivo }, PRUEBAS);
 const pagar = (u: string, clave: string, origen = "bolsa_visitas", cuenta = "", referencia = "") =>
   pagarReembolso(sql, u, codigo, { clave, origen, cuenta, referencia }, PRUEBAS);
@@ -90,7 +91,18 @@ describe.skipIf(!URL_ADMIN)("reembolsos", () => {
     expect(await decidir(ges, exc, "autorizado")).toEqual({ ok: false, error: "no_direccion" });
     expect(await reembolsosPendientes(sql, dir, sucursal)).toMatchObject({ porDecidir: 1 });
     expect((await bandejaGastos(sql, dir, "reembolsos"))?.gastos.map((g) => g.clave)).toContain(exc);
+    // Lo que Dirección revisa: gasto original, quién puso el dinero y cuánto, su autorización y sus comprobantes.
+    expect((await detalleGasto(sql, dir, codigo, exc))?.reembolsoDetalle?.revision).toMatchObject({
+      clave: exc, compraDe: a, deAnticipo: a, autorizadoPor: "Encargado R", autorizadoImporte: "70.00", pagadoEl: hoyMx(), comprobantes: [{ tipo: "ticket" }],
+    });
+    // Decidir el reembolso no consume el acumulado diario: el gasto ya se autorizó una vez.
+    const hoyDir = await autorizadoHoy(dir);
+    const hoyEnc = await autorizadoHoy(enc);
     expect(await decidir(dir, exc, "autorizado")).toEqual({ ok: true });
+    expect(await autorizadoHoy(dir)).toBe(hoyDir);
+    expect(await autorizadoHoy(enc)).toBe(hoyEnc);
+    const [{ decisiones }] = await sql<{ decisiones: number }[]>`select count(*)::int as decisiones from decision_gasto where gasto_id = ${await idDe(exc)}`;
+    expect(decisiones).toBe(1);
     expect(await decidir(dir, exc, "rechazado", "Ya se decidió antes")).toEqual({ ok: false, error: "reembolso_decidido" });
 
     // Se paga una sola vez, por lo pagado, a otra persona; en efectivo por la responsable vigente.
@@ -122,6 +134,48 @@ describe.skipIf(!URL_ADMIN)("reembolsos", () => {
     expect(n).toBe(1);
   });
 
+  it("falta comprobante: queda señalado y autorizar exige motivo; un rechazo se presenta de nuevo sin duplicar el pendiente", async () => {
+    const s1 = await autorizado("90");
+    expect(await personal(adm, s1, "90", "")).toEqual({ ok: true });
+    let d = await detalleGasto(sql, dir, codigo, s1);
+    expect(d?.reembolsoDetalle?.revision.comprobantes).toEqual([]);
+    expect(await decidir(dir, s1, "autorizado")).toEqual({ ok: false, error: "motivo_sin_comprobante" });
+    expect(await decidir(dir, s1, "autorizado", "Prueba ficticia: lo autorizo aunque falte el ticket")).toEqual({ ok: true });
+    d = await detalleGasto(sql, dir, codigo, s1);
+    expect(d?.reembolsoDetalle?.decision).toMatchObject({ decision: "autorizado", sinComprobante: true, ronda: 1 });
+
+    // Rechazado: quien puso el dinero lo presenta de nuevo con lo corregido; el rechazo se conserva y hay un solo pendiente.
+    const s2 = await autorizado("95");
+    expect(await personal(adm, s2, "95", "")).toEqual({ ok: true });
+    expect(await decidir(dir, s2, "rechazado", "Prueba ficticia: falta el ticket")).toEqual({ ok: true });
+    expect((await detalleGasto(sql, adm, codigo, s2))?.reembolsoDetalle?.estado).toBe("rechazado");
+    expect(await decidir(dir, s2, "autorizado", "Sin que lo presenten de nuevo")).toEqual({ ok: false, error: "reembolso_decidido" });
+    expect(await pagar(rec, s2)).toEqual({ ok: false, error: "reembolso_no_autorizado" });
+    expect(await presentarReembolso(sql, rec, codigo, { clave: s2, nota: "Lo presenta otra persona" }, PRUEBAS)).toEqual({ ok: false, error: "no_recibe" });
+    expect(await presentarReembolso(sql, adm, codigo, { clave: s2, nota: "" }, PRUEBAS)).toEqual({ ok: false, error: "nota" });
+    expect(await registrarComprobante(sql, adm, codigo, { clave: s2, tipo: "ticket", folio: "T-95", motivoSin: "" }, PRUEBAS)).toEqual({ ok: true });
+    expect(await presentarReembolso(sql, adm, codigo, { clave: s2, nota: "Agregué el ticket T-95 que faltaba" }, PRUEBAS)).toEqual({ ok: true });
+    expect(await presentarReembolso(sql, adm, codigo, { clave: s2, nota: "Otra vez lo mismo" }, PRUEBAS)).toEqual({ ok: false, error: "no_rechazado" });
+    d = await detalleGasto(sql, dir, codigo, s2);
+    expect(d?.reembolsoDetalle?.estado).toBe("presentado_de_nuevo");
+    expect(d?.puedeDecidirReembolso).toBe(true);
+    expect((await bandejaGastos(sql, dir, "reembolsos"))?.gastos.filter((g) => g.clave === s2)).toHaveLength(1);
+    expect(await decidir(dir, s2, "autorizado")).toEqual({ ok: true });
+    d = await detalleGasto(sql, dir, codigo, s2);
+    expect(d?.reembolsoDetalle?.rondas.map((x) => [x.tipo, x.ronda, x.decision])).toEqual([["decision", 1, "rechazado"], ["reenvio", 2, null], ["decision", 2, "autorizado"]]);
+    expect(d?.reembolsoDetalle?.estado).toBe("por_pagar");
+
+    // Pagado una vez, no se vuelve a pagar aunque falte confirmar; solo confirma quien puso el dinero.
+    expect(await pagar(rec, s2)).toEqual({ ok: true });
+    expect((await detalleGasto(sql, adm, codigo, s2))?.reembolsoDetalle?.estado).toBe("pagado");
+    expect(await pagar(rec, s2)).toEqual({ ok: false, error: "ya_reembolsado" });
+    expect(await pagar(ges, s2, "transferencia", "Cuenta ficticia", "REF-95")).toEqual({ ok: false, error: "ya_reembolsado" });
+    const [{ rid }] = await sql<{ rid: string }[]>`select r.id as rid from reembolso_gasto r join pago_gasto p on p.id = r.pago_id where p.gasto_id = ${await idDe(s2)}`;
+    await expect(sql`insert into reembolso_recibido (reembolso_id, por) values (${rid}, ${rec})`).rejects.toThrow(/Solo quien puso el dinero/);
+    expect(await confirmarReembolso(sql, rec, codigo, { clave: s2 }, PRUEBAS)).toEqual({ ok: false, error: "no_recibe" });
+    expect(await confirmarReembolso(sql, adm, codigo, { clave: s2 }, PRUEBAS)).toEqual({ ok: true });
+  });
+
   it("rechazo con motivo: no se paga; transferencia sin salida de caja; un pago que no es personal no lleva reembolso", async () => {
     const x = await autorizado("50");
     expect(await personal(adm, x, "50")).toEqual({ ok: true });
@@ -151,7 +205,9 @@ describe.skipIf(!URL_ADMIN)("reembolsos", () => {
     expect(await personal(adm, w, "60")).toEqual({ ok: true });
     const [{ pid }] = await sql<{ pid: string }[]>`select id as pid from pago_gasto where gasto_id = ${await idDe(w)}`;
     await expect(sql`insert into decision_reembolso (pago_id, decision, por) values (${pid}, 'autorizado', ${ges})`).rejects.toThrow(/lo decide Dirección/);
+    await expect(sql`insert into decision_reembolso (pago_id, ronda, decision, por) values (${pid}, 2, 'autorizado', ${dir})`).rejects.toThrow(/ya se decidió en esa ronda/);
     await sql`insert into decision_reembolso (pago_id, decision, por) values (${pid}, 'autorizado', ${dir})`;
+    await expect(sql`insert into reenvio_reembolso (pago_id, ronda, nota, por) values (${pid}, 2, 'No estaba rechazado', ${adm})`).rejects.toThrow(/reembolso rechazado/);
     await expect(sql`insert into reembolso_gasto (pago_id, origen, importe, pagado_por, cuenta) values (${pid}, 'transferencia', 50, ${ges}, 'Cuenta ficticia')`)
       .rejects.toThrow(/por lo pagado/);
     await expect(sql`insert into reembolso_gasto (pago_id, origen, importe, pagado_por) values (${pid}, 'bolsa_visitas', 60, ${rec})`)
