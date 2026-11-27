@@ -260,7 +260,7 @@ export type PersonaDetalle = {
   alcances: (Otorgamiento & { rol: Rol; nombre: string })[];
   asignaciones: (Otorgamiento & { rol: Rol; nombre: string; sucursal: string })[];
   permisos: (Otorgamiento & { permiso: string; descripcion: string; todas: boolean; sucursal: string | null; limite: string | null;
-                              diario: string | null; sinLimite: boolean })[];
+                              diario: string | null; sinLimite: boolean; esDelegacion: boolean })[];
   restricciones: (Otorgamiento & { permiso: string; descripcion: string; todas: boolean; sucursal: string | null })[];
   autorrevision: (Otorgamiento & { todas: boolean; sucursal: string | null }) | null;
   /** Autorización aparte para resolver faltantes en los que participó (26 nov 2026). */
@@ -314,9 +314,9 @@ export async function pantallaPersona(sql: Sql, usuarioId: string, id: string): 
     from asignacion a join sucursal s on s.id = a.sucursal_id left join usuario o on o.id = a.otorgada_por
     where a.usuario_id = ${id} and a.revocada_en is null and (a.vigente_hasta is null or a.vigente_hasta > now()) order by a.rol, s.nombre`;
   const permisos = await sql<{ id: string; permiso: string; descripcion: string; todas: boolean; sucursal: string | null; limite: string | null;
-                               diario: string | null; sinLimite: boolean; desde: Date; hasta: Date | null; por: string | null; motivo: string; vigente: boolean }[]>`
+                               diario: string | null; sinLimite: boolean; esDelegacion: boolean; desde: Date; hasta: Date | null; por: string | null; motivo: string; vigente: boolean }[]>`
     select f.id, f.permiso, p.descripcion, f.todas_las_sucursales as todas, s.nombre as sucursal, f.limite_monto::text as limite,
-           f.limite_diario::text as diario, f.sin_limite as "sinLimite", f.vigente_desde as desde, f.vigente_hasta as hasta, o.nombre as por, f.motivo, vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en) as vigente
+           f.limite_diario::text as diario, f.sin_limite as "sinLimite", f.es_delegacion as "esDelegacion", f.vigente_desde as desde, f.vigente_hasta as hasta, o.nombre as por, f.motivo, vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en) as vigente
     from facultad_otorgada f join permiso p on p.clave = f.permiso left join sucursal s on s.id = f.sucursal_id left join usuario o on o.id = f.otorgada_por
     where f.usuario_id = ${id} and f.revocada_en is null and (f.vigente_hasta is null or f.vigente_hasta > now()) order by f.permiso`;
   const restricciones = await sql<{ id: string; permiso: string; descripcion: string; todas: boolean; sucursal: string | null;
@@ -372,6 +372,7 @@ export type EntradaHistorial = { id: string; en: Date; por: string | null; perso
 const ACCIONES: Record<string, string> = {
   crear_cuenta: "Creó la cuenta", editar_cuenta: "Cambió nombre o puesto", activar: "Activó la cuenta", desactivar: "Desactivó la cuenta",
   invitar: "Generó invitación (48 horas)", dar_perfil: "Dio un perfil", quitar_perfil: "Quitó un perfil", dar_permiso: "Dio un permiso", facultad_gasto: "Dio la facultad para autorizar gastos",
+  delegacion_gasto: "Dio una delegación temporal para autorizar gastos",
   quitar_permiso: "Quitó un permiso otorgado", restringir: "Restringió un permiso", quitar_restriccion: "Quitó una restricción",
   autorrevision: "Autorizó revisar lo propio", renovar_autorrevision: "Renovó la autorización para revisar lo propio",
   terminar_autorrevision: "Terminó la autorización para revisar lo propio",
@@ -400,9 +401,18 @@ export type ErrorUsuarios =
   | "sin_permiso" | "no_encontrada" | "nombre" | "correo" | "correo_repetido" | "puesto" | "motivo" | "propia" | "sin_canal"
   | "ultimo_administrador" | "rol" | "permiso" | "alcance" | "sucursales" | "limite" | "sin_limite" | "hasta" | "ya_tiene"
   | "no_vigente" | "no_direccion" | "ya_autorizada" | "sin_cambio" | "bloqueado_produccion" | "sin_consulta"
-  | "diario" | "sin_limite_montos" | "ya_tiene_gasto" | "usar_facultad_gasto";
+  | "diario" | "sin_limite_montos" | "ya_tiene_gasto" | "usar_facultad_gasto" | "desde";
 
 const motivoValido = (m: string) => m.trim().length >= 5 && m.trim().length <= 300;
+/** ¿Hay otra facultad de gastos de esa persona, sin revocar, en esos lugares y con periodo que se cruce? */
+async function traslapaGasto(tx: Tx, personaId: string, alcance: Alcance, ids: string[], desde: Date, hasta: Date | null): Promise<boolean> {
+  const [ya] = await tx`
+    select 1 from facultad_otorgada f
+    where f.usuario_id = ${personaId} and f.permiso = 'autorizacion.gasto' and f.revocada_en is null
+      and (f.vigente_hasta is null or f.vigente_hasta > ${desde}) and (${hasta}::timestamptz is null or f.vigente_desde < ${hasta})
+      and (f.todas_las_sucursales or ${alcance.todas} or f.sucursal_id = any(${ids}::uuid[]))`;
+  return Boolean(ya);
+}
 /** Importe mayor que 0 (hasta $10,000,000), con dos decimales; null si no es válido. */
 function monto(texto: string): string | null {
   const n = Number(texto.replace(/[$,\s]/g, ""));
@@ -529,6 +539,7 @@ export type CambioAcceso =
   | { tipo: "quitar_perfil"; id: string; general: boolean; motivo: string }
   | { tipo: "dar_permiso"; permiso: string; alcance: Alcance; limite: string; hasta: string; motivo: string }
   | { tipo: "facultad_gasto"; alcance: Alcance; sinLimite: boolean; limite: string; diario: string; hasta: string; motivo: string }
+  | { tipo: "delegacion_gasto"; alcance: Alcance; limite: string; diario: string; desde: string; hasta: string; motivo: string }
   | { tipo: "quitar_permiso"; id: string; motivo: string }
   | { tipo: "restringir"; permiso: string; alcance: Alcance; hasta: string; motivo: string }
   | { tipo: "quitar_restriccion"; id: string; motivo: string }
@@ -673,13 +684,9 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
         if (!diario || Number(diario) < Number(limite)) return { ok: false, error: "diario" };
       }
       const ids = s.map((x) => x.id);
-      // Una sola facultad de gastos vigente por lugar: para cambiar los límites se quita la anterior (queda en el historial).
-      const [ya] = await tx`
-        select 1 from facultad_otorgada f
-        where f.usuario_id = ${personaId} and f.permiso = 'autorizacion.gasto' and f.revocada_en is null
-          and (f.vigente_hasta is null or f.vigente_hasta > now())
-          and (f.todas_las_sucursales or ${c.alcance.todas} or f.sucursal_id = any(${ids}::uuid[]))`;
-      if (ya) return { ok: false, error: "ya_tiene_gasto" };
+      // Una sola facultad de gastos por lugar y periodo: para cambiar los límites se quita la anterior (queda en el historial).
+      const [p] = await tx<{ hasta: Date | null }[]>`select ${h.valor ? finDelDia(tx, h.valor) : null}::timestamptz as hasta`;
+      if (await traslapaGasto(tx, personaId, c.alcance, ids, new Date(), p.hasta)) return { ok: false, error: "ya_tiene_gasto" };
       if (c.sinLimite) {
         // «Sin límite» solo para Dirección, explícito (la base también lo exige).
         const [d] = await tx<{ ok: boolean }[]>`
@@ -700,6 +707,34 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
         ok: true, accion: "facultad_gasto",
         detalle: `Autorizar gastos en ${textoAlcance(c.alcance, s)} · ${montos}${h.valor ? ` · hasta ${h.valor}` : ""}. `
           + "Lo que pase de ahí se escala; nunca se aprueba en parte. Quien solicita o paga un gasto no lo autoriza (salvo Dirección, lo propio)",
+      };
+    }
+    case "delegacion_gasto": {
+      // Delegación temporal (27 nov 2026): límites y sucursales fijados expresamente; no se heredan; con inicio y fin.
+      const s = await sucursalesValidas(tx, c.alcance);
+      if (!s) return { ok: false, error: "sucursales" };
+      const limite = monto(c.limite);
+      if (!limite) return { ok: false, error: "limite" };
+      const diario = monto(c.diario);
+      if (!diario || Number(diario) < Number(limite)) return { ok: false, error: "diario" };
+      if (!FECHA.test(c.desde)) return { ok: false, error: "desde" };
+      if (!FECHA.test(c.hasta)) return { ok: false, error: "hasta" };
+      const [p] = await tx<{ desde_ok: boolean; hasta_ok: boolean; desde: Date; hasta: Date }[]>`
+        select ${c.desde}::date >= (now() at time zone ${ZONA})::date as desde_ok, ${c.hasta}::date >= ${c.desde}::date as hasta_ok,
+               greatest(now(), (${c.desde}::date::timestamp at time zone ${ZONA})) as desde, ${finDelDia(tx, c.hasta)} as hasta`;
+      if (!p.desde_ok) return { ok: false, error: "desde" };
+      if (!p.hasta_ok) return { ok: false, error: "hasta" };
+      const ids = s.map((x) => x.id);
+      if (await traslapaGasto(tx, personaId, c.alcance, ids, p.desde, p.hasta)) return { ok: false, error: "ya_tiene_gasto" };
+      for (const l of c.alcance.todas ? [null] : ids) {
+        await tx`insert into facultad_otorgada (usuario_id, permiso, sucursal_id, todas_las_sucursales, limite_monto, limite_diario, es_delegacion,
+                                                vigente_desde, vigente_hasta, otorgada_por, motivo)
+                 values (${personaId}, 'autorizacion.gasto', ${l}, ${l === null}, ${limite}, ${diario}, true, ${p.desde}, ${p.hasta}, ${actor}, ${motivo})`;
+      }
+      return {
+        ok: true, accion: "delegacion_gasto",
+        detalle: `Delegación temporal para autorizar gastos en ${textoAlcance(c.alcance, s)} · del ${c.desde.split("-").reverse().join("/")} al `
+          + `${c.hasta.split("-").reverse().join("/")} · hasta ${pesosTexto(limite)} por gasto y ${pesosTexto(diario)} en total por día. Al terminar se apaga sola`,
       };
     }
     case "quitar_permiso": {

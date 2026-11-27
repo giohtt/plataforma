@@ -1342,3 +1342,6 @@ td.mono {
 @media (min-width: 640px) {
   .campos-fila { grid-template-columns: 1fr 1fr; }
 }
+
+/* Vistas de la bandeja de gastos. */
+.filtros-bandeja { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }

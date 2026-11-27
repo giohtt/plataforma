@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { accionCorregirGasto, accionSolicitarGasto, type EstadoGasto } from "@/app/acciones-gastos";
+import { accionCorregirGasto, accionDecidirGasto, accionSolicitarGasto, type EstadoGasto } from "@/app/acciones-gastos";
 import type { Categoria, SucursalOpcion } from "@/lib/gastos";
 
 function ErrorCampo({ estado, campo }: { estado: EstadoGasto; campo: string }) {
@@ -123,6 +123,30 @@ export function FormularioCorreccion({ codigo, clave, version, categorias, actua
         <ErrorCampo estado={estado} campo="motivo" />
       </div>
       <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Guardando…" : "Guardar corrección"}</button>
+    </form>
+  );
+}
+
+/** Autorizar o rechazar la versión vigente, desde la cuenta de quien decide. Rechazar exige motivo. */
+export function FormularioDecision({ codigo, clave, version, importe }: { codigo: string; clave: string; version: number; importe: string }) {
+  const [estado, accion, enviando] = useActionState(accionDecidirGasto, null);
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-decision">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <input type="hidden" name="version" value={version} />
+      <h3>Decidir · versión {version} · {importe}</h3>
+      <div className="campo">
+        <label htmlFor="motivo-decision">Motivo (obligatorio para rechazar)</label>
+        <textarea id="motivo-decision" name="motivo" maxLength={300} defaultValue={estado?.valores?.motivo ?? ""} aria-invalid={estado?.errores?.motivo ? true : undefined} />
+        <ErrorCampo estado={estado} campo="motivo" />
+      </div>
+      <p className="sub">Se registra con tu cuenta, la fecha y la hora. Autorizar no mueve dinero: el pago se registra aparte.</p>
+      <p className="fila-acciones">
+        <button className="boton boton-principal" type="submit" name="decision" value="autorizado" disabled={enviando}>Autorizar</button>
+        <button className="boton" type="submit" name="decision" value="rechazado" disabled={enviando}>Rechazar</button>
+      </p>
     </form>
   );
 }

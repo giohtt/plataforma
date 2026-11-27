@@ -63,7 +63,7 @@ test("solicitar un gasto, corregirlo como versión nueva y consultarlo como Enca
   await expect(page.getByRole("status")).toHaveText("Solicitud registrada. No mueve dinero ni autoriza el gasto.");
   await expect(page.getByTestId("clave-gasto")).toHaveText(`${c1}-G1`);
   await expect(page.getByTestId("importe-gasto")).toHaveText("$480.00");
-  await expect(page.getByTestId("estado-gasto")).toHaveText("Solicitado");
+  await expect(page.getByTestId("estado-gasto")).toHaveText("Por autorizar");
 
   // Corrección: versión 2 con motivo; la versión 1 se conserva.
   await page.getByTestId("abrir-correccion").click();
@@ -75,8 +75,8 @@ test("solicitar un gasto, corregirlo como versión nueva y consultarlo como Enca
   await cc.getByLabel("Importe").fill("600");
   await cc.getByLabel(/Motivo de la corrección/).fill("Faltaba un garrafón");
   await cc.getByRole("button", { name: "Guardar corrección" }).click();
-  await expect(page.getByRole("status")).toHaveText("Corrección guardada como versión nueva. La anterior se conserva.");
-  await expect(page.getByTestId("estado-gasto")).toHaveText("Solicitado · versión 2");
+  await expect(page.getByRole("status")).toHaveText("Corrección guardada como versión nueva. La anterior se conserva; si estaba decidida, se decide de nuevo.");
+  await expect(page.getByTestId("estado-gasto")).toHaveText("Por autorizar · versión 2");
   await expect(page.getByTestId("version-gasto")).toHaveCount(2);
   await expect(page.getByTestId("version-gasto").nth(0)).toContainText("Solicitud: Garrafones de agua · Agua (de prueba) · $480.00");
   await expect(page.getByTestId("version-gasto").nth(1)).toContainText("Corrección · versión 2: Garrafones de agua · Agua (de prueba) · $600.00");

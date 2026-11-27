@@ -180,6 +180,10 @@ const TITULO: Record<string, { boton: string; ayuda?: string }> = {
   autorresolucion: { boton: "Autorizar que resuelva lo propio", ayuda: "Solo para Dirección. Aparte de la de revisar lo propio. Máximo 90 días, se renueva solo a mano. Solo faltantes ya confirmados de retiros y sobres, con «Lo absorbe la sucursal»; cada resolución queda marcada «Resuelta por quien participó»." },
   terminar_autorresolucion: { boton: "Terminar ahora" },
   facultad_gasto: { boton: "Autorizar gastos" },
+  delegacion_gasto: {
+    boton: "Delegación temporal",
+    ayuda: "Tú fijas los límites y las sucursales; no se heredan de nadie. Lleva inicio y fin, y al terminar se apaga sola.",
+  },
 };
 
 /**
@@ -229,13 +233,13 @@ export function FormularioCambio({ persona, tipo, catalogo, fijo, renovar = fals
       {tipo === "dar_permiso" || tipo === "restringir"
         ? <SelectorPermiso estado={estado} catalogo={catalogo} alElegir={setPermiso} excluir={tipo === "dar_permiso" ? ["autorizacion.gasto"] : []} />
         : null}
-      {tipo === "facultad_gasto" ? (
+      {tipo === "facultad_gasto" || tipo === "delegacion_gasto" ? (
         <>
-          <label className="opcion-revision">
+          {tipo === "delegacion_gasto" ? null : <label className="opcion-revision">
             <input type="checkbox" name="sinLimite" value="si" checked={sinLimite} onChange={(e) => setSinLimite(e.target.checked)} />
             <span><strong>Sin límite</strong> · solo para una cuenta con Dirección en esas sucursales</span>
-          </label>
-          {sinLimite ? null : (
+          </label>}
+          {sinLimite && tipo === "facultad_gasto" ? null : (
             <div className="campos-fila">
               <div className="campo">
                 <label htmlFor="limite">Límite por gasto</label>
@@ -254,7 +258,7 @@ export function FormularioCambio({ persona, tipo, catalogo, fijo, renovar = fals
               </div>
             </div>
           )}
-          {sinLimite ? <ErrorCampo estado={estado} campo="limite" /> : null}
+          {sinLimite && tipo === "facultad_gasto" ? <ErrorCampo estado={estado} campo="limite" /> : null}
         </>
       ) : null}
       {tipo === "dar_permiso" && (esAutorizacion || estado?.valores?.limite) ? (
@@ -266,7 +270,7 @@ export function FormularioCambio({ persona, tipo, catalogo, fijo, renovar = fals
           <ErrorCampo estado={estado} campo="limite" />
         </div>
       ) : null}
-      {["dar_perfil", "dar_permiso", "restringir", "autorrevision", "autorresolucion", "facultad_gasto"].includes(tipo) ? (
+      {["dar_perfil", "dar_permiso", "restringir", "autorrevision", "autorresolucion", "facultad_gasto", "delegacion_gasto"].includes(tipo) ? (
         <Alcance estado={estado} catalogo={catalogo} una={tipo === "autorrevision" || tipo === "autorresolucion"} />
       ) : null}
       {["dar_perfil", "dar_permiso", "restringir", "facultad_gasto"].includes(tipo) ? (
@@ -275,6 +279,21 @@ export function FormularioCambio({ persona, tipo, catalogo, fijo, renovar = fals
           <input id="hasta" name="hasta" type="date" min={catalogo.hoy} defaultValue={estado?.valores?.hasta ?? ""} aria-invalid={estado?.errores?.hasta ? true : undefined} />
           <span className="sub">Vacío: sin fecha de fin. Vence al terminar ese día.</span>
           <ErrorCampo estado={estado} campo="hasta" />
+        </div>
+      ) : null}
+      {tipo === "delegacion_gasto" ? (
+        <div className="campos-fila">
+          <div className="campo">
+            <label htmlFor="desde">Desde</label>
+            <input id="desde" name="desde" type="date" min={catalogo.hoy} defaultValue={estado?.valores?.desde ?? catalogo.hoy} aria-invalid={estado?.errores?.desde ? true : undefined} />
+            <ErrorCampo estado={estado} campo="desde" />
+          </div>
+          <div className="campo">
+            <label htmlFor="hasta">Hasta (obligatorio)</label>
+            <input id="hasta" name="hasta" type="date" min={catalogo.hoy} defaultValue={estado?.valores?.hasta ?? ""} aria-invalid={estado?.errores?.hasta ? true : undefined} />
+            <span className="sub">Vence al terminar ese día.</span>
+            <ErrorCampo estado={estado} campo="hasta" />
+          </div>
         </div>
       ) : null}
       {tipo === "autorrevision" || tipo === "autorresolucion" ? (

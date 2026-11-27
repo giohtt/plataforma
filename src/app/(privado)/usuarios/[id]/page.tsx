@@ -94,7 +94,8 @@ export default async function Persona({ params, searchParams }: PageProps<"/usua
         </p>
         {gastos.map((x) => (
           <div key={x.id} className="lista-grupo" data-testid="facultad-gasto-vigente">
-            <p><strong>{x.todas ? "Todas las sucursales" : x.sucursal}</strong> ·{" "}
+            <p>{x.esDelegacion ? <><span className="chip-estado chip-programada" data-testid="delegacion">Delegación temporal</span>{" "}</> : null}
+              <strong>{x.todas ? "Todas las sucursales" : x.sucursal}</strong> ·{" "}
               {x.sinLimite ? <strong>sin límite</strong>
                 : x.diario ? <>{etiquetaLimite(`${x.limite}|${x.diario}`)}</>
                 : <span className="chip-estado chip-revocada" data-testid="facultad-gasto-incompleta">Incompleta: límite {pesos.format(Number(x.limite))} sin acumulado diario · no autoriza gastos</span>}
@@ -103,7 +104,12 @@ export default async function Persona({ params, searchParams }: PageProps<"/usua
           </div>
         ))}
         {!gastos.length ? <p className="sub" data-testid="facultad-gasto-sin">Sin facultad: no autoriza gastos.</p> : null}
-        {f.asignar ? <FormularioCambio persona={per.id} tipo="facultad_gasto" catalogo={p.catalogo} /> : null}
+        {f.asignar ? (
+          <p className="fila-acciones">
+            <FormularioCambio persona={per.id} tipo="facultad_gasto" catalogo={p.catalogo} />
+            <FormularioCambio persona={per.id} tipo="delegacion_gasto" catalogo={p.catalogo} />
+          </p>
+        ) : null}
       </section>
 
       {p.esDireccion || p.autorrevision ? (
