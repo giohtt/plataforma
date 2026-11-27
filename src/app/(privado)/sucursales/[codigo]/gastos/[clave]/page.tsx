@@ -91,7 +91,7 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
         ) : null}
         {d.puedePagar.length && d.autorizado ? (
           <FormularioPago codigo={codigo} clave={g.clave} version={ultima.version} autorizado={d.autorizado} origenes={d.puedePagar}
-            proveedor={g.proveedor} hoy={hoyMx()} />
+            proveedor={g.proveedor} hoy={hoyMx()} deAnticipo={d.excedenteDeAnticipo} />
         ) : null}
         {d.entregarAnticipo && d.autorizado ? (
           <FormularioEntregarAnticipo codigo={codigo} clave={g.clave} version={ultima.version} autorizado={d.autorizado}

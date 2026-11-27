@@ -190,11 +190,13 @@ function CamposComprobante({ estado, opcional }: { estado: EstadoGasto; opcional
 }
 
 /** Registrar el pago de un gasto autorizado, con los orígenes que esta persona puede usar ahora. */
-export function FormularioPago({ codigo, clave, version, autorizado, origenes, proveedor, hoy }: {
+export function FormularioPago({ codigo, clave, version, autorizado, origenes, proveedor, hoy, deAnticipo }: {
   codigo: string; clave: string; version: number; autorizado: string; origenes: OrigenPago[]; proveedor: string | null; hoy: string;
+  /** Excedente de un anticipo: ya se pagó al proveedor ese día con dinero de alguien. */
+  deAnticipo?: { clave: string; pagadoEl: string } | null;
 }) {
   const [estado, accion, enviando] = useActionState(accionRegistrarPago, null);
-  const [origen, setOrigen] = useState(estado?.valores?.origen ?? "");
+  const [origen, setOrigen] = useState(estado?.valores?.origen ?? (deAnticipo ? "dinero_personal" : ""));
   const efectivo = origen === "bolsa_visitas" || origen === "cajon_mensualidades";
   return (
     <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-pago">
@@ -203,6 +205,12 @@ export function FormularioPago({ codigo, clave, version, autorizado, origenes, p
       <input type="hidden" name="clave" value={clave} />
       <input type="hidden" name="version" value={version} />
       <h3>Registrar el pago</h3>
+      {deAnticipo ? (
+        <p className="aviso aviso-info" data-testid="pago-excedente-anticipo">
+          Es el excedente del anticipo de {deAnticipo.clave}: ya se pagó al proveedor el {deAnticipo.pagadoEl.split("-").reverse().join("/")} con dinero de
+          quien recibió el anticipo. Lo registra esa persona como dinero personal y queda pendiente de reembolso; lo que salga de caja para devolvérselo es su reembolso.
+        </p>
+      ) : null}
       <fieldset className="campo campo-grupo" aria-invalid={estado?.errores?.origen ? true : undefined}>
         <legend>¿De dónde salió el dinero?</legend>
         {origenes.map((o) => (
@@ -211,7 +219,7 @@ export function FormularioPago({ codigo, clave, version, autorizado, origenes, p
             <span>{NOMBRE_ORIGEN[o]}</span>
           </label>
         ))}
-        {!origenes.some((o) => o === "bolsa_visitas" || o === "cajon_mensualidades")
+        {!deAnticipo && !origenes.some((o) => o === "bolsa_visitas" || o === "cajon_mensualidades")
           ? <span className="sub">En efectivo solo paga la responsable vigente de la bolsa o el cajón, con el turno abierto.</span> : null}
         <ErrorCampo estado={estado} campo="origen" />
       </fieldset>
@@ -224,7 +232,7 @@ export function FormularioPago({ codigo, clave, version, autorizado, origenes, p
           <span className="sub">Lo realmente pagado; hasta {new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(autorizado))} autorizados.</span>
           <ErrorCampo estado={estado} campo="importe" />
         </div>
-        {origen && !efectivo ? (
+        {deAnticipo ? <input type="hidden" name="pagadoEl" value={deAnticipo.pagadoEl} /> : origen && !efectivo ? (
           <div className="campo">
             <label htmlFor="pagadoEl">Fecha del pago</label>
             <input id="pagadoEl" name="pagadoEl" type="date" max={hoy} defaultValue={estado?.valores?.pagadoEl ?? hoy} aria-invalid={estado?.errores?.pagadoEl ? true : undefined} />

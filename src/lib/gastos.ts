@@ -35,7 +35,7 @@ export type ErrorGasto =
   | "decision" | "ya_decidido" | "propio" | "de_direccion" | "sin_facultad" | "limite" | "diario"
   | "no_autorizado" | "ya_pagado" | "origen" | "excede" | "fecha" | "cuenta" | "referencia" | "a_quien" | "autorizo"
   | "sin_turno" | "no_responsable" | "entrega_en_curso" | "comprobante" | "folio" | "no_excede"
-  | "con_anticipo" | "lugar" | "recibe" | "no_recibe" | "anticipo_estado" | "cambio" | "devuelve";
+  | "con_anticipo" | "lugar" | "recibe" | "no_recibe" | "anticipo_estado" | "cambio" | "devuelve" | "excedente_anticipo";
 
 
 
@@ -186,6 +186,8 @@ export type DetalleGasto = {
   puedePagar: OrigenPago[];
   /** Lo autorizado en la versión vigente (tope del pago). */
   autorizado: string | null;
+  /** Es el excedente de un anticipo: ya se pagó al proveedor (solo «dinero personal», con esa fecha). */
+  excedenteDeAnticipo: { clave: string; pagadoEl: string } | null;
   puedeComprobar: boolean;
   puedePedirExcedente: boolean;
   /** Anticipo para la compra (bloque 6, PR 6), si se entregó. */
@@ -210,9 +212,9 @@ export type Anticipo = {
 };
 
 /** Con qué orígenes puede esta persona pagar el gasto ahora mismo (servidor; la base lo vuelve a comprobar). */
-async function opcionesPago(db: Sql | Tx, usuarioId: string, gastoId: string): Promise<{ origenes: OrigenPago[]; autorizado: string | null }> {
+async function opcionesPago(db: Sql | Tx, usuarioId: string, gastoId: string): Promise<{ origenes: OrigenPago[]; autorizado: string | null; deAnticipo: { clave: string; pagadoEl: string } | null }> {
   const [o] = await db<{ autorizado: string | null; pagado: boolean; puede: boolean; autorizo: boolean; direccion: boolean; admin: boolean;
-                         bolsa: boolean; cajon: boolean; entrega: boolean; anticipo: boolean }[]>`
+                         bolsa: boolean; cajon: boolean; entrega: boolean; anticipo: boolean; de_anticipo: string | null; pagado_proveedor: string | null; cubrio: boolean | null }[]>`
     with g as (select * from gasto where id = ${gastoId}),
          v as (select version from gasto_version where gasto_id = ${gastoId} order by version desc limit 1),
          d as (select * from decision_gasto where gasto_id = ${gastoId} and version = (select version from v)),
@@ -229,14 +231,23 @@ async function opcionesPago(db: Sql | Tx, usuarioId: string, gastoId: string): P
            exists (select 1 from responsable_lugar r join lugar_efectivo l on l.id = r.lugar_id
                    where r.turno_id = (select id from t) and r.hasta is null and r.usuario_id = ${usuarioId} and l.tipo = 'cajon_mensualidades') as cajon,
            exists (select 1 from entrega_turno e where e.turno_id = (select id from t) and e.estado in ('pendiente', 'recuento')) as entrega,
-           exists (select 1 from anticipo_gasto a where a.gasto_id = ${gastoId}) as anticipo`;
-  if (!o.autorizado || o.pagado || o.anticipo || !o.puede || (o.autorizo && !o.direccion)) return { origenes: [], autorizado: o.autorizado };
+           exists (select 1 from anticipo_gasto a where a.gasto_id = ${gastoId}) as anticipo,
+           (select x.clave from anticipo_comprobado k join anticipo_gasto a on a.id = k.anticipo_id join gasto x on x.id = a.gasto_id
+            where k.excedente_gasto_id = ${gastoId}) as de_anticipo,
+           (select to_char(p.pagado_el, 'YYYY-MM-DD') from anticipo_comprobado k join pago_gasto p on p.id = k.pago_id
+            where k.excedente_gasto_id = ${gastoId}) as pagado_proveedor,
+           (select p.pagado_por = ${usuarioId} from anticipo_comprobado k join pago_gasto p on p.id = k.pago_id
+            where k.excedente_gasto_id = ${gastoId}) as cubrio`;
+  const deAnticipo = o.de_anticipo ? { clave: o.de_anticipo, pagadoEl: o.pagado_proveedor! } : null;
+  if (!o.autorizado || o.pagado || o.anticipo || !o.puede || (o.autorizo && !o.direccion)) return { origenes: [], autorizado: o.autorizado, deAnticipo };
+  // El excedente de un anticipo ya se pagó al proveedor con dinero de alguien: solo «dinero personal» (se reembolsa aparte).
+  if (deAnticipo) return { origenes: o.cubrio ? ["dinero_personal"] : [], autorizado: o.autorizado, deAnticipo };
   const origenes: OrigenPago[] = [];
   if (o.bolsa && !o.entrega) origenes.push("bolsa_visitas");
   if (o.cajon && !o.entrega) origenes.push("cajon_mensualidades");
   if (o.admin) origenes.push("transferencia");
   origenes.push("tarjeta", "dinero_personal");
-  return { origenes, autorizado: o.autorizado };
+  return { origenes, autorizado: o.autorizado, deAnticipo };
 }
 
 /** Detalle con todas sus versiones. Sin permiso, la misma respuesta que si no existiera. */
@@ -325,10 +336,10 @@ export async function detalleGasto(sql: Sql, usuarioId: string, codigo: string, 
   void sucursalId;
   return {
     gasto: { ...resto, partes: [...partes], totalCompra: total }, versiones: [...versiones], decisiones: [...decisiones], puedenDecidir,
-    puedeCorregir: g.propia && !pago && !anticipoFila, categorias: [...categorias],
+    puedeCorregir: g.propia && !pago && !anticipoFila && !op.deAnticipo, categorias: [...categorias],
     pago: pago ?? null, comprobantes: [...comprobantes], sinComprobante: sinComprobante ?? null,
-    puedePagar: op.origenes, autorizado: op.autorizado, puedeComprobar: comprueba,
-    puedePedirExcedente: Boolean(op.autorizado) && !pago && !anticipo && solicita && g.estado === "autorizado",
+    puedePagar: op.origenes, autorizado: op.autorizado, excedenteDeAnticipo: op.deAnticipo, puedeComprobar: comprueba,
+    puedePedirExcedente: Boolean(op.autorizado) && !pago && !anticipo && !op.deAnticipo && solicita && g.estado === "autorizado",
     anticipo, entregarAnticipo: entregar,
     puedeConfirmarAnticipo: Boolean(anticipo && !anticipo.recibidoEn && anticipo.recibeId === usuarioId),
     puedeComprobarAnticipo: Boolean(anticipo && anticipo.recibidoEn && !anticipo.comprobado && anticipo.recibeId === usuarioId),
@@ -393,6 +404,7 @@ export async function corregirGasto(
     if (g.solicitado_por !== usuarioId) return { ok: false as const, error: "sin_permiso" as const };
     if ((await tx`select 1 from pago_gasto where gasto_id = ${g.id}`).length) return { ok: false as const, error: "ya_pagado" as const };
     if ((await tx`select 1 from anticipo_gasto where gasto_id = ${g.id}`).length) return { ok: false as const, error: "con_anticipo" as const };
+    if ((await tx`select 1 from anticipo_comprobado where excedente_gasto_id = ${g.id}`).length) return { ok: false as const, error: "excedente_anticipo" as const };
     const [u] = await tx<{ version: number; concepto: string; categoria: string; importe: string; proveedor: string | null; nota: string | null }[]>`
       select version, concepto, categoria, importe::text as importe, proveedor, nota from gasto_version where gasto_id = ${g.id} order by version desc limit 1`;
     if (u.version !== d.version) return { ok: false as const, error: "version" as const };
@@ -564,6 +576,7 @@ export async function registrarPago(
       const op = await opcionesPago(tx, usuarioId, g.id);
       if (!op.autorizado) return { ok: false as const, error: "no_autorizado" as const };
       if (Number(i.valor) > Number(op.autorizado)) return { ok: false as const, error: "excede" as const };
+      if (op.deAnticipo && (origen !== "dinero_personal" || !op.origenes.length)) return { ok: false as const, error: "excedente_anticipo" as const };
       if (!op.origenes.includes(origen)) {
         const [x] = await tx<{ autorizo: boolean; puede: boolean }[]>`
           select exists (select 1 from decision_gasto dd where dd.gasto_id = ${g.id} and dd.version = ${v.version} and dd.por = ${usuarioId}) as autorizo,
@@ -581,7 +594,9 @@ export async function registrarPago(
         return { ok: false as const, error: "origen" as const };
       }
       let pagadoEl = d.pagadoEl;
-      if (efectivo) {
+      if (op.deAnticipo) {
+        pagadoEl = op.deAnticipo.pagadoEl;
+      } else if (efectivo) {
         const [h] = await tx<{ hoy: string }[]>`select to_char(dia_en_sucursal(${g.sucursal_paga_id}, now()), 'YYYY-MM-DD') as hoy`;
         pagadoEl = h.hoy;
       } else {
@@ -714,6 +729,8 @@ async function opcionesAnticipo(db: Sql | Tx, usuarioId: string, gastoId: string
     left join decision_gasto d on d.gasto_id = g.id and d.version = v.version and d.decision = 'autorizado'
     where g.id = ${gastoId}`;
   if (!g?.autorizado || !g.libre) return null;
+  // El excedente de un anticipo ya se pagó al proveedor: no lleva otro anticipo.
+  if ((await db`select 1 from anticipo_comprobado where excedente_gasto_id = ${gastoId}`).length) return null;
   const lugares: LugarAnticipo[] = [];
   for (const l of LUGARES) if (await responsableVigente(db, usuarioId, g.paga, l)) lugares.push(l);
   if (!lugares.length) return null;

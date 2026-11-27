@@ -8,7 +8,7 @@ import { abrirTurno } from "../../src/lib/turnos";
 /**
  * Bloque 6, PR 6 (27 nov 2026; solo datos ficticios; límites ficticios solo para la prueba): Recepción entrega un
  * anticipo de la bolsa; Administración lo confirma y lo comprueba desde su cuenta; el cambio vuelve en dos partes. Si
- * se necesitó más, el excedente queda como otra solicitud de la misma compra y, ya autorizado, se paga de la bolsa.
+ * se necesitó más, el excedente queda como otra solicitud de la misma compra y se registra como dinero personal.
  */
 const sql = postgres(process.env.E2E_DATABASE_URL!, { max: 2, prepare: false, onnotice: () => {} });
 test.afterAll(async () => sql.end({ timeout: 5 }));
@@ -34,7 +34,7 @@ async function entrar(page: Page, correo: string) {
   await expect(page).toHaveURL(/\/$/);
 }
 
-test("anticipo de la bolsa: entrega, confirmación, comprobación, cambio en partes y excedente pagado de caja", async ({ page }) => {
+test("anticipo de la bolsa: entrega, confirmación, comprobación, cambio en partes y excedente como dinero personal", async ({ page }) => {
   test.setTimeout(150_000);
   const codigo = `N${Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789"[Math.floor(Math.random() * 34)]).join("")}`;
   const [s] = await sql<{ id: string }[]>`insert into sucursal (nombre, codigo) values (${"Anticipos " + codigo}, ${codigo}) returning id`;
@@ -139,22 +139,33 @@ test("anticipo de la bolsa: entrega, confirmación, comprobación, cambio en par
   await expect(page.getByTestId("estado-gasto")).toContainText("Por autorizar");
   await expect(page.getByTestId("pagado-compra")).toContainText("$400.00");
 
-  // Los $70 que faltaron los cubrió Administración al comprar. Ya autorizado el excedente, Recepción se los paga de la bolsa.
+  // Los $70 que faltaron ya se pagaron al proveedor con dinero de Administración: ya autorizado el excedente, solo se
+  // registra como dinero personal (pendiente de reembolso). La bolsa no los paga como gasto.
   const dx = await decidirGasto(sql, enc.id, codigo, { clave: `${codigo}-G3`, version: 1, decision: "autorizado", motivo: "" }, PRUEBAS);
   if (!dx.ok) throw new Error(dx.error);
   await entrar(page, rec.correo);
   await page.goto(`/sucursales/${codigo}/gastos/${codigo}-G3`);
+  await expect(page.getByTestId("formulario-pago")).toHaveCount(0);
+  await expect(page.getByTestId("abrir-anticipo")).toHaveCount(0);
+  await entrar(page, adm.correo);
+  await page.goto(`/sucursales/${codigo}/gastos/${codigo}-G3`);
   const p = page.getByTestId("formulario-pago");
-  await p.getByRole("radio", { name: "Bolsa de visitas" }).check();
-  await p.getByLabel(/A quién se pagó/).fill(`${adm.nombre} (lo cubrió al comprar)`);
-  await p.getByRole("button", { name: "Registrar pago" }).click();
-  await expect(page.getByTestId("importe-pagado")).toHaveText("$70.00");
+  await expect(p.getByTestId("pago-excedente-anticipo")).toContainText(`Es el excedente del anticipo de ${codigo}-G2`);
+  await expect(p.getByRole("radio")).toHaveCount(1);
+  await expect(p.getByRole("radio", { name: /Dinero personal/ })).toBeChecked();
+  await expect(page.getByTestId("abrir-excedente")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Corregir solicitud" })).toHaveCount(0);
+  await capturar(page, "anticipo-excedente-personal");
+  await page.getByTestId("formulario-pago").getByRole("button", { name: "Registrar pago" }).click();
+  await expect(page.getByTestId("origen-pago")).toHaveText("Dinero personal (pendiente de reembolso)");
+  await expect(page.getByTestId("reembolso-pendiente")).toContainText("pendiente de reembolso");
+  await expect(page.getByTestId("formulario-pago")).toHaveCount(0);
   await expect(page.getByTestId("pagado-compra")).toContainText("$470.00");
-  await expect(page.getByTestId("pagado-compra")).toContainText(`${codigo}-G2: $400.00 (Anticipo comprobado) + ${codigo}-G3: $70.00 (Bolsa de visitas)`);
-  await capturar(page, "anticipo-excedente-caja");
-  // Bolsa: 740 − 400 (anticipo) − 70 (excedente) = 270. Lo gastado en la compra ($470) baja una sola vez.
+  await expect(page.getByTestId("pagado-compra")).toContainText(`${codigo}-G2: $400.00 (Anticipo comprobado) + ${codigo}-G3: $70.00 (Dinero personal (pendiente de reembolso))`);
+  // Bolsa: 740 − 400 (anticipo) = 340. Los $70 no salen de caja como gasto: se devolverán como reembolso.
+  await entrar(page, rec.correo);
   await page.goto(`/sucursales/${codigo}/turno`);
   await expect(page.getByTestId("anticipos-entregados").first()).toHaveText("− $700.00");
-  await expect(page.getByTestId("gastos-pagados").first()).toHaveText("− $70.00");
-  await expect(page.getByTestId("esperado").first()).toHaveText("$270.00");
+  await expect(page.getByTestId("gastos-pagados")).toHaveCount(0);
+  await expect(page.getByTestId("esperado").first()).toHaveText("$340.00");
 });

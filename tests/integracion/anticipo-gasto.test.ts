@@ -176,9 +176,10 @@ describe.skipIf(!URL_ADMIN)("anticipos para compras", () => {
     expect((await detalleGasto(sql, adm, codigo, exc))?.pago).toMatchObject({ origen: "dinero_personal", importe: "70.00" });
   });
 
-  it("necesitó más, $70 de caja: el excedente autorizado se paga de la bolsa; la caja baja lo gastado ($470) una sola vez", async () => {
-    // Se entregaron $400 de la bolsa y se pagaron $470. Los $70 que faltaron salen de la bolsa cuando el excedente ya está
-    // autorizado: la responsable vigente los paga (a quien los cubrió o al proveedor) con su propia salida.
+  it("los $70 que alguien adelantó no se pagan de caja como gasto: son dinero personal, un solo pendiente de reembolso", async () => {
+    // Se entregaron $400 de la bolsa y se pagaron $470 al proveedor: los $70 ya están pagados al proveedor con dinero de
+    // quien recibió el anticipo. Ni la bolsa, ni el cajón, ni una tarjeta los vuelven a pagar como gasto; lo que salga de
+    // caja para devolvérselos será su reembolso (PR 7), ligado a este único pago.
     const a = await autorizado("400");
     const antes = Number((await bolsa()).esperado);
     expect(await entregar(rec, a, adm)).toEqual({ ok: true });
@@ -186,20 +187,46 @@ describe.skipIf(!URL_ADMIN)("anticipos para compras", () => {
     const c = await comprobar(adm, a, "470", { folio: "F-70" });
     const exc = c.ok ? c.excedente! : "";
     expect((await detalleGasto(sql, adm, codigo, exc))?.gasto).toMatchObject({ compraDe: a, importe: "70.00", estado: "por_autorizar" });
-    // Sin autorizar, la bolsa no paga el excedente.
-    expect(await registrarPago(sql, rec, codigo, { clave: exc, version: 1, origen: "bolsa_visitas", importe: "70", aQuien: "", pagadoEl: "",
-      cuenta: "", referencia: "", tipo: "", folio: "", motivoSin: "" }, PRUEBAS)).toEqual({ ok: false, error: "no_autorizado" });
+    const pago = (u: string, origen: string, pagadoEl = hoyMx()) => registrarPago(sql, u, codigo, { clave: exc, version: 1, origen, importe: "70",
+      aQuien: "", pagadoEl, cuenta: "Tarjeta ficticia", referencia: "", tipo: "", folio: "", motivoSin: "" }, PRUEBAS);
+    expect(await pago(rec, "bolsa_visitas")).toEqual({ ok: false, error: "no_autorizado" });
     expect(await decidirGasto(sql, enc, codigo, { clave: exc, version: 1, decision: "autorizado", motivo: "" }, PRUEBAS)).toEqual({ ok: true });
-    expect(await registrarPago(sql, rec, codigo, { clave: exc, version: 1, origen: "bolsa_visitas", importe: "70", aQuien: "Administración A (lo cubrió al comprar)",
-      pagadoEl: "", cuenta: "", referencia: "", tipo: "factura", folio: "F-70", motivoSin: "" }, PRUEBAS)).toEqual({ ok: true });
-    // Caja: −400 (anticipo) −70 (excedente) = −470, lo realmente gastado; pagado de la compra: 400 + 70.
-    expect(Number((await bolsa()).esperado)).toBe(antes - 470);
+    // Solo quien recibió el anticipo (y cubrió los $70) lo registra; no lleva otro anticipo ni otro excedente.
+    const d0 = await detalleGasto(sql, adm, codigo, exc);
+    expect(d0?.puedePagar).toEqual(["dinero_personal"]);
+    expect(d0?.excedenteDeAnticipo).toEqual({ clave: a, pagadoEl: hoyMx() });
+    expect(d0?.puedePedirExcedente).toBe(false);
+    expect(d0?.puedeCorregir).toBe(false);
+    expect(await corregirGasto(sql, adm, codigo, { concepto: "Otro importe", categoria: "prueba_limpieza", importe: "50", proveedor: "", nota: "",
+      clave: exc, version: 1, motivo: "Intento de cambiar el excedente" }, PRUEBAS)).toEqual({ ok: false, error: "excedente_anticipo" });
+    expect((await detalleGasto(sql, rec, codigo, exc))?.puedePagar).toEqual([]);
+    expect((await detalleGasto(sql, rec, codigo, exc))?.entregarAnticipo).toBeNull();
+    expect(await entregar(rec, exc, ges)).toEqual({ ok: false, error: "recibe" });
+    expect(await pago(rec, "dinero_personal")).toEqual({ ok: false, error: "excedente_anticipo" });
+    expect(await pago(rec, "bolsa_visitas")).toEqual({ ok: false, error: "excedente_anticipo" });
+    expect(await pago(rec, "cajon_mensualidades")).toEqual({ ok: false, error: "excedente_anticipo" });
+    expect(await pago(adm, "tarjeta")).toEqual({ ok: false, error: "excedente_anticipo" });
+    // La base tampoco deja registrar los $70 como salida de caja.
+    await expect(sql.begin(async (tx) => {
+      await tx`insert into pago_gasto (gasto_id, version, origen, importe, pagado_el, pagado_por, registrado_por)
+               values (${await idDe(exc)}, 1, 'bolsa_visitas', 70, ${hoyMx()}, ${rec}, ${rec})`;
+    })).rejects.toThrow(/se registra como dinero personal/);
+    await expect(sql`insert into anticipo_gasto (gasto_id, version, lugar, importe, entregado_por, recibe)
+                     values (${await idDe(exc)}, 1, 'bolsa_visitas', 70, ${rec}, ${ges})`).rejects.toThrow(/no lleva anticipo/);
+    // Quien los cubrió los registra como dinero personal, con la fecha del pago al proveedor (aunque escriba otra).
+    expect(await pago(adm, "dinero_personal", "2026-01-01")).toEqual({ ok: true });
+    expect((await detalleGasto(sql, adm, codigo, exc))?.pago).toMatchObject({ origen: "dinero_personal", importe: "70.00", pagadoEl: hoyMx() });
+    // Un solo pendiente: no se puede registrar otra vez, de ningún origen.
+    expect(await pago(adm, "dinero_personal")).toEqual({ ok: false, error: "ya_pagado" });
+    expect(await pago(rec, "bolsa_visitas")).toEqual({ ok: false, error: "ya_pagado" });
+    // Al proveedor: $470 una vez (400 con el anticipo + 70 de quien lo cubrió). Caja: solo −$400; los $70 quedan por reembolsar.
     expect(await pagadoCompra(a)).toBe("470.00");
-    expect((await detalleGasto(sql, rec, codigo, a))?.pagosCompra.map((p) => [p.origen, p.importe])).toEqual([["anticipo", "400.00"], ["bolsa_visitas", "70.00"]]);
+    expect((await detalleGasto(sql, rec, codigo, a))?.pagosCompra.map((p) => [p.origen, p.importe])).toEqual([["anticipo", "400.00"], ["dinero_personal", "70.00"]]);
+    expect(Number((await bolsa()).esperado)).toBe(antes - 400);
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from movimiento_efectivo m join gasto g on g.id in (${await idDe(a)}, ${await idDe(exc)})
       where m.anticipo_id = (select id from anticipo_gasto where gasto_id = g.id) or m.pago_gasto_id = (select id from pago_gasto where gasto_id = g.id)`;
-    expect(n).toBe(2);
+    expect(n).toBe(1);
   });
 
   it("justo lo entregado: sin cambio ni excedente", async () => {

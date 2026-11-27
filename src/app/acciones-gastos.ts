@@ -55,6 +55,7 @@ const MENSAJES: Record<ErrorGasto, string> = {
   anticipo_estado: "El anticipo ya avanzó a otro paso (quizá desde otra pantalla). Recarga la página.",
   cambio: "Es más de lo que falta por devolver. Cuenta otra vez el dinero antes de recibirlo.",
   devuelve: "Tú devuelves el cambio: lo recibe la responsable vigente del lugar.",
+  excedente_anticipo: "Este excedente ya se pagó al proveedor con dinero de quien recibió el anticipo: lo registra esa persona, como dinero personal. Lo que salga de caja para devolvérselo es su reembolso.",
 };
 const CAMPO: Partial<Record<ErrorGasto, string>> = {
   concepto: "concepto", categoria: "categoria", importe: "importe", proveedor: "proveedor", nota: "nota",
