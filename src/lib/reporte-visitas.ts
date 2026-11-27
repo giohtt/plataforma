@@ -104,7 +104,7 @@ export async function reporteVisitas(
              ca.importe::text as "contadoAlAbrir",
              m.entradas::text as entradas, m.cuantas as "cantidadEntradas", m.ajustes::text as ajustes, m.cuantos_ajustes as "cantidadAjustes",
              m.salidas::text as retiros, m.cuantas_salidas as "cantidadRetiros",
-             m.fondos::text as fondos, (ca.importe + m.entradas + m.ajustes + m.salidas + m.fondos + m.devoluciones + m.gastos)::text as esperado
+             m.fondos::text as fondos, (ca.importe + m.entradas + m.ajustes + m.salidas + m.fondos + m.devoluciones + m.gastos + m.anticipos)::text as esperado
       from turno t
       join usuario u on u.id = t.abierto_por
       join lugar_efectivo l on l.sucursal_id = t.sucursal_id and l.tipo = 'bolsa_visitas'
@@ -118,7 +118,8 @@ export async function reporteVisitas(
                (count(*) filter (where me.tipo = 'salida_retiro'))::int as cuantas_salidas,
                coalesce(sum(me.importe) filter (where me.tipo = 'entrada_fondo'), 0)::numeric(12, 2) as fondos,
                coalesce(sum(me.importe) filter (where me.tipo = 'salida_devolucion_cambio'), 0)::numeric(12, 2) as devoluciones,
-               coalesce(sum(me.importe) filter (where me.tipo = 'salida_pago_gasto'), 0)::numeric(12, 2) as gastos
+               coalesce(sum(me.importe) filter (where me.tipo = 'salida_pago_gasto'), 0)::numeric(12, 2) as gastos,
+               coalesce(sum(me.importe) filter (where me.tipo in ('salida_anticipo_gasto', 'entrada_cambio_anticipo')), 0)::numeric(12, 2) as anticipos
         from movimiento_efectivo me where me.turno_id = t.id and me.lugar_id = l.id
       ) m
       where t.sucursal_id = any(${ids}::uuid[])

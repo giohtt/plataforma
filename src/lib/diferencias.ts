@@ -253,6 +253,9 @@ export type Desglose = {
   devoluciones: { cuantas: number; importe: string };
   /** Pagos de gastos en efectivo desde la bolsa (bloque 6). */
   gastos: { cuantos: number; importe: string };
+  /** Anticipos para compras entregados de la bolsa y cambio de anticipos devuelto a ella (bloque 6). */
+  anticipos: { cuantos: number; importe: string };
+  cambiosAnticipo: { cuantos: number; importe: string };
   /** Calculado aquí con los movimientos hasta la entrega. Debe coincidir con el esperado guardado al entregar. */
   calculado: string;
 };
@@ -350,7 +353,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   const [d] = await sql<{ abierto_en: Date; abierto_por: string; contado: string; cobros: number; visitas: number; importe_cobros: string;
                           cancelaciones: number; importe_cancelaciones: string; retiros: number; importe_retiros: string;
                           fondos: number; importe_fondos: string; sobres: number; importe_sobres: string; devoluciones: number; importe_devoluciones: string;
-                          gastos: number; importe_gastos: string }[]>`
+                          gastos: number; importe_gastos: string; anticipos: number; importe_anticipos: string; cambios: number; importe_cambios: string }[]>`
     select t.abierto_en, u.nombre as abierto_por, c.importe::text as contado,
            (count(m.id) filter (where m.tipo = 'entrada_cobro_visita'))::int as cobros,
            coalesce(sum((select count(*) from pase_visita p join cobro_visita cv on cv.operacion_id = p.operacion_id where cv.id = m.cobro_id))
@@ -367,7 +370,11 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
            (count(m.id) filter (where m.tipo = 'salida_devolucion_cambio'))::int as devoluciones,
            coalesce(sum(m.importe) filter (where m.tipo = 'salida_devolucion_cambio'), 0)::numeric(12, 2)::text as importe_devoluciones,
            (count(m.id) filter (where m.tipo = 'salida_pago_gasto'))::int as gastos,
-           coalesce(sum(m.importe) filter (where m.tipo = 'salida_pago_gasto'), 0)::numeric(12, 2)::text as importe_gastos
+           coalesce(sum(m.importe) filter (where m.tipo = 'salida_pago_gasto'), 0)::numeric(12, 2)::text as importe_gastos,
+           (count(m.id) filter (where m.tipo = 'salida_anticipo_gasto'))::int as anticipos,
+           coalesce(sum(m.importe) filter (where m.tipo = 'salida_anticipo_gasto'), 0)::numeric(12, 2)::text as importe_anticipos,
+           (count(m.id) filter (where m.tipo = 'entrada_cambio_anticipo'))::int as cambios,
+           coalesce(sum(m.importe) filter (where m.tipo = 'entrada_cambio_anticipo'), 0)::numeric(12, 2)::text as importe_cambios
     from turno t join usuario u on u.id = t.abierto_por
     join lugar_efectivo l on l.sucursal_id = t.sucursal_id and l.tipo = 'bolsa_visitas'
     join conteo_efectivo c on c.turno_id = t.id and c.lugar_id = l.id and c.momento = 'apertura'
@@ -376,7 +383,8 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     group by t.abierto_en, u.nombre, c.importe`;
   const centavos = (v: string) => Math.round(Number(v) * 100);
   const calculado = ((centavos(d.contado) + centavos(d.importe_cobros) + centavos(d.importe_cancelaciones) + centavos(d.importe_retiros) + centavos(d.importe_fondos)
-                     + centavos(d.importe_sobres) + centavos(d.importe_devoluciones) + centavos(d.importe_gastos)) / 100).toFixed(2);
+                     + centavos(d.importe_sobres) + centavos(d.importe_devoluciones) + centavos(d.importe_gastos)
+                     + centavos(d.importe_anticipos) + centavos(d.importe_cambios)) / 100).toFixed(2);
 
   const difs = (await DIFERENCIAS(sql, [e.id])).map(aDiferencia);
   const incidencias = (await INCIDENCIAS(sql, [e.id])).map(aIncidencia);
@@ -516,7 +524,8 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
       cancelaciones: { cuantas: d.cancelaciones, importe: d.importe_cancelaciones },
       retiros: { cuantos: d.retiros, importe: d.importe_retiros }, fondos: { cuantas: d.fondos, importe: d.importe_fondos },
       sobres: { cuantos: d.sobres, importe: d.importe_sobres }, devoluciones: { cuantas: d.devoluciones, importe: d.importe_devoluciones },
-      gastos: { cuantos: d.gastos, importe: d.importe_gastos }, calculado,
+      gastos: { cuantos: d.gastos, importe: d.importe_gastos },
+      anticipos: { cuantos: d.anticipos, importe: d.importe_anticipos }, cambiosAnticipo: { cuantos: d.cambios, importe: d.importe_cambios }, calculado,
     },
     fueraDeLaBolsa: ventasDelTurno(await cobrosDelTurno(sql, e.turno_id)),
     deRetiros: [...(await sql<DetalleDiferencias["deRetiros"]>`

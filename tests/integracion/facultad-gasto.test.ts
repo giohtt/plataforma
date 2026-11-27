@@ -115,6 +115,10 @@ describe.skipIf(!URL_ADMIN)("facultad para autorizar gastos", () => {
     const [nueva] = await sql<{ id: string }[]>`insert into sucursal (nombre, codigo) values ('Futura gastos', 'FGA') returning id`;
     expect(await vigente(g, nueva.id)).toEqual([{ sin_limite: true, limite_monto: null, limite_diario: null }]);
     expect(textoDonde((await resumenPermisos(sql, g)).permisos.find((x) => x.clave === "autorizacion.gasto"))).toMatch(/sin límite en todas$/);
+    // Sin límite no hay nada que escalar: el historial no lo dice.
+    const historial = (await pantallaPersona(sql, g, g))?.historial.find((x) => x.accion === "Dio la facultad para autorizar gastos");
+    expect(historial?.detalle).toMatch(/sin límite\. Quien solicita o paga un gasto no lo autoriza/);
+    expect(historial?.detalle).not.toMatch(/se escala/);
 
     // Si deja de tener Dirección ahí, la facultad sin límite deja de aplicar (aunque siga en el historial).
     await sql`update asignacion set revocada_en = now() where usuario_id = ${d} and rol = 'direccion'`;

@@ -650,6 +650,7 @@ const TIPO_MOVIMIENTO: Record<string, string> = {
   entrada_cobro_visita: "Cobro de visita en efectivo", ajuste_cancelacion_cobro: "Cancelación de un cobro", salida_retiro: "Retiro entregado a Encargada de retiros",
   salida_devolucion_cambio: "Devolución de cambio a una persona visitante",
   salida_pago_gasto: "Pago de un gasto autorizado",
+  salida_anticipo_gasto: "Anticipo entregado para una compra", entrada_cambio_anticipo: "Cambio devuelto de un anticipo",
   entrada_fondo: "Entrada al fondo de caja", salida_sobre: "Excedente al sobre del cierre",
 };
 const VERIFICACION: Record<string, string> = { correcto: "cerrado y con su folio", falta: "no estaba", abierto: "llegó abierto o con el sello roto", otro_folio: "traía otro folio" };

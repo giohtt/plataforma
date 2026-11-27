@@ -7,11 +7,13 @@ export const NOMBRE_ESTADO_GASTO: Record<EstadoGasto, string> = {
   por_autorizar: "Por autorizar", autorizado: "Autorizado", rechazado: "Rechazado",
 };
 
-export type OrigenPago = "bolsa_visitas" | "cajon_mensualidades" | "transferencia" | "tarjeta" | "dinero_personal";
+export type OrigenPago = "bolsa_visitas" | "cajon_mensualidades" | "transferencia" | "tarjeta" | "dinero_personal" | "anticipo";
 export const NOMBRE_ORIGEN: Record<OrigenPago, string> = {
   bolsa_visitas: "Bolsa de visitas", cajon_mensualidades: "Cajón de mensualidades", transferencia: "Transferencia",
-  tarjeta: "Tarjeta", dinero_personal: "Dinero personal (pendiente de reembolso)",
+  tarjeta: "Tarjeta", dinero_personal: "Dinero personal (pendiente de reembolso)", anticipo: "Anticipo comprobado",
 };
+
+export type LugarAnticipo = "bolsa_visitas" | "cajon_mensualidades";
 export type Comprobacion = "por_comprobar" | "comprobado" | "sin_comprobante";
 export const NOMBRE_COMPROBACION: Record<Comprobacion, string> = {
   por_comprobar: "Por comprobar", comprobado: "Comprobado", sin_comprobante: "Sin comprobante · por revisar · Dirección",

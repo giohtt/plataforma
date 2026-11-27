@@ -44,6 +44,12 @@ export type LugarEnTurno = {
   /** Pagos de gastos autorizados en efectivo (negativo) y cuántos. Bajan el esperado una vez (bloque 6). */
   gastos: string;
   cantidadGastos: number;
+  /** Anticipos para compras entregados de este lugar (negativo) y cuántos: el dinero queda a cargo de quien lo recibió. */
+  anticipos: string;
+  cantidadAnticipos: number;
+  /** Cambio de anticipos devuelto a este lugar y cuántos. Lo pagado al proveedor es la diferencia: no se cuenta dos veces. */
+  cambiosAnticipo: string;
+  cantidadCambiosAnticipo: number;
   /**
    * Diferencias contra el esperado registradas al retirar (lo contado − el esperado) y cuántas. No cambian el esperado:
    * se vinculan a la diferencia contra el esperado del cambio de turno, sin duplicarse.
@@ -93,8 +99,10 @@ export async function turnoAbiertoDe(tx: Tx | Sql, sucursalId: string): Promise<
            m.fondos::text as fondos, m.cuantos_fondos as "cantidadFondos",
            m.devoluciones::text as devoluciones, m.cuantas_devoluciones as "cantidadDevoluciones",
            m.gastos::text as gastos, m.cuantos_gastos as "cantidadGastos",
+           m.anticipos::text as anticipos, m.cuantos_anticipos as "cantidadAnticipos",
+           m.cambios::text as "cambiosAnticipo", m.cuantos_cambios as "cantidadCambiosAnticipo",
            dr.suma::text as "diferenciaRetiros", dr.cuantas as "cantidadDiferenciasRetiro",
-           case when l.tipo = 'bolsa_visitas' then (c.importe + m.suma + m.ajustes + m.salidas + m.fondos + m.devoluciones + m.gastos)::text end as esperado
+           case when l.tipo = 'bolsa_visitas' then (c.importe + m.suma + m.ajustes + m.salidas + m.fondos + m.devoluciones + m.gastos + m.anticipos + m.cambios)::text end as esperado
     from lugar_efectivo l
     join conteo_efectivo c on c.lugar_id = l.id and c.turno_id = ${t.id} and c.momento = 'apertura'
     join responsable_lugar r on r.lugar_id = l.id and r.turno_id = ${t.id} and r.hasta is null
@@ -113,7 +121,11 @@ export async function turnoAbiertoDe(tx: Tx | Sql, sucursalId: string): Promise<
              coalesce(sum(me.importe) filter (where me.tipo = 'salida_devolucion_cambio'), 0)::numeric(12, 2) as devoluciones,
              (count(*) filter (where me.tipo = 'salida_devolucion_cambio'))::int as cuantas_devoluciones,
              coalesce(sum(me.importe) filter (where me.tipo = 'salida_pago_gasto'), 0)::numeric(12, 2) as gastos,
-             (count(*) filter (where me.tipo = 'salida_pago_gasto'))::int as cuantos_gastos
+             (count(*) filter (where me.tipo = 'salida_pago_gasto'))::int as cuantos_gastos,
+             coalesce(sum(me.importe) filter (where me.tipo = 'salida_anticipo_gasto'), 0)::numeric(12, 2) as anticipos,
+             (count(*) filter (where me.tipo = 'salida_anticipo_gasto'))::int as cuantos_anticipos,
+             coalesce(sum(me.importe) filter (where me.tipo = 'entrada_cambio_anticipo'), 0)::numeric(12, 2) as cambios,
+             (count(*) filter (where me.tipo = 'entrada_cambio_anticipo'))::int as cuantos_cambios
       from movimiento_efectivo me where me.turno_id = ${t.id} and me.lugar_id = l.id
     ) m
     cross join lateral (
