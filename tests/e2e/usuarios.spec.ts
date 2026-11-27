@@ -41,6 +41,8 @@ const capturar = async (page: Page, nombre: string) => {
 };
 
 test("crear e invitar, dar un perfil y quitar un permiso con vista previa; revisar lo propio por 90 días; historial", async ({ page }) => {
+  // Recorrido largo (también otorga la autorización para resolver lo propio): en GitHub, en celular, pasaba de 30 s.
+  test.setTimeout(90_000);
   const e = await escenario();
 
   // Recepción no entra a la sección (el servidor responde «No encontrada»).
