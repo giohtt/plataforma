@@ -15,6 +15,7 @@ export const ESTADO_DIFERENCIA = {
   faltante_confirmado: "Faltante confirmado · pendiente para Dirección",
   sobrante_confirmado: "Sobrante confirmado · pendiente para Dirección",
   correccion_pendiente: "Resuelta por Dirección · corrección pendiente",
+  devolucion_pendiente: "Autorizada por Dirección · devolución pendiente",
   resuelta: "Resuelta por Dirección · cerrada",
 } as const;
 
@@ -22,7 +23,11 @@ export const NOMBRE_DECISION = {
   absorbe_sucursal: "Lo absorbe la sucursal",
   queda_en_bolsa: "Se queda en la bolsa",
   origen_identificado: "Origen identificado",
+  devolver_visitante: "Por devolver a la persona visitante",
 } as const;
+
+/** Días desde la autorización de una devolución sin entregar a partir de los cuales Dirección ve un recordatorio. */
+export const DIAS_RECORDATORIO_DEVOLUCION = 30;
 
 /** «Pendiente hace 3 h» o «hace 2 días 5 h». */
 export function tiempoPendiente(desde: Date, ahora = new Date()): { texto: string; masDe48: boolean } {

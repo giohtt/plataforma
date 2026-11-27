@@ -2,8 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
 import { FormularioCorreccion, FormularioResolucion, FormularioRevision, FormularioRevisionIncidencia } from "@/components/RevisionDiferencia";
-import { ESTADO_DIFERENCIA, etiquetaDiferencia, NOMBRE_DECISION, NOMBRE_LUGAR, NOMBRE_NIVEL, tiempoPendiente } from "@/lib/datos-diferencia";
-import { detalleDiferencias, TIPOS_REFERENCIA_CORRECCION } from "@/lib/diferencias";
+import { DIAS_RECORDATORIO_DEVOLUCION, ESTADO_DIFERENCIA, etiquetaDiferencia, NOMBRE_DECISION, NOMBRE_LUGAR, NOMBRE_NIVEL, tiempoPendiente } from "@/lib/datos-diferencia";
+import { cobrosParaOrigen, detalleDiferencias, TIPOS_REFERENCIA_CORRECCION } from "@/lib/diferencias";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
 export const metadata = { title: "Diferencia de efectivo · Fitnessland" };
@@ -19,6 +19,14 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
   const { codigo, entrega } = await params;
   const { aviso } = await searchParams;
   const c = await detalleDiferencias(obtenerBaseDatos()!, sesion.usuarioId, codigo, entrega);
+  // Cobros que pueden ser el origen «cambio mal entregado» de un sobrante de la bolsa por revisar.
+  const cobrosOrigen = new Map<string, { cobroId: string; texto: string; cambio: string }[]>();
+  for (const d of c?.puedeRevisar ? c.diferencias.filter((x) => !x.revision && x.lugar === "bolsa_visitas" && x.tipo === "contra_esperado" && Number(x.importe) > 0) : []) {
+    cobrosOrigen.set(d.id, (await cobrosParaOrigen(obtenerBaseDatos()!, d.id)).map((x) => ({
+      cobroId: x.cobroId, cambio: x.cambio,
+      texto: `${hora.format(x.en)} · ${x.visitante} · cobro ${pesos.format(Number(x.importe))} · recibido ${pesos.format(Number(x.recibido))} · cambio registrado ${pesos.format(Number(x.cambio))}`,
+    })));
+  }
   if (!c) notFound();
   const dif = (lugar: (typeof LUGARES)[number], tipo: "contra_esperado" | "entre_personas") =>
     c.diferencias.find((d) => d.lugar === lugar && d.tipo === tipo);
@@ -210,6 +218,14 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
                     Revisó <strong>{d.revision.revisadaPor}</strong> ({NOMBRE_NIVEL[d.revision.nivel]}) · {hora.format(d.revision.en)} · Motivo: «{d.revision.motivo}»
                     {d.revision.propia ? <strong className="marca-propia" data-testid="revisada-propia"> · Revisada por quien participó</strong> : null}
                   </p>
+                  {d.revision.origenCambio ? (
+                    <p className="sub" data-testid="origen-cambio">
+                      Origen: <strong>cambio mal entregado</strong> · cobro de {hora.format(d.revision.origenCambio.cobroEn)} a {d.revision.origenCambio.visitante} por{" "}
+                      {pesos.format(Number(d.revision.origenCambio.importeCobro))} · recibido {pesos.format(Number(d.revision.origenCambio.recibido))} · cambio registrado{" "}
+                      {pesos.format(Number(d.revision.origenCambio.cambioRegistrado))} · entregado {pesos.format(Number(d.revision.origenCambio.cambioEntregado))} ·{" "}
+                      <strong>por devolver {pesos.format(Number(d.revision.origenCambio.porDevolver))}</strong>
+                    </p>
+                  ) : null}
                   {/* El tiempo cuenta desde que se confirmó el faltante o sobrante; con la corrección pendiente, el caso sigue abierto. */}
                   {d.pendienteDireccionDesde ? (() => {
                     const t = tiempoPendiente(d.pendienteDireccionDesde);
@@ -226,11 +242,24 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
                     <p className="sub" data-testid="resolucion">
                       Decidió <strong>{d.resolucion.resueltaPor}</strong> (Dirección) · {hora.format(d.resolucion.en)} · <strong>{NOMBRE_DECISION[d.resolucion.decision]}</strong>
                       {d.resolucion.origen ? <> · Origen: «{d.resolucion.origen}»</> : null} · Motivo: «{d.resolucion.motivo}»
+                      {d.resolucion.devolucion ? (
+                        <><br /><span data-testid="devolucion">
+                          {d.resolucion.devolucion.entregada
+                            ? <>Devuelta a {d.resolucion.devolucion.visitante}: {pesos.format(Number(d.resolucion.devolucion.importe))} · entregó {d.resolucion.devolucion.entregada.por} · {hora.format(d.resolucion.devolucion.entregada.en)}{d.resolucion.devolucion.entregada.nota ? <> · «{d.resolucion.devolucion.entregada.nota}»</> : null}</>
+                            : <>Por devolver a {d.resolucion.devolucion.visitante}: {pesos.format(Number(d.resolucion.devolucion.importe))} · autorizada el {hora.format(d.resolucion.devolucion.autorizadaEn)} · los {pesos.format(Number(d.resolucion.devolucion.importe))} siguen en el efectivo de la sucursal, desglosados como «por devolver»; la entrega la registra Recepción desde la ficha de la persona visitante.</>}
+                        </span>
+                        {d.resolucion.devolucion.recordatorio ? (
+                          <><br /><span className="chip-estado chip-vencida" data-testid="recordatorio-devolucion">
+                            Recordatorio: devolución pendiente desde hace más de {DIAS_RECORDATORIO_DEVOLUCION} días (autorizada el {hora.format(d.resolucion.devolucion.autorizadaEn)})
+                          </span></>
+                        ) : null}</>
+                      ) : null}
                       {d.resolucion.correccion ? <><br />Corrección: «{d.resolucion.correccion.texto}» · referencia {d.resolucion.correccion.referencia.tipo} {d.resolucion.correccion.referencia.id} · {d.resolucion.correccion.por} · {hora.format(d.resolucion.correccion.en)}</> : null}
                     </p>
                   ) : null}
                   {d.estado === "faltante_confirmado" || d.estado === "sobrante_confirmado" ? (
-                    c.puedeResolver ? <FormularioResolucion codigo={codigo} diferenciaId={d.id} importe={d.importe} />
+                    c.puedeResolver ? <FormularioResolucion codigo={codigo} diferenciaId={d.id} importe={d.importe}
+                      devolver={d.revision.origenCambio ? `${pesos.format(Number(d.revision.origenCambio.porDevolver))} a ${d.revision.origenCambio.visitante}` : null} />
                       : <p className="sub">Pendiente de la decisión de Dirección.</p>
                   ) : d.estado === "correccion_pendiente" ? (
                     c.puedeResolver ? <FormularioCorreccion codigo={codigo} diferenciaId={d.id} tipos={TIPOS_REFERENCIA_CORRECCION} />
@@ -238,7 +267,7 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
                   ) : null}
                 </>
               ) : c.puedeRevisar ? (
-                <FormularioRevision codigo={codigo} diferenciaId={d.id} importe={d.importe} />
+                <FormularioRevision codigo={codigo} diferenciaId={d.id} importe={d.importe} cobros={cobrosOrigen.get(d.id) ?? []} />
               ) : (
                 <p className="sub">Por revisar por {NOMBRE_NIVEL[c.nivel]}.</p>
               )}
@@ -274,6 +303,11 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
                 <tr data-testid="desglose-sobres"><td>Excedente al sobre de la caja</td>
                   <td>Se guardó sellado hasta la recolección</td>
                   <td>− {pesos.format(Math.abs(Number(c.desglose.sobres.importe)))}</td></tr>
+              ) : null}
+              {c.desglose.devoluciones.cuantas ? (
+                <tr data-testid="desglose-devoluciones"><td>Devoluciones de cambio a visitantes</td>
+                  <td>{c.desglose.devoluciones.cuantas} {c.desglose.devoluciones.cuantas === 1 ? "devolución" : "devoluciones"} · no cambian el ingreso</td>
+                  <td>− {pesos.format(Math.abs(Number(c.desglose.devoluciones.importe)))}</td></tr>
               ) : null}
               <tr><td><strong>Saldo esperado al entregar</strong></td><td></td><td data-testid="desglose-total"><strong>{pesos.format(Number(c.desglose.calculado))}</strong></td></tr>
             </tbody>

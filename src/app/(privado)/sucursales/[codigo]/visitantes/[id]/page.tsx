@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { HistorialVisitante } from "@/components/HistorialVisitante";
+import { FormularioDevolucion } from "@/components/Devolucion";
+import { devolucionesDeVisitante } from "@/lib/diferencias";
 import { historialVisitante } from "@/lib/historial";
 import { correccionesDeVisitante, expedienteParaCorregir } from "@/lib/correccion-visitantes";
 import { obtenerBaseDatos } from "@/lib/db";
@@ -18,8 +20,10 @@ const AVISOS: Record<string, string> = {
   corregido: "Corrección guardada.",
   fusionado: "Fichas unidas. Esta es la ficha activa.",
   unida: "La ficha que abriste se unió a esta. Esta es la ficha activa.",
+  devolucion: "Devolución registrada. Salió de la bolsa una sola vez; el ingreso de la visita no cambia.",
 };
 const ORIGEN: Record<string, string> = { activa: "de la ficha que quedó activa", unida: "de la ficha unida" };
+const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
 const fechaHora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
 const CAMPO: Record<string, string> = { nombre: "Nombre", telefono: "Teléfono", estado_procedencia: "Estado de procedencia" };
 
@@ -36,12 +40,13 @@ export default async function ExpedienteVisitante({ params, searchParams }: Page
   }
   const e = await consultarVisitante(sql, sesion.usuarioId, codigo, id);
   if (!e) notFound();
-  const [editable, correcciones, fusiones, fusionable, historial] = await Promise.all([
+  const [editable, correcciones, fusiones, fusionable, historial, devoluciones] = await Promise.all([
     expedienteParaCorregir(sql, sesion.usuarioId, codigo, id),
     correccionesDeVisitante(sql, sesion.usuarioId, codigo, id),
     fusionesDeVisitante(sql, sesion.usuarioId, codigo, id),
     puedeFusionarDesde(sql, sesion.usuarioId, codigo, id),
     historialVisitante(sql, sesion.usuarioId, codigo, id),
+    devolucionesDeVisitante(sql, sesion.usuarioId, codigo, id),
   ]);
   const enProduccion = leerEntorno() === "produccion";
   const puedeCorregir = !!editable?.puedeCorregir && !enProduccion;
@@ -53,6 +58,18 @@ export default async function ExpedienteVisitante({ params, searchParams }: Page
       <p className="sub"><Link href={`/sucursales/${codigo}/visitantes`}>← Buscar otro visitante</Link></p>
       {typeof aviso === "string" && AVISOS[aviso] ? <p className="aviso aviso-ok" role="status">{AVISOS[aviso]}</p> : null}
       <h1 className="cabecera-titulo" data-testid="nombre-visitante">{e.nombre}</h1>
+      {devoluciones.map((d) => (
+        <section key={d.id} className="tarjeta" data-testid="devolucion-pendiente">
+          <h2 className="titulo-seccion">Tiene {pesos.format(Number(d.importe))} por devolver</h2>
+          <p className="sub">
+            Cambio que faltó entregar en el cobro del {fechaHora.format(d.cobroEn)} en {d.sucursal} · autorizó {d.autorizadaPor} el {fechaHora.format(d.autorizadaEn)}
+            {d.recordatorio ? <> <strong data-testid="recordatorio-devolucion">Pendiente desde hace más de 30 días.</strong></> : null}
+          </p>
+          {d.puedeEntregar && !enProduccion
+            ? <FormularioDevolucion codigo={codigo} devolucionId={d.id} importe={pesos.format(Number(d.importe))} visitante={e.nombre} />
+            : <p className="sub" data-testid="no-puede-devolver">{d.motivoNoPuede ?? "Desactivado fuera del entorno de pruebas."}</p>}
+        </section>
+      ))}
       {puedeCorregir || puedeFusionar ? (
         <p className="fila-acciones">
           {puedeCorregir ? (

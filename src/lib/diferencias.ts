@@ -5,6 +5,7 @@ import { conteoSeparado, sobresDelCierre, type ConteoSeparado } from "@/lib/cier
 import type { TipoLugar } from "@/lib/turnos";
 import { ventasDelTurno, type VentasTurno } from "@/lib/ventas";
 import { cobrosDelTurno } from "@/lib/visitas";
+import { DIAS_RECORDATORIO_DEVOLUCION } from "@/lib/datos-diferencia";
 
 /**
  * Bloque 5, paso 2 (primera parte): diferencias de efectivo registradas en los cambios de turno.
@@ -28,17 +29,30 @@ export type ResultadoRevision = "aclarada" | "faltante_confirmado" | "sobrante_c
  * Estado de una diferencia: por revisar; aclarada; confirmada y pendiente para Dirección; resuelta por Dirección con
  * corrección pendiente; o resuelta (cerrada).
  */
-export type EstadoDiferencia = "por_revisar" | ResultadoRevision | "correccion_pendiente" | "resuelta";
-export type DecisionDireccion = "absorbe_sucursal" | "queda_en_bolsa" | "origen_identificado";
+export type EstadoDiferencia = "por_revisar" | ResultadoRevision | "correccion_pendiente" | "devolucion_pendiente" | "resuelta";
+export type DecisionDireccion = "absorbe_sucursal" | "queda_en_bolsa" | "origen_identificado" | "devolver_visitante";
+/** Devolución de cambio mal entregado autorizada por Dirección, y su entrega a la persona visitante. */
+export type Devolucion = {
+  id: string; importe: string; visitante: string; visitanteId: string; autorizadaPor: string; autorizadaEn: Date;
+  /** Recordatorio para Dirección: pasaron 30 días desde la autorización sin entregarla. */
+  recordatorio: boolean;
+  entregada: { en: Date; por: string; nota: string | null } | null;
+};
 export type Resolucion = {
   decision: DecisionDireccion; motivo: string; origen: string | null; requiereCorreccion: boolean; resueltaPor: string; en: Date;
   correccion: { texto: string; referencia: { tipo: string; id: string }; por: string; en: Date } | null;
+  devolucion: Devolucion | null;
+};
+/** Origen «cambio mal entregado» registrado con la revisión de un sobrante. */
+export type OrigenCambio = {
+  cobroEn: Date; visitante: string; cambioRegistrado: string; cambioEntregado: string; porDevolver: string; recibido: string; importeCobro: string;
 };
 /** Horas a partir de las cuales un caso pendiente para Dirección se marca «Más de 48 horas pendiente». */
 export const HORAS_AVISO_DIRECCION = 48;
 export type NivelRevision = "encargado" | "administracion" | "direccion";
 /** propia: la revisó quien participó, con su autorización personal (queda marcada para siempre). */
-export type Revision = { resultado: ResultadoRevision; motivo: string; revisadaPor: string; nivel: NivelRevision; en: Date; propia: boolean };
+export type Revision = { resultado: ResultadoRevision; motivo: string; revisadaPor: string; nivel: NivelRevision; en: Date; propia: boolean;
+                         origenCambio: OrigenCambio | null };
 export type Diferencia = {
   id: string; lugar: TipoLugar; tipo: TipoDiferencia; importe: string; estado: EstadoDiferencia; registradaEn: Date;
   /** Clave fija del caso (TEN-D7) y cuándo se asignó. */
@@ -135,15 +149,32 @@ type FilaDiferencia = {
   resolutor: string | null; resuelta_en: Date | null; correccion: string | null; corrector: string | null; correccion_en: Date | null;
   correccion_ref_tipo: string | null; correccion_ref_id: string | null;
   clave: string | null; clave_en: Date | null; clave_existente: boolean | null;
+  oc_en: Date | null; oc_visitante: string | null; oc_registrado: string | null; oc_entregado: string | null; oc_devolver: string | null;
+  oc_recibido: string | null; oc_importe: string | null;
+  dv_id: string | null; dv_importe: string | null; dv_visitante: string | null; dv_visitante_id: string | null; dv_por: string | null; dv_en: Date | null;
+  dv_recordatorio: boolean | null; de_en: Date | null; de_por: string | null; de_nota: string | null;
 };
 const DIFERENCIAS = (sql: Sql | Tx, entregaIds: string[]) => sql<FilaDiferencia[]>`
   select d.id, d.entrega_id, l.tipo as lugar, d.tipo, d.importe::text as importe, d.registrada_en,
          r.resultado, r.motivo, u.nombre as revisor, r.nivel, r.en as revisada_en, r.autorrevision_id is not null as propia,
          x.decision, x.motivo as motivo_dir, x.origen, x.requiere_correccion, ux.nombre as resolutor, x.en as resuelta_en,
          x.correccion, uc.nombre as corrector, x.correccion_en, x.correccion_ref_tipo, x.correccion_ref_id,
-         k.clave, k.asignada_en as clave_en, k.origen = 'casos_existentes' as clave_existente
+         k.clave, k.asignada_en as clave_en, k.origen = 'casos_existentes' as clave_existente,
+         ocm.en as oc_en, ocm.visitante as oc_visitante, oc.cambio_registrado::text as oc_registrado, oc.cambio_entregado::text as oc_entregado,
+         oc.por_devolver::text as oc_devolver, ocm.recibido as oc_recibido, ocm.importe as oc_importe,
+         dv.id as dv_id, dv.importe::text as dv_importe, vv.nombre as dv_visitante, dv.visitante_id as dv_visitante_id, ud.nombre as dv_por,
+         dv.autorizada_en as dv_en, dv.autorizada_en <= now() - make_interval(days => ${DIAS_RECORDATORIO_DEVOLUCION}) as dv_recordatorio,
+         de.en as de_en, ue.nombre as de_por, de.nota as de_nota
   from diferencia_efectivo d join lugar_efectivo l on l.id = d.lugar_id
   left join clave_diferencia k on k.clase = 'turno' and k.caso_id = d.id
+  left join origen_cambio_mal_entregado oc on oc.diferencia_id = d.id
+  left join lateral (
+    select m.en, v.nombre as visitante, cv.recibido::text as recibido, cv.importe::text as importe
+    from cobro_visita cv join movimiento_efectivo m on m.cobro_id = cv.id and m.tipo = 'entrada_cobro_visita' join visitante v on v.id = oc.visitante_id
+    where cv.id = oc.cobro_id) ocm on true
+  left join devolucion_cambio dv on dv.diferencia_id = d.id left join visitante vv on vv.id = dv.visitante_id
+  left join usuario ud on ud.id = dv.autorizada_por
+  left join devolucion_entregada de on de.devolucion_id = dv.id left join usuario ue on ue.id = de.entregada_por
   left join revision_diferencia r on r.diferencia_id = d.id left join usuario u on u.id = r.revisada_por
   left join resolucion_diferencia x on x.diferencia_id = d.id left join usuario ux on ux.id = x.resuelta_por
   left join usuario uc on uc.id = x.correccion_por
@@ -153,14 +184,23 @@ const aDiferencia = (d: FilaDiferencia): Diferencia => {
   const resolucion: Resolucion | null = d.decision ? {
     decision: d.decision, motivo: d.motivo_dir!, origen: d.origen, requiereCorreccion: !!d.requiere_correccion, resueltaPor: d.resolutor!,
     en: d.resuelta_en!, correccion: d.correccion ? { texto: d.correccion, referencia: { tipo: d.correccion_ref_tipo!, id: d.correccion_ref_id! }, por: d.corrector!, en: d.correccion_en! } : null,
+    devolucion: d.dv_id ? {
+      id: d.dv_id, importe: d.dv_importe!, visitante: d.dv_visitante!, visitanteId: d.dv_visitante_id!, autorizadaPor: d.dv_por!, autorizadaEn: d.dv_en!,
+      recordatorio: !d.de_en && Boolean(d.dv_recordatorio), entregada: d.de_en ? { en: d.de_en, por: d.de_por!, nota: d.de_nota } : null,
+    } : null,
   } : null;
   const estado: EstadoDiferencia = !d.resultado ? "por_revisar"
     : !resolucion ? d.resultado
-    : resolucion.requiereCorreccion && !resolucion.correccion ? "correccion_pendiente" : "resuelta";
+    : resolucion.requiereCorreccion && !resolucion.correccion ? "correccion_pendiente"
+    : resolucion.devolucion && !resolucion.devolucion.entregada ? "devolucion_pendiente" : "resuelta";
   return {
     id: d.id, lugar: d.lugar, tipo: d.tipo, importe: d.importe, registradaEn: d.registrada_en, estado, resolucion,
     clave: d.clave, claveAsignadaEn: d.clave_en, claveCasoExistente: Boolean(d.clave_existente),
-    revision: d.resultado ? { resultado: d.resultado, motivo: d.motivo!, revisadaPor: d.revisor!, nivel: d.nivel!, en: d.revisada_en!, propia: Boolean(d.propia) } : null,
+    revision: d.resultado ? {
+      resultado: d.resultado, motivo: d.motivo!, revisadaPor: d.revisor!, nivel: d.nivel!, en: d.revisada_en!, propia: Boolean(d.propia),
+      origenCambio: d.oc_en ? { cobroEn: d.oc_en, visitante: d.oc_visitante!, cambioRegistrado: d.oc_registrado!, cambioEntregado: d.oc_entregado!,
+                                porDevolver: d.oc_devolver!, recibido: d.oc_recibido!, importeCobro: d.oc_importe! } : null,
+    } : null,
     pendienteDireccionDesde: estado === "faltante_confirmado" || estado === "sobrante_confirmado" || estado === "correccion_pendiente" ? d.revisada_en : null,
   };
 };
@@ -209,6 +249,8 @@ export type Desglose = {
   fondos: { cuantas: number; importe: string };
   /** Salida al sobre guardado en la caja al cerrar (negativo; solo con sobres guardados). */
   sobres: { cuantos: number; importe: string };
+  /** Devoluciones de cambio mal entregado a personas visitantes (negativo). No tocan el ingreso. */
+  devoluciones: { cuantas: number; importe: string };
   /** Calculado aquí con los movimientos hasta la entrega. Debe coincidir con el esperado guardado al entregar. */
   calculado: string;
 };
@@ -305,7 +347,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   // Desglose de la bolsa: lo contado al abrir y los movimientos del turno registrados antes de la entrega.
   const [d] = await sql<{ abierto_en: Date; abierto_por: string; contado: string; cobros: number; visitas: number; importe_cobros: string;
                           cancelaciones: number; importe_cancelaciones: string; retiros: number; importe_retiros: string;
-                          fondos: number; importe_fondos: string; sobres: number; importe_sobres: string }[]>`
+                          fondos: number; importe_fondos: string; sobres: number; importe_sobres: string; devoluciones: number; importe_devoluciones: string }[]>`
     select t.abierto_en, u.nombre as abierto_por, c.importe::text as contado,
            (count(m.id) filter (where m.tipo = 'entrada_cobro_visita'))::int as cobros,
            coalesce(sum((select count(*) from pase_visita p join cobro_visita cv on cv.operacion_id = p.operacion_id where cv.id = m.cobro_id))
@@ -318,7 +360,9 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
            (count(m.id) filter (where m.tipo = 'entrada_fondo'))::int as fondos,
            coalesce(sum(m.importe) filter (where m.tipo = 'entrada_fondo'), 0)::numeric(12, 2)::text as importe_fondos,
            (count(m.id) filter (where m.tipo = 'salida_sobre'))::int as sobres,
-           coalesce(sum(m.importe) filter (where m.tipo = 'salida_sobre'), 0)::numeric(12, 2)::text as importe_sobres
+           coalesce(sum(m.importe) filter (where m.tipo = 'salida_sobre'), 0)::numeric(12, 2)::text as importe_sobres,
+           (count(m.id) filter (where m.tipo = 'salida_devolucion_cambio'))::int as devoluciones,
+           coalesce(sum(m.importe) filter (where m.tipo = 'salida_devolucion_cambio'), 0)::numeric(12, 2)::text as importe_devoluciones
     from turno t join usuario u on u.id = t.abierto_por
     join lugar_efectivo l on l.sucursal_id = t.sucursal_id and l.tipo = 'bolsa_visitas'
     join conteo_efectivo c on c.turno_id = t.id and c.lugar_id = l.id and c.momento = 'apertura'
@@ -327,7 +371,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     group by t.abierto_en, u.nombre, c.importe`;
   const centavos = (v: string) => Math.round(Number(v) * 100);
   const calculado = ((centavos(d.contado) + centavos(d.importe_cobros) + centavos(d.importe_cancelaciones) + centavos(d.importe_retiros) + centavos(d.importe_fondos)
-                     + centavos(d.importe_sobres)) / 100).toFixed(2);
+                     + centavos(d.importe_sobres) + centavos(d.importe_devoluciones)) / 100).toFixed(2);
 
   const difs = (await DIFERENCIAS(sql, [e.id])).map(aDiferencia);
   const incidencias = (await INCIDENCIAS(sql, [e.id])).map(aIncidencia);
@@ -394,7 +438,8 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
   ];
   const LUGAR = { bolsa_visitas: "bolsa", cajon_mensualidades: "cajón" } as const;
   const cual = (d: Diferencia) => `${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : (cierre ? "entre cierre y apertura" : "en la entrega")}`;
-  const DECISION = { absorbe_sucursal: "Lo absorbe la sucursal", queda_en_bolsa: "Se queda en la bolsa", origen_identificado: "Origen identificado" } as const;
+  const DECISION = { absorbe_sucursal: "Lo absorbe la sucursal", queda_en_bolsa: "Se queda en la bolsa", origen_identificado: "Origen identificado",
+                     devolver_visitante: "Por devolver a la persona visitante" } as const;
   const RESULTADO = { aclarada: "Aclarada", faltante_confirmado: "Faltante confirmado", sobrante_confirmado: "Sobrante confirmado" } as const;
   const dinero = (v: string) => (Number(v) < 0 ? "−" : "+") + "$" + Math.abs(Number(v)).toLocaleString("es-MX", { minimumFractionDigits: 2 });
   const historial: EventoCaso[] = (cierre ? [
@@ -428,13 +473,20 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
     })),
     ...difs.filter((d) => d.revision).map((d) => ({
       en: d.revision!.en,
-      que: `Revisión (${LUGAR[d.lugar]}, ${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : (cierre ? "entre cierre y apertura" : "en la entrega")}): ${RESULTADO[d.revision!.resultado]}. Motivo: «${d.revision!.motivo}»`,
+      que: `Revisión (${LUGAR[d.lugar]}, ${dinero(d.importe)} ${d.tipo === "contra_esperado" ? "contra el esperado" : (cierre ? "entre cierre y apertura" : "en la entrega")}): ${RESULTADO[d.revision!.resultado]}`
+        + (d.revision!.origenCambio ? ` · origen: cambio mal entregado en el cobro de ${pesosMx(d.revision!.origenCambio.importeCobro)} de ${d.revision!.origenCambio.visitante} (recibido ${pesosMx(d.revision!.origenCambio.recibido)}, cambio registrado ${pesosMx(d.revision!.origenCambio.cambioRegistrado)}, entregado ${pesosMx(d.revision!.origenCambio.cambioEntregado)}; por devolver ${pesosMx(d.revision!.origenCambio.porDevolver)})` : "")
+        + `. Motivo: «${d.revision!.motivo}»`,
       cuenta: d.revision!.revisadaPor,
     })),
     ...difs.filter((d) => d.resolucion).map((d) => ({
       en: d.resolucion!.en,
-      que: `Resolución de Dirección (${LUGAR[d.lugar]}, ${cual(d)}): ${DECISION[d.resolucion!.decision]}${d.resolucion!.origen ? `. Origen: «${d.resolucion!.origen}»` : ""}${d.resolucion!.requiereCorreccion ? " · corrección pendiente" : ""}. Motivo: «${d.resolucion!.motivo}»`,
+      que: `Resolución de Dirección (${LUGAR[d.lugar]}, ${cual(d)}): ${DECISION[d.resolucion!.decision]}${d.resolucion!.devolucion ? `: ${pesosMx(d.resolucion!.devolucion.importe)} a ${d.resolucion!.devolucion.visitante}` : ""}${d.resolucion!.origen ? `. Origen: «${d.resolucion!.origen}»` : ""}${d.resolucion!.requiereCorreccion ? " · corrección pendiente" : ""}. Motivo: «${d.resolucion!.motivo}»`,
       cuenta: d.resolucion!.resueltaPor,
+    })),
+    ...difs.filter((d) => d.resolucion?.devolucion?.entregada).map((d) => ({
+      en: d.resolucion!.devolucion!.entregada!.en,
+      que: `Devolución entregada (${LUGAR[d.lugar]}, ${cual(d)}): ${pesosMx(d.resolucion!.devolucion!.importe)} a ${d.resolucion!.devolucion!.visitante}, salida de la bolsa del turno abierto${d.resolucion!.devolucion!.entregada!.nota ? ` · «${d.resolucion!.devolucion!.entregada!.nota}»` : ""}`,
+      cuenta: d.resolucion!.devolucion!.entregada!.por,
     })),
     ...difs.filter((d) => d.resolucion?.correccion).map((d) => ({
       en: d.resolucion!.correccion!.en,
@@ -442,7 +494,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
       cuenta: d.resolucion!.correccion!.por,
     })),
     ...difs.filter((d) => d.estado === "resuelta").map((d) => ({
-      en: d.resolucion!.correccion?.en ?? d.resolucion!.en,
+      en: d.resolucion!.correccion?.en ?? d.resolucion!.devolucion?.entregada?.en ?? d.resolucion!.en,
       que: `Seguimiento cerrado (${LUGAR[d.lugar]}, ${cual(d)})`,
       cuenta: "La plataforma",
     })),
@@ -458,7 +510,7 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
       cobros: { cuantos: d.cobros, visitas: d.visitas, importe: d.importe_cobros },
       cancelaciones: { cuantas: d.cancelaciones, importe: d.importe_cancelaciones },
       retiros: { cuantos: d.retiros, importe: d.importe_retiros }, fondos: { cuantas: d.fondos, importe: d.importe_fondos },
-      sobres: { cuantos: d.sobres, importe: d.importe_sobres }, calculado,
+      sobres: { cuantos: d.sobres, importe: d.importe_sobres }, devoluciones: { cuantas: d.devoluciones, importe: d.importe_devoluciones }, calculado,
     },
     fueraDeLaBolsa: ventasDelTurno(await cobrosDelTurno(sql, e.turno_id)),
     deRetiros: [...(await sql<DetalleDiferencias["deRetiros"]>`
@@ -532,7 +584,8 @@ export async function revisarIncidencia(
 }
 
 export type ErrorRevision =
-  | "no_encontrada" | "sin_permiso" | "participaste" | "otro_nivel" | "ya_revisada" | "resultado" | "motivo" | "bloqueado_produccion";
+  | "no_encontrada" | "sin_permiso" | "participaste" | "otro_nivel" | "ya_revisada" | "resultado" | "motivo" | "bloqueado_produccion"
+  | "origen_cambio" | "cambio_entregado" | "no_coincide";
 
 /**
  * Registra el resultado de UNA diferencia. Comprueba en el servidor (y la base lo respalda) que el resultado
@@ -543,11 +596,16 @@ export async function revisarDiferencia(
   sql: Sql,
   usuarioId: string,
   codigo: string,
-  datos: { diferenciaId: string; resultado: string; motivo: string },
+  datos: { diferenciaId: string; resultado: string; motivo: string; origenCambio?: { cobroId: string; cambioEntregado: string } | null },
   { entorno }: { entorno: Entorno },
 ): Promise<{ ok: true; entregaId: string } | { ok: false; error: ErrorRevision }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
   if (!/^[A-Z0-9]{2,5}$/.test(codigo) || !esIdentificadorValido(datos.diferenciaId)) return { ok: false, error: "no_encontrada" };
+  const oc = datos.origenCambio ?? null;
+  if (oc) {
+    if (datos.resultado !== "sobrante_confirmado" || !esIdentificadorValido(oc.cobroId)) return { ok: false, error: "origen_cambio" };
+    if (!/^\d{1,7}(\.\d{1,2})?$/.test(oc.cambioEntregado.trim())) return { ok: false, error: "cambio_entregado" };
+  }
   const motivo = datos.motivo.trim().replace(/\s+/g, " ");
   if (!["aclarada", "faltante_confirmado", "sobrante_confirmado"].includes(datos.resultado)) return { ok: false, error: "resultado" };
   if (motivo.length < 5 || motivo.length > 300) return { ok: false, error: "motivo" };
@@ -580,12 +638,28 @@ export async function revisarDiferencia(
       if ((datos.resultado === "faltante_confirmado" && !negativo) || (datos.resultado === "sobrante_confirmado" && negativo)) {
         return { ok: false as const, error: "resultado" as const };
       }
+      let origen: Awaited<ReturnType<typeof cobrosParaOrigen>>[number] | null = null;
+      let entregado = 0;
+      if (oc) {
+        origen = (await cobrosParaOrigen(tx, datos.diferenciaId)).find((c) => c.cobroId === oc.cobroId) ?? null;
+        if (!origen) return { ok: false as const, error: "origen_cambio" as const };
+        entregado = Math.round(Number(oc.cambioEntregado) * 100);
+        const registrado = Math.round(Number(origen.cambio) * 100);
+        if (entregado >= registrado) return { ok: false as const, error: "cambio_entregado" as const };
+        if (registrado - entregado !== Math.round(Number(d.importe) * 100)) return { ok: false as const, error: "no_coincide" as const };
+      }
       const [r] = await tx<{ id: string }[]>`
         insert into revision_diferencia (diferencia_id, resultado, motivo, nivel, revisada_por, autorrevision_id)
         values (${datos.diferenciaId}, ${datos.resultado}, ${motivo}, ${d.nivel}, ${usuarioId}, ${autorrevision}) returning id`;
+      if (origen) {
+        await tx`insert into origen_cambio_mal_entregado (diferencia_id, cobro_id, visitante_id, cambio_registrado, cambio_entregado, por_devolver, registrado_por)
+                 values (${datos.diferenciaId}, ${origen.cobroId}, ${origen.visitanteId}, ${origen.cambio}, ${(entregado / 100).toFixed(2)}, ${d.importe}, ${usuarioId})`;
+      }
       await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, motivo, usuario_id)
                values ('diferencia_efectivo', ${datos.diferenciaId}, 'revisar',
-                       ${tx.json({ revision: r.id, resultado: datos.resultado, nivel: d.nivel, importe: d.importe, revisada_por_quien_participo: autorrevision !== null })}, ${motivo}, ${usuarioId})`;
+                       ${tx.json({ revision: r.id, resultado: datos.resultado, nivel: d.nivel, importe: d.importe, revisada_por_quien_participo: autorrevision !== null,
+                                   ...(origen ? { origen: "cambio_mal_entregado", cobro: origen.cobroId, cambio_registrado: origen.cambio,
+                                                  cambio_entregado: (entregado / 100).toFixed(2), por_devolver: d.importe } : {}) })}, ${motivo}, ${usuarioId})`;
       return { ok: true as const, entregaId: d.entrega_id };
     });
   } catch (error) {
@@ -597,7 +671,7 @@ export async function revisarDiferencia(
 
 export type ErrorResolucion =
   | "no_encontrada" | "sin_permiso" | "participaste" | "no_pendiente" | "ya_resuelta" | "decision" | "motivo" | "origen" | "correccion"
-  | "referencia" | "referencia_no_verificable" | "bloqueado_produccion";
+  | "referencia" | "referencia_no_verificable" | "bloqueado_produccion" | "sin_origen_cambio" | "cobro_ya_usado";
 
 /**
  * Tipos de registro que pueden servir como corrección de un sobrante. Hoy ninguno: la plataforma no tiene todavía un
@@ -638,7 +712,7 @@ export async function resolverDiferencia(
 ): Promise<{ ok: true; entregaId: string } | { ok: false; error: ErrorResolucion }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
   if (!/^[A-Z0-9]{2,5}$/.test(codigo) || !esIdentificadorValido(datos.diferenciaId)) return { ok: false, error: "no_encontrada" };
-  if (!["absorbe_sucursal", "queda_en_bolsa", "origen_identificado"].includes(datos.decision)) return { ok: false, error: "decision" };
+  if (!["absorbe_sucursal", "queda_en_bolsa", "origen_identificado", "devolver_visitante"].includes(datos.decision)) return { ok: false, error: "decision" };
   const motivo = texto(datos.motivo);
   if (motivo.length < 5 || motivo.length > 300) return { ok: false, error: "motivo" };
   const origen = datos.decision === "origen_identificado" ? texto(datos.origen ?? "") : null;
@@ -651,18 +725,160 @@ export async function resolverDiferencia(
       if (c.d.resolucion) return { ok: false as const, error: "ya_resuelta" as const };
       if (c.d.resultado !== "faltante_confirmado" && c.d.resultado !== "sobrante_confirmado") return { ok: false as const, error: "no_pendiente" as const };
       if ((datos.decision === "absorbe_sucursal") !== (c.d.resultado === "faltante_confirmado")) return { ok: false as const, error: "decision" as const };
+      // «Por devolver a la persona visitante»: solo con el origen «cambio mal entregado» registrado al revisar, y una vez por cobro.
+      const [oc] = datos.decision === "devolver_visitante"
+        ? await tx<{ cobro_id: string; visitante_id: string; por_devolver: string; sucursal_id: string; usado: boolean }[]>`
+            select oc.cobro_id, oc.visitante_id, oc.por_devolver::text as por_devolver, t.sucursal_id,
+                   exists (select 1 from devolucion_cambio x where x.cobro_id = oc.cobro_id) as usado
+            from origen_cambio_mal_entregado oc join diferencia_efectivo df on df.id = oc.diferencia_id join turno t on t.id = df.turno_id
+            where oc.diferencia_id = ${datos.diferenciaId}`
+        : [];
+      if (datos.decision === "devolver_visitante" && !oc) return { ok: false as const, error: "sin_origen_cambio" as const };
+      if (oc?.usado) return { ok: false as const, error: "cobro_ya_usado" as const };
       const [x] = await tx<{ id: string }[]>`
         insert into resolucion_diferencia (diferencia_id, decision, motivo, origen, requiere_correccion, resuelta_por)
         values (${datos.diferenciaId}, ${datos.decision}, ${motivo}, ${origen}, ${requiere}, ${usuarioId}) returning id`;
+      if (oc) {
+        await tx`insert into devolucion_cambio (diferencia_id, resolucion_id, cobro_id, visitante_id, sucursal_id, importe, autorizada_por)
+                 values (${datos.diferenciaId}, ${x.id}, ${oc.cobro_id}, ${oc.visitante_id}, ${oc.sucursal_id}, ${oc.por_devolver}, ${usuarioId})`;
+      }
       await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, motivo, usuario_id)
                values ('diferencia_efectivo', ${datos.diferenciaId}, 'resolver',
-                       ${tx.json({ resolucion: x.id, decision: datos.decision, origen, requiere_correccion: requiere })}, ${motivo}, ${usuarioId})`;
+                       ${tx.json({ resolucion: x.id, decision: datos.decision, origen, requiere_correccion: requiere,
+                                   ...(oc ? { devolucion: { importe: oc.por_devolver, cobro: oc.cobro_id } } : {}) })}, ${motivo}, ${usuarioId})`;
       return { ok: true as const, entregaId: c.d.entrega_id };
     });
   } catch (error) {
-    if ((error as { code?: string })?.code === "23505") return { ok: false, error: "ya_resuelta" };
+    const e = error as { code?: string; constraint_name?: string };
+    if (e?.code === "23505" && e.constraint_name === "devolucion_cambio_cobro_id_key") return { ok: false, error: "cobro_ya_usado" };
+    if (e?.code === "23505") return { ok: false, error: "ya_resuelta" };
     throw error;
   }
+}
+
+/**
+ * Cobros que pueden ser el origen «cambio mal entregado» de un sobrante de la bolsa: en efectivo, de una visita con una
+ * persona identificada, con «Recibido» anotado, en esa bolsa y ese turno antes de la entrega, sin cancelar, y cuyo
+ * cambio alcanza para el sobrante. La base vuelve a comprobarlo.
+ */
+export async function cobrosParaOrigen(sql: Sql | Tx, diferenciaId: string) {
+  return sql<{ cobroId: string; en: Date; importe: string; recibido: string; cambio: string; visitante: string; visitanteId: string }[]>`
+    select cv.id as "cobroId", m.en, cv.importe::text as importe, cv.recibido::text as recibido, cv.cambio::text as cambio,
+           v.nombre as visitante, v.id as "visitanteId"
+    from diferencia_efectivo df join lugar_efectivo l on l.id = df.lugar_id join entrega_turno e on e.id = df.entrega_id
+    join movimiento_efectivo m on m.turno_id = df.turno_id and m.lugar_id = df.lugar_id and m.tipo = 'entrada_cobro_visita' and m.en <= e.creada_en
+    join cobro_visita cv on cv.id = m.cobro_id
+    join pase_visita p on p.operacion_id = cv.operacion_id join visitante v on v.id = p.visitante_id
+    where df.id = ${diferenciaId} and df.tipo = 'contra_esperado' and l.tipo = 'bolsa_visitas' and df.importe > 0
+      and cv.forma_pago = 'efectivo' and cv.cambio is not null and cv.cambio >= df.importe
+      and (select count(*) from pase_visita x where x.operacion_id = cv.operacion_id) = 1
+      and not exists (select 1 from movimiento_efectivo a where a.cobro_id = cv.id and a.tipo = 'ajuste_cancelacion_cobro')
+    order by m.en`;
+}
+
+export type DevolucionPendiente = {
+  id: string; importe: string; sucursal: string; codigo: string; cobroEn: Date; autorizadaEn: Date; autorizadaPor: string; recordatorio: boolean;
+  /** Se puede entregar aquí: es la sucursal del cobro y quien consulta tiene la bolsa del turno abierto. */
+  puedeEntregar: boolean; motivoNoPuede: string | null;
+};
+
+/** Devoluciones autorizadas y aún no entregadas a una persona visitante (para su ficha). */
+export async function devolucionesDeVisitante(sql: Sql, usuarioId: string, codigo: string, visitanteId: string): Promise<DevolucionPendiente[]> {
+  if (!esIdentificadorValido(visitanteId)) return [];
+  const filas = await sql<{ id: string; importe: string; sucursal: string; codigo: string; sucursal_id: string; cobro_en: Date; autorizada_en: Date; por: string; recordatorio: boolean }[]>`
+    select dc.id, dc.importe::text as importe, s.nombre as sucursal, s.codigo, s.id as sucursal_id, m.en as cobro_en, dc.autorizada_en, u.nombre as por,
+           dc.autorizada_en <= now() - make_interval(days => ${DIAS_RECORDATORIO_DEVOLUCION}) as recordatorio
+    from devolucion_cambio dc join sucursal s on s.id = dc.sucursal_id join usuario u on u.id = dc.autorizada_por
+    join movimiento_efectivo m on m.cobro_id = dc.cobro_id and m.tipo = 'entrada_cobro_visita'
+    where dc.visitante_id = ${visitanteId} and not exists (select 1 from devolucion_entregada e where e.devolucion_id = dc.id)
+      and (tiene_permiso(${usuarioId}, 'visita.registrar', s.id) or tiene_permiso(${usuarioId}, 'diferencia.consultar', s.id))
+    order by dc.autorizada_en`;
+  const salida: DevolucionPendiente[] = [];
+  for (const f of filas) {
+    let motivoNoPuede: string | null = null;
+    if (f.codigo !== codigo) motivoNoPuede = `Se devuelve solo en ${f.sucursal}, la sucursal del cobro.`;
+    else {
+      const [r] = await sql<{ responsable: boolean; turno: boolean; entrega: boolean; registra: boolean }[]>`
+        select tiene_permiso(${usuarioId}, 'visita.registrar', ${f.sucursal_id}) as registra,
+               exists (select 1 from turno t where t.sucursal_id = ${f.sucursal_id} and t.cerrado_en is null) as turno,
+               exists (select 1 from turno t join responsable_lugar r on r.turno_id = t.id and r.hasta is null
+                       join lugar_efectivo l on l.id = r.lugar_id and l.tipo = 'bolsa_visitas'
+                       where t.sucursal_id = ${f.sucursal_id} and t.cerrado_en is null and r.usuario_id = ${usuarioId}) as responsable,
+               exists (select 1 from turno t join entrega_turno e on e.turno_id = t.id
+                       where t.sucursal_id = ${f.sucursal_id} and t.cerrado_en is null and e.estado in ('pendiente', 'recuento')) as entrega`;
+      motivoNoPuede = !r.registra ? "La entrega la registra Recepción."
+        : !r.turno ? "No hay un turno abierto en la sucursal."
+        : !r.responsable ? "La entrega la registra quien tiene la bolsa de visitas del turno abierto."
+        : r.entrega ? "La bolsa se está entregando al siguiente turno; registra la devolución después." : null;
+    }
+    salida.push({ id: f.id, importe: f.importe, sucursal: f.sucursal, codigo: f.codigo, cobroEn: f.cobro_en, autorizadaEn: f.autorizada_en,
+                  autorizadaPor: f.por, recordatorio: f.recordatorio, puedeEntregar: motivoNoPuede === null, motivoNoPuede });
+  }
+  return salida;
+}
+
+export type ErrorDevolucion = "no_encontrada" | "sin_permiso" | "otra_sucursal" | "sin_turno" | "no_responsable" | "entrega_en_curso"
+  | "ya_entregada" | "confirmar" | "nota" | "bloqueado_produccion";
+
+/**
+ * Recepción entrega a la persona visitante el cambio que faltó y lo registra: una salida de la bolsa del turno abierto
+ * (una sola vez, por lo autorizado), en la sucursal del cobro. No toca el cobro ni el ingreso. Cierra el caso.
+ */
+export async function registrarDevolucion(
+  sql: Sql, usuarioId: string, codigo: string, datos: { devolucionId: string; recibio: boolean; nota: string }, { entorno }: { entorno: Entorno },
+): Promise<{ ok: true; visitanteId: string } | { ok: false; error: ErrorDevolucion }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!/^[A-Z0-9]{2,5}$/.test(codigo) || !esIdentificadorValido(datos.devolucionId)) return { ok: false, error: "no_encontrada" };
+  if (!datos.recibio) return { ok: false, error: "confirmar" };
+  const nota = texto(datos.nota);
+  if (nota.length > 300) return { ok: false, error: "nota" };
+  try {
+    return await sql.begin(async (tx) => {
+      const [d] = await tx<{ id: string; importe: string; visitante_id: string; sucursal_id: string; codigo: string; diferencia_id: string; entregada: boolean; ve: boolean }[]>`
+        select dc.id, dc.importe::text as importe, dc.visitante_id, dc.sucursal_id, s.codigo, dc.diferencia_id,
+               exists (select 1 from devolucion_entregada e where e.devolucion_id = dc.id) as entregada,
+               tiene_permiso(${usuarioId}, 'visita.registrar', s.id) or tiene_permiso(${usuarioId}, 'diferencia.consultar', s.id) as ve
+        from devolucion_cambio dc join sucursal s on s.id = dc.sucursal_id where dc.id = ${datos.devolucionId} for update of dc`;
+      if (!d || !d.ve) return { ok: false as const, error: "no_encontrada" as const };
+      if (d.codigo !== codigo) return { ok: false as const, error: "otra_sucursal" as const };
+      if (d.entregada) return { ok: false as const, error: "ya_entregada" as const };
+      const [{ registra }] = await tx<{ registra: boolean }[]>`select tiene_permiso(${usuarioId}, 'visita.registrar', ${d.sucursal_id}) as registra`;
+      if (!registra) return { ok: false as const, error: "sin_permiso" as const };
+      const [t] = await tx<{ id: string }[]>`select id from turno where sucursal_id = ${d.sucursal_id} and cerrado_en is null for update`;
+      if (!t) return { ok: false as const, error: "sin_turno" as const };
+      const [r] = await tx<{ lugar_id: string; usuario_id: string }[]>`
+        select r.lugar_id, r.usuario_id from responsable_lugar r join lugar_efectivo l on l.id = r.lugar_id and l.tipo = 'bolsa_visitas'
+        where r.turno_id = ${t.id} and r.hasta is null`;
+      if (!r || r.usuario_id !== usuarioId) return { ok: false as const, error: "no_responsable" as const };
+      if ((await tx`select 1 from entrega_turno where turno_id = ${t.id} and estado in ('pendiente', 'recuento')`).length) {
+        return { ok: false as const, error: "entrega_en_curso" as const };
+      }
+      const [m] = await tx<{ id: string }[]>`
+        insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, devolucion_id, responsable_id, registrado_por)
+        values (${r.lugar_id}, ${t.id}, 'salida_devolucion_cambio', ${(-Number(d.importe)).toFixed(2)}, ${d.id}, ${usuarioId}, ${usuarioId}) returning id`;
+      await tx`insert into devolucion_entregada (devolucion_id, movimiento_id, recibio, entregada_por, nota)
+               values (${d.id}, ${m.id}, ${d.visitante_id}, ${usuarioId}, ${nota || null})`;
+      await tx`insert into historial_cambio (entidad, entidad_id, accion, cambios, usuario_id)
+               values ('diferencia_efectivo', ${d.diferencia_id}, 'entregar_devolucion',
+                       ${tx.json({ devolucion: d.id, importe: d.importe, turno: t.id, nota: nota || null })}, ${usuarioId})`;
+      return { ok: true as const, visitanteId: d.visitante_id };
+    });
+  } catch (error) {
+    if ((error as { code?: string })?.code === "23505") return { ok: false, error: "ya_entregada" };
+    throw error;
+  }
+}
+
+/** Devoluciones autorizadas sin entregar en la sucursal, con su recordatorio a los 30 días (para Dirección). */
+export async function devolucionesPendientes(sql: Sql, usuarioId: string, sucursalId: string) {
+  const [f] = await sql<{ ve: boolean; n: number; vencidas: number; desde: Date | null }[]>`
+    select tiene_permiso(${usuarioId}, 'diferencia.resolver', ${sucursalId}) as ve,
+           count(dc.id)::int as n,
+           (count(dc.id) filter (where dc.autorizada_en <= now() - make_interval(days => ${DIAS_RECORDATORIO_DEVOLUCION})))::int as vencidas,
+           min(dc.autorizada_en) as desde
+    from (select 1) x left join devolucion_cambio dc on dc.sucursal_id = ${sucursalId}
+      and not exists (select 1 from devolucion_entregada e where e.devolucion_id = dc.id)`;
+  return f.ve ? { n: f.n, vencidas: f.vencidas, desde: f.desde } : null;
 }
 
 /**

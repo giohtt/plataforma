@@ -3,7 +3,7 @@ import { entradasPorConfirmar } from "@/lib/fondos";
 import { accesoRecoleccion } from "@/lib/recolecciones";
 import { notFound } from "next/navigation";
 import type { CSSProperties, ReactNode } from "react";
-import { pendientesDeRevision } from "@/lib/diferencias";
+import { devolucionesPendientes, pendientesDeRevision } from "@/lib/diferencias";
 import { temaSucursal } from "@/lib/color";
 import { obtenerBaseDatos } from "@/lib/db";
 import { historialSucursal } from "@/lib/catalogo-sucursales";
@@ -65,7 +65,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo, caja, puedeVerReporteCaja] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo, caja, puedeVerReporteCaja, devoluciones] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -94,6 +94,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     entradasPorConfirmar(sql, sesion.usuarioId, sucursal.id),
     accesoRecoleccion(sql, sesion.usuarioId, sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "reporte.caja", sucursal.id),
+    devolucionesPendientes(sql, sesion.usuarioId, sucursal.id),
   ]);
 
   const permisos = await sql<{ clave: string; descripcion: string }[]>`
@@ -132,7 +133,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
             </p>
           ) : null}
           {/* Lo que espera algo de esta persona: solo aparece si hay algo. */}
-          {apoyosPendientes.n || custodiaPendiente.n || caja?.porRecoger || entradasFondo || retirosConfirmar || retirosRevisar || diferenciasPendientes ? (
+          {apoyosPendientes.n || custodiaPendiente.n || caja?.porRecoger || entradasFondo || retirosConfirmar || retirosRevisar || diferenciasPendientes || devoluciones?.vencidas ? (
             <section className="requiere-accion" aria-labelledby="t-accion" data-testid="requiere-accion">
               <h2 id="t-accion">Requiere tu acción</h2>
               <p className="fila-acciones">
@@ -164,6 +165,11 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
                 ) : null}
                 {diferenciasPendientes ? (
                   <Link className="boton" href={`/sucursales/${sucursal.codigo}/diferencias`} data-testid="accion-diferencias">Diferencias de efectivo ({diferenciasPendientes})</Link>
+                ) : null}
+                {devoluciones?.vencidas ? (
+                  <Link className="boton" href={`/sucursales/${sucursal.codigo}/diferencias`} data-testid="recordatorio-devoluciones">
+                    Devolución pendiente hace más de 30 días ({devoluciones.vencidas})
+                  </Link>
                 ) : null}
               </p>
             </section>

@@ -3,7 +3,7 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB }
 import { dinero, ETAPA_DIFERENCIA, nombreLugar, type ArchivoCaja, type CajaSucursal, type Detalle } from "@/lib/reporte-caja";
 import { aPesos, centavos, INCOMPLETO, lectura, lineaCasos, NOTA_RANGOS, RANGOS, resumirCaja, resumirVarias, type ResumenCaja } from "@/lib/resumen-caja";
 
-const ORDEN_ETAPA = { por_revisar: 0, pendiente_resolucion: 1, correccion_pendiente: 2, cerrada: 3 } as const;
+const ORDEN_ETAPA = { por_revisar: 0, pendiente_resolucion: 1, correccion_pendiente: 2, devolucion_pendiente: 3, cerrada: 4 } as const;
 
 /**
  * Archivos de «Caja y depósitos» (Excel y PDF; estructura aprobada el 25 nov 2026). Llevan lo mismo que la pantalla de
@@ -60,6 +60,10 @@ function filasResumen(c: CajaSucursal, s: ResumenCaja): Fila[] {
   const atrasados = s.atencion.find((a) => a.clave === "atrasados")!;
   f.push({ celdas: ["Confirmado, por depositar", $c(s.porDepositar.importe), "Contado", atrasados.n ? `${atrasados.n} con 48 horas o más sin depositar` : ""] });
   f.push({ celdas: [s.total.etiqueta, $c(s.total.importe), s.total.tipo === "sin_datos" ? SIN_DATOS : s.total.tipo === "subtotal" ? "Subtotal visible" : "Total", s.total.nota], negrita: true });
+  if (c.porDevolver.n) {
+    f.push({ celdas: ["De este efectivo, por devolver a visitantes", $c(c.porDevolver.importe), "Incluido arriba",
+                      `Ya está dentro del efectivo: no se suma otra vez · ${c.porDevolver.n} ${c.porDevolver.n === 1 ? "devolución autorizada" : "devoluciones autorizadas"} sin entregar`] });
+  }
   f.push({ celdas: ["Depositado en el periodo", $c(s.depositado.importe), "Depositado", `No se suma al total: ya salió de la custodia · ${s.depositado.n} ${s.depositado.n === 1 ? "depósito" : "depósitos"}`] });
   // Las diferencias van caso por caso (no se suman entre sí: mezclan faltantes y sobrantes).
   for (const a of s.atencion) {
@@ -129,6 +133,7 @@ function tablasSucursal(c: CajaSucursal, s: ResumenCaja, detalles: Detalle[] | u
       { celdas: ["Entregado a Encargada de retiros", { n: m.retiros.n }, { importe: m.retiros.importe },
                  `${m.retiros.confirmados} confirmados, ${m.retiros.pendientes} pendientes de confirmar${m.retiros.ocultos ? ` · más ${m.retiros.ocultos} con importe oculto` : ""}`] },
       { celdas: ["Entradas al fondo recibidas", { n: m.entradasFondo.n }, { importe: m.entradasFondo.importe }, ""] },
+      { celdas: ["Devoluciones de cambio a visitantes", { n: m.devoluciones.n }, { importe: m.devoluciones.importe }, "Salida de la bolsa; no resta del ingreso de visitas"] },
       { celdas: ["Depositado en el banco", { n: m.depositado.n }, { importe: m.depositado.importe }, "Detalle en «Depositado»"] },
       { celdas: ["Mensualidades", "", "No calculado", "Faltan datos de Open Desk"] },
       { celdas: ["Cobros de visitas", "", "", "Están en el reporte de visitas"] },
