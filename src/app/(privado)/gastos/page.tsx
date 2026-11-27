@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
-import { bandejaGastos, NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, TEXTO_IMPEDIMENTO, type VistaBandeja } from "@/lib/gastos";
+import { bandejaGastos, NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, NOMBRE_REEMBOLSO, TEXTO_IMPEDIMENTO, type VistaBandeja } from "@/lib/gastos";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
 export const metadata = { title: "Bandeja de gastos · Fitnessland" };
@@ -9,7 +9,8 @@ export const metadata = { title: "Bandeja de gastos · Fitnessland" };
 const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
 const fechaHora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
 const VISTAS: [VistaBandeja, string][] = [
-  ["tuyos", "Puedes decidir"], ["por_autorizar", "Por autorizar"], ["autorizados", "Autorizados"], ["rechazados", "Rechazados"], ["todos", "Todos"],
+  ["tuyos", "Puedes decidir"], ["por_autorizar", "Por autorizar"], ["autorizados", "Autorizados"], ["rechazados", "Rechazados"],
+  ["reembolsos", "Reembolsos por decidir"], ["todos", "Todos"],
 ];
 
 /**
@@ -49,6 +50,7 @@ export default async function BandejaGastos({ searchParams }: PageProps<"/gastos
                     <td data-etiqueta="Solicitó">{g.solicitadoPor}<br /><span className="sub">{fechaHora.format(g.solicitadoEn)}</span></td>
                     <td data-etiqueta="Estado">
                       {NOMBRE_ESTADO_GASTO[g.estado]}{g.origenPago ? " · pagado" : ""}{g.comprobacion && g.comprobacion !== "comprobado" ? <><br /><span className="sub">{NOMBRE_COMPROBACION[g.comprobacion]}</span></> : null}{g.decididoPor ? ` por ${g.decididoPor}` : ""}
+                      {g.reembolso ? <><br /><span className="sub" data-testid="reembolso-bandeja">{NOMBRE_REEMBOLSO[g.reembolso]}</span></> : null}
                       {g.estado === "por_autorizar" ? (
                         g.impedimento === null ? <><br /><strong className="sub">Puedes decidirlo</strong></>
                           : g.impedimento !== "sin_facultad" ? <><br /><span className="sub">{TEXTO_IMPEDIMENTO[g.impedimento]}</span></> : null

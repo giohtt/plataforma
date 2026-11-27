@@ -2,10 +2,10 @@
 
 import { useActionState, useState } from "react";
 import {
-  accionComprobarAnticipo, accionConfirmarAnticipo, accionCorregirGasto, accionDecidirGasto, accionEntregarAnticipo, accionPedirExcedente,
+  accionComprobarAnticipo, accionConfirmarAnticipo, accionConfirmarReembolso, accionCorregirGasto, accionDecidirReembolso, accionPagarReembolso, accionDecidirGasto, accionEntregarAnticipo, accionPedirExcedente,
   accionRecibirCambioAnticipo, accionRegistrarComprobante, accionRegistrarPago, accionSolicitarGasto, type EstadoGasto,
 } from "@/app/acciones-gastos";
-import { NOMBRE_ORIGEN, type LugarAnticipo, type OrigenPago } from "@/lib/datos-gasto";
+import { NOMBRE_ORIGEN, type LugarAnticipo, type OrigenPago, type OrigenReembolso } from "@/lib/datos-gasto";
 import type { Categoria, SucursalOpcion } from "@/lib/gastos";
 
 function ErrorCampo({ estado, campo }: { estado: EstadoGasto; campo: string }) {
@@ -431,6 +431,91 @@ export function FormularioCambioAnticipo({ codigo, clave, pendiente, recibe }: {
         <ErrorCampo estado={estado} campo="importe" />
       </div>
       <button className="boton boton-principal" type="submit" disabled={enviando}>Recibir cambio</button>
+    </form>
+  );
+}
+
+/** Dirección decide el reembolso de lo pagado con dinero personal. Rechazar exige motivo. */
+export function FormularioDecisionReembolso({ codigo, clave, importe, beneficiario }: { codigo: string; clave: string; importe: string; beneficiario: string }) {
+  const [estado, accion, enviando] = useActionState(accionDecidirReembolso, null);
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-decision-reembolso">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <h3>Decidir el reembolso de {pesosMx(importe)} a {beneficiario}</h3>
+      <div className="campo">
+        <label htmlFor="motivo-reembolso">Motivo (obligatorio para rechazar)</label>
+        <textarea id="motivo-reembolso" name="motivo" maxLength={300} defaultValue={estado?.valores?.motivo ?? ""} aria-invalid={estado?.errores?.motivo ? true : undefined} />
+        <ErrorCampo estado={estado} campo="motivo" />
+      </div>
+      <p className="sub">Autorizar no mueve dinero: el pago del reembolso se registra aparte, una sola vez y por lo pagado.</p>
+      <p className="fila-acciones">
+        <button className="boton boton-principal" type="submit" name="decision" value="autorizado" disabled={enviando}>Autorizar reembolso</button>
+        <button className="boton" type="submit" name="decision" value="rechazado" disabled={enviando}>Rechazar reembolso</button>
+      </p>
+    </form>
+  );
+}
+
+const NOMBRE_ORIGEN_REEMBOLSO: Record<OrigenReembolso, string> = {
+  bolsa_visitas: "Bolsa de visitas", cajon_mensualidades: "Cajón de mensualidades", transferencia: "Transferencia",
+};
+
+/** Pagar el reembolso autorizado: de la bolsa o el cajón (responsable vigente) o por transferencia. */
+export function FormularioPagoReembolso({ codigo, clave, importe, beneficiario, origenes }: {
+  codigo: string; clave: string; importe: string; beneficiario: string; origenes: OrigenReembolso[];
+}) {
+  const [estado, accion, enviando] = useActionState(accionPagarReembolso, null);
+  const [origen, setOrigen] = useState(estado?.valores?.origen ?? (origenes.length === 1 ? origenes[0] : ""));
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-pago-reembolso">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <h3>Pagar el reembolso de {pesosMx(importe)} a {beneficiario}</h3>
+      <fieldset className="campo campo-grupo" aria-invalid={estado?.errores?.origen ? true : undefined}>
+        <legend>¿De dónde sale el reembolso?</legend>
+        {origenes.map((o) => (
+          <label key={o} className="opcion-revision">
+            <input type="radio" name="origen" value={o} checked={origen === o} onChange={() => setOrigen(o)} />
+            <span>{NOMBRE_ORIGEN_REEMBOLSO[o]}</span>
+          </label>
+        ))}
+        <ErrorCampo estado={estado} campo="origen" />
+      </fieldset>
+      {origen === "transferencia" ? (
+        <div className="campos-fila">
+          <div className="campo">
+            <label htmlFor="cuenta-reembolso">Cuenta de origen (nombre corto)</label>
+            <input id="cuenta-reembolso" name="cuenta" maxLength={40} defaultValue={estado?.valores?.cuenta ?? ""} aria-invalid={estado?.errores?.cuenta ? true : undefined} />
+            <span className="sub">Sin números de cuenta ni de tarjeta.</span>
+            <ErrorCampo estado={estado} campo="cuenta" />
+          </div>
+          <div className="campo">
+            <label htmlFor="referencia-reembolso">Referencia de la operación</label>
+            <input id="referencia-reembolso" name="referencia" maxLength={60} defaultValue={estado?.valores?.referencia ?? ""} aria-invalid={estado?.errores?.referencia ? true : undefined} />
+            <ErrorCampo estado={estado} campo="referencia" />
+          </div>
+        </div>
+      ) : null}
+      <p className="sub">
+        {origen === "transferencia" ? "No toca efectivo." : origen ? "Sale de caja una sola vez como «Reembolso» y baja el esperado (en el cajón se registra; su esperado espera a Open Desk)." : ""}
+        {" "}Es por lo pagado con dinero personal; no es un gasto nuevo.
+      </p>
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Registrando…" : "Pagar reembolso"}</button>
+    </form>
+  );
+}
+
+export function FormularioConfirmarReembolso({ codigo, clave, importe }: { codigo: string; clave: string; importe: string }) {
+  const [estado, accion, enviando] = useActionState(accionConfirmarReembolso, null);
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-confirmar-reembolso">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="clave" value={clave} />
+      <button className="boton boton-principal" type="submit" disabled={enviando}>Confirmo que recibí el reembolso de {pesosMx(importe)}</button>
     </form>
   );
 }

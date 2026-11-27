@@ -8,8 +8,8 @@ import { redirect } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import {
-  comprobarAnticipo, confirmarAnticipo, corregirGasto, decidirGasto, entregarAnticipo, pedirExcedente, recibirCambioAnticipo, registrarComprobante, registrarPago,
-  solicitarGasto, TEXTO_IMPEDIMENTO, type ErrorGasto,
+  comprobarAnticipo, confirmarAnticipo, confirmarReembolso, corregirGasto, decidirGasto, decidirReembolso, entregarAnticipo, pagarReembolso, pedirExcedente,
+  recibirCambioAnticipo, registrarComprobante, registrarPago, solicitarGasto, TEXTO_IMPEDIMENTO, type ErrorGasto,
 } from "@/lib/gastos";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
 
@@ -55,6 +55,12 @@ const MENSAJES: Record<ErrorGasto, string> = {
   anticipo_estado: "El anticipo ya avanzó a otro paso (quizá desde otra pantalla). Recarga la página.",
   cambio: "Es más de lo que falta por devolver. Cuenta otra vez el dinero antes de recibirlo.",
   devuelve: "Tú devuelves el cambio: lo recibe la responsable vigente del lugar.",
+  sin_reembolso: "Este gasto no se pagó con dinero personal: no lleva reembolso.",
+  reembolso_decidido: "El reembolso ya se decidió (quizá desde otra pantalla). Recarga la página.",
+  no_direccion: "El reembolso lo decide Dirección, con su facultad de gasto vigente en esta sucursal.",
+  reembolso_no_autorizado: "Solo se paga un reembolso autorizado por Dirección.",
+  ya_reembolsado: "Este reembolso ya se pagó.",
+  propio_reembolso: "Tú recibes este reembolso: lo paga otra persona.",
   excedente_anticipo: "Este excedente ya se pagó al proveedor con dinero de quien recibió el anticipo: lo registra esa persona, como dinero personal. Lo que salga de caja para devolvérselo es su reembolso.",
 };
 const CAMPO: Partial<Record<ErrorGasto, string>> = {
@@ -218,4 +224,44 @@ export async function accionRecibirCambioAnticipo(previo: EstadoGasto, datos: Fo
   if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=${Number(r.pendiente) > 0 ? "cambio_parcial" : "cambio_recibido"}`);
   if (r.error === "cambio" || r.error === "importe") return { error: "Revisa los campos marcados.", errores: { importe: MENSAJES[r.error] }, valores, intento };
   return conError(r.error, valores, intento);
+}
+
+export async function accionDecidirReembolso(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const clave = leer("clave", 20);
+  const decision = leer("decision", 12);
+  const valores = { motivo: leer("motivo", 400) };
+  const intento = (previo?.intento ?? 0) + 1;
+  if (decision === "rechazado" && valores.motivo.trim().length < 5) {
+    return { error: "Revisa los campos marcados.", errores: { motivo: "Para rechazar escribe el motivo (de 5 a 300 caracteres)." }, valores, intento };
+  }
+  const r = await decidirReembolso(sql, sesion.usuarioId, codigo, { clave, decision, motivo: valores.motivo }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=reembolso_${decision}`);
+  if (r.error === "motivo") return { error: "Revisa los campos marcados.", errores: { motivo: "El motivo debe tener de 5 a 300 caracteres." }, valores, intento };
+  return conError(r.error, valores, intento);
+}
+
+export async function accionPagarReembolso(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const clave = leer("clave", 20);
+  const valores = { origen: leer("origen", 30), cuenta: leer("cuenta", 60), referencia: leer("referencia", 80) };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await pagarReembolso(sql, sesion.usuarioId, codigo, { clave, ...valores }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=reembolso_pagado`);
+  return conError(r.error, valores, intento);
+}
+
+export async function accionConfirmarReembolso(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const clave = leer("clave", 20);
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await confirmarReembolso(sql, sesion.usuarioId, codigo, { clave }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=reembolso_recibido`);
+  return conError(r.error, {}, intento);
 }

@@ -5,7 +5,7 @@ import { notFound } from "next/navigation";
 import type { CSSProperties, ReactNode } from "react";
 import { devolucionesPendientes, pendientesDeRevision } from "@/lib/diferencias";
 import { temaSucursal } from "@/lib/color";
-import { anticiposPendientes, gastosPorDecidir, gastosPorPagar } from "@/lib/gastos";
+import { anticiposPendientes, gastosPorDecidir, gastosPorPagar, reembolsosPendientes } from "@/lib/gastos";
 import { obtenerBaseDatos } from "@/lib/db";
 import { historialSucursal } from "@/lib/catalogo-sucursales";
 import { NOMBRE_PERFIL, sucursalAccesiblePorCodigo, tienePermiso, type Rol } from "@/lib/permisos";
@@ -66,7 +66,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo, caja, puedeVerReporteCaja, devoluciones, puedeSolicitarGasto, puedeConsultarGastos, gastosDecidir, gastosPagar, anticipos] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo, caja, puedeVerReporteCaja, devoluciones, puedeSolicitarGasto, puedeConsultarGastos, gastosDecidir, gastosPagar, anticipos, reembolsos] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -101,6 +101,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     gastosPorDecidir(sql, sesion.usuarioId, sucursal.id),
     gastosPorPagar(sql, sesion.usuarioId, sucursal.id),
     anticiposPendientes(sql, sesion.usuarioId, sucursal.id),
+    reembolsosPendientes(sql, sesion.usuarioId, sucursal.id),
   ]);
 
   const permisos = await sql<{ clave: string; descripcion: string }[]>`
@@ -139,12 +140,21 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
             </p>
           ) : null}
           {/* Lo que espera algo de esta persona: solo aparece si hay algo. */}
-          {apoyosPendientes.n || custodiaPendiente.n || caja?.porRecoger || entradasFondo || retirosConfirmar || retirosRevisar || diferenciasPendientes || devoluciones?.vencidas || gastosDecidir || gastosPagar || anticipos.aTuCargo || anticipos.cambioPorRecibir ? (
+          {apoyosPendientes.n || custodiaPendiente.n || caja?.porRecoger || entradasFondo || retirosConfirmar || retirosRevisar || diferenciasPendientes || devoluciones?.vencidas || gastosDecidir || gastosPagar || anticipos.aTuCargo || anticipos.cambioPorRecibir || reembolsos.porDecidir || reembolsos.porPagar || reembolsos.porConfirmar ? (
             <section className="requiere-accion" aria-labelledby="t-accion" data-testid="requiere-accion">
               <h2 id="t-accion">Requiere tu acción</h2>
               <p className="fila-acciones">
                 {gastosPagar ? (
                   <Link className="boton" href={`/sucursales/${sucursal.codigo}/gastos`} data-testid="accion-gastos-pagar">Gastos autorizados por pagar ({gastosPagar})</Link>
+                ) : null}
+                {reembolsos.porDecidir ? (
+                  <Link className="boton" href="/gastos?vista=reembolsos" data-testid="accion-reembolsos-decidir">Reembolsos por decidir ({reembolsos.porDecidir})</Link>
+                ) : null}
+                {reembolsos.porPagar ? (
+                  <Link className="boton" href={`/sucursales/${sucursal.codigo}/gastos`} data-testid="accion-reembolsos-pagar">Reembolsos autorizados por pagar ({reembolsos.porPagar})</Link>
+                ) : null}
+                {reembolsos.porConfirmar ? (
+                  <Link className="boton" href={`/sucursales/${sucursal.codigo}/gastos`} data-testid="accion-reembolsos-confirmar">Reembolsos por confirmar que recibiste ({reembolsos.porConfirmar})</Link>
                 ) : null}
                 {anticipos.aTuCargo ? (
                   <Link className="boton" href={`/sucursales/${sucursal.codigo}/gastos`} data-testid="accion-anticipos">Anticipos a tu cargo por comprobar ({anticipos.aTuCargo})</Link>
