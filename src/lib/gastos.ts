@@ -111,7 +111,7 @@ const VE_PARA_PAGAR = (db: Sql | Tx, usuarioId: string) => db`(
   or exists (select 1 from anticipo_gasto aa where aa.gasto_id = g.id and ${usuarioId} in (aa.recibe, aa.entregado_por))
   or (tiene_permiso(${usuarioId}, 'gasto.pagar', g.sucursal_paga_id)
       and exists (select 1 from anticipo_gasto aa join anticipo_comprobado kk on kk.anticipo_id = aa.id
-                  where aa.gasto_id = g.id and kk.cambio > 0 and not exists (select 1 from anticipo_cambio cc where cc.anticipo_id = aa.id))))`;
+                  where aa.gasto_id = g.id and kk.cambio > (select coalesce(sum(cc.importe), 0) from anticipo_cambio cc where cc.anticipo_id = aa.id))))`;
 
 /** Puede ver todos los gastos ligados a esa sucursal (beneficiada o que paga). */
 const puedeConsultar = (db: Sql | Tx, usuarioId: string, sucursalId: string) =>
@@ -203,7 +203,10 @@ export type DetalleGasto = {
 export type Anticipo = {
   lugar: LugarAnticipo; importe: string; entregadoPor: string; recibe: string; recibeId: string; en: Date; recibidoEn: Date | null;
   comprobado: { gastado: string; cambio: string; excedente: string; excedenteClave: string | null; en: Date } | null;
-  cambio: { importe: string; recibidoPor: string; en: Date } | null;
+  /** Devoluciones del cambio (pueden ser parciales); mientras falte, el anticipo sigue abierto por lo pendiente. */
+  cambios: { importe: string; recibidoPor: string; en: Date }[];
+  devuelto: string;
+  pendiente: string;
 };
 
 /** Con qué orígenes puede esta persona pagar el gasto ahora mismo (servidor; la base lo vuelve a comprobar). */
@@ -283,24 +286,31 @@ export async function detalleGasto(sql: Sql, usuarioId: string, codigo: string, 
     select c.motivo, u.nombre as "registradoPor", c.en from sin_comprobante_gasto c join usuario u on u.id = c.registrado_por where c.gasto_id = ${g.id}`;
   const op = await opcionesPago(sql, usuarioId, g.id);
   const [anticipoFila] = await sql<(Omit<Anticipo, "comprobado" | "cambio"> & { gastado: string | null; cambioComprobado: string | null; excedente: string | null;
-                                    excedenteClave: string | null; comprobadoEn: Date | null; cambioImporte: string | null; cambioPor: string | null; cambioEn: Date | null })[]>`
+                                    excedenteClave: string | null; comprobadoEn: Date | null; id: string })[]>`
     select a.lugar, a.importe::text as importe, e.nombre as "entregadoPor", r.nombre as recibe, a.recibe as "recibeId", a.en, ar.en as "recibidoEn",
            k.gastado::text as gastado, k.cambio::text as "cambioComprobado", k.excedente::text as excedente, x.clave as "excedenteClave", k.en as "comprobadoEn",
-           c.importe::text as "cambioImporte", cu.nombre as "cambioPor", c.en as "cambioEn"
+           a.id
     from anticipo_gasto a join usuario e on e.id = a.entregado_por join usuario r on r.id = a.recibe
     left join anticipo_recibido ar on ar.anticipo_id = a.id
     left join anticipo_comprobado k on k.anticipo_id = a.id left join gasto x on x.id = k.excedente_gasto_id
-    left join anticipo_cambio c on c.anticipo_id = a.id left join usuario cu on cu.id = c.recibido_por
     where a.gasto_id = ${g.id}`;
   const anticipo: Anticipo | null = anticipoFila ? {
     lugar: anticipoFila.lugar, importe: anticipoFila.importe, entregadoPor: anticipoFila.entregadoPor, recibe: anticipoFila.recibe,
     recibeId: anticipoFila.recibeId, en: anticipoFila.en, recibidoEn: anticipoFila.recibidoEn,
     comprobado: anticipoFila.gastado ? { gastado: anticipoFila.gastado, cambio: anticipoFila.cambioComprobado!, excedente: anticipoFila.excedente!,
                                          excedenteClave: anticipoFila.excedenteClave, en: anticipoFila.comprobadoEn! } : null,
-    cambio: anticipoFila.cambioImporte ? { importe: anticipoFila.cambioImporte, recibidoPor: anticipoFila.cambioPor!, en: anticipoFila.cambioEn! } : null,
+    cambios: [], devuelto: "0.00", pendiente: "0.00",
   } : null;
+  if (anticipo && anticipoFila) {
+    anticipo.cambios = [...await sql<Anticipo["cambios"]>`
+      select c.importe::text as importe, u.nombre as "recibidoPor", c.en from anticipo_cambio c join usuario u on u.id = c.recibido_por
+      where c.anticipo_id = ${anticipoFila.id} order by c.en`];
+    const devuelto = anticipo.cambios.reduce((n, c) => n + Math.round(Number(c.importe) * 100), 0);
+    anticipo.devuelto = (devuelto / 100).toFixed(2);
+    anticipo.pendiente = anticipo.comprobado ? ((Math.round(Number(anticipo.comprobado.cambio) * 100) - devuelto) / 100).toFixed(2) : "0.00";
+  }
   const entregar = anticipo ? null : await opcionesAnticipo(sql, usuarioId, g.id);
-  const lugarCambio = anticipo?.comprobado && Number(anticipo.comprobado.cambio) > 0 && !anticipo.cambio && anticipo.recibeId !== usuarioId
+  const lugarCambio = anticipo && Number(anticipo.pendiente) > 0 && anticipo.recibeId !== usuarioId
     ? await responsableVigente(sql, usuarioId, g.pagaId, anticipo.lugar) : false;
   const pagosCompra = await sql<{ clave: string; origen: OrigenPago; importe: string }[]>`
     select x.clave, p.origen, p.importe::text as importe from gasto x join pago_gasto p on p.gasto_id = x.id
@@ -858,7 +868,7 @@ export async function comprobarAnticipo(
 /** La responsable vigente del lugar del anticipo recibe el cambio, por el importe exacto (lo cuenta antes). */
 export async function recibirCambioAnticipo(
   sql: Sql, usuarioId: string, codigo: string, d: { clave: string; importe: string }, { entorno }: { entorno: Entorno },
-): Promise<{ ok: true } | { ok: false; error: ErrorGasto }> {
+): Promise<{ ok: true; pendiente: string } | { ok: false; error: ErrorGasto }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
   if (!CODIGO.test(codigo) || !CLAVE.test(d.clave)) return { ok: false, error: "no_encontrada" };
   const i = leerImporte(d.importe);
@@ -867,18 +877,21 @@ export async function recibirCambioAnticipo(
     return await sql.begin(async (tx) => {
       const g = await gastoParaAnticipo(tx, usuarioId, codigo, d.clave);
       if (!g) return { ok: false as const, error: "no_encontrada" as const };
-      const [a] = await tx<{ id: string; recibe: string; lugar: LugarAnticipo; cambio: string | null; recibido: boolean }[]>`
-        select a.id, a.recibe, a.lugar, k.cambio::text as cambio, exists (select 1 from anticipo_cambio c where c.anticipo_id = a.id) as recibido
+      const [a] = await tx<{ id: string; recibe: string; lugar: LugarAnticipo; pendiente: string | null }[]>`
+        select a.id, a.recibe, a.lugar,
+               (k.cambio - (select coalesce(sum(c.importe), 0) from anticipo_cambio c where c.anticipo_id = a.id))::numeric(12, 2)::text as pendiente
         from anticipo_gasto a left join anticipo_comprobado k on k.anticipo_id = a.id where a.gasto_id = ${g.id} for update of a`;
-      if (!a || !a.cambio || Number(a.cambio) === 0 || a.recibido) return { ok: false as const, error: "anticipo_estado" as const };
+      if (!a || !a.pendiente || Number(a.pendiente) <= 0) return { ok: false as const, error: "anticipo_estado" as const };
       if (a.recibe === usuarioId) return { ok: false as const, error: "devuelve" as const };
       const r = await responsableVigente(tx, usuarioId, g.sucursal_paga_id, a.lugar);
       if (!r) return { ok: false as const, error: "no_responsable" as const };
-      if (i.valor !== a.cambio) return { ok: false as const, error: "cambio" as const };
-      await tx`insert into anticipo_cambio (anticipo_id, importe, recibido_por) values (${a.id}, ${a.cambio}, ${usuarioId})`;
-      await tx`insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, anticipo_id, responsable_id, registrado_por)
-               values (${r.lugarId}, ${r.turnoId}, 'entrada_cambio_anticipo', ${a.cambio}, ${a.id}, ${usuarioId}, ${usuarioId})`;
-      return { ok: true as const };
+      const c100 = (v: string) => Math.round(Number(v) * 100);
+      if (c100(i.valor) > c100(a.pendiente)) return { ok: false as const, error: "cambio" as const };
+      const [c] = await tx<{ id: string }[]>`
+        insert into anticipo_cambio (anticipo_id, importe, recibido_por) values (${a.id}, ${i.valor}, ${usuarioId}) returning id`;
+      await tx`insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, anticipo_id, cambio_anticipo_id, responsable_id, registrado_por)
+               values (${r.lugarId}, ${r.turnoId}, 'entrada_cambio_anticipo', ${i.valor}, ${a.id}, ${c.id}, ${usuarioId}, ${usuarioId})`;
+      return { ok: true as const, pendiente: ((c100(a.pendiente) - c100(i.valor)) / 100).toFixed(2) };
     });
   } catch (e) {
     if (e instanceof Error && "code" in e && e.code === "23505") return { ok: false, error: "anticipo_estado" };
@@ -890,12 +903,12 @@ export async function recibirCambioAnticipo(
 export async function anticiposPendientes(sql: Sql, usuarioId: string, sucursalId: string): Promise<{ aTuCargo: number; cambioPorRecibir: number }> {
   const [r] = await sql<{ a_tu_cargo: number; cambio: number }[]>`
     select (count(*) filter (where a.recibe = ${usuarioId} and k.anticipo_id is null))::int as a_tu_cargo,
-           (count(*) filter (where k.cambio > 0 and c.anticipo_id is null and a.recibe <> ${usuarioId}
+           (count(*) filter (where k.cambio > (select coalesce(sum(cc.importe), 0) from anticipo_cambio cc where cc.anticipo_id = a.id) and a.recibe <> ${usuarioId}
                              and exists (select 1 from turno t join responsable_lugar rl on rl.turno_id = t.id and rl.hasta is null
                                          join lugar_efectivo l on l.id = rl.lugar_id
                                          where t.sucursal_id = g.sucursal_paga_id and t.cerrado_en is null and l.tipo = a.lugar and rl.usuario_id = ${usuarioId})))::int as cambio
     from anticipo_gasto a join gasto g on g.id = a.gasto_id
-    left join anticipo_comprobado k on k.anticipo_id = a.id left join anticipo_cambio c on c.anticipo_id = a.id
+    left join anticipo_comprobado k on k.anticipo_id = a.id
     where g.sucursal_paga_id = ${sucursalId}`;
   return { aTuCargo: r.a_tu_cargo, cambioPorRecibir: r.cambio };
 }

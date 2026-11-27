@@ -53,7 +53,7 @@ const MENSAJES: Record<ErrorGasto, string> = {
   recibe: "Elige a otra persona de la sucursal que paga (no puede ser quien autorizó el gasto, salvo Dirección).",
   no_recibe: "Solo quien recibió el anticipo lo confirma y lo comprueba, desde su cuenta.",
   anticipo_estado: "El anticipo ya avanzó a otro paso (quizá desde otra pantalla). Recarga la página.",
-  cambio: "El importe no coincide con el cambio por devolver. Cuenta otra vez el dinero antes de recibirlo.",
+  cambio: "Es más de lo que falta por devolver. Cuenta otra vez el dinero antes de recibirlo.",
   devuelve: "Tú devuelves el cambio: lo recibe la responsable vigente del lugar.",
 };
 const CAMPO: Partial<Record<ErrorGasto, string>> = {
@@ -214,7 +214,7 @@ export async function accionRecibirCambioAnticipo(previo: EstadoGasto, datos: Fo
   const valores = { importe: leer("importe", 20) };
   const intento = (previo?.intento ?? 0) + 1;
   const r = await recibirCambioAnticipo(sql, sesion.usuarioId, codigo, { clave, importe: valores.importe }, { entorno: leerEntorno() });
-  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=cambio_recibido`);
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=${Number(r.pendiente) > 0 ? "cambio_parcial" : "cambio_recibido"}`);
   if (r.error === "cambio" || r.error === "importe") return { error: "Revisa los campos marcados.", errores: { importe: MENSAJES[r.error] }, valores, intento };
   return conError(r.error, valores, intento);
 }

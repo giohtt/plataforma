@@ -405,8 +405,8 @@ export function FormularioComprobarAnticipo({ codigo, clave, entregado, proveedo
   );
 }
 
-/** La responsable vigente del lugar cuenta y recibe el cambio, por el importe exacto. */
-export function FormularioCambioAnticipo({ codigo, clave, cambio, recibe }: { codigo: string; clave: string; cambio: string; recibe: string }) {
+/** La responsable vigente del lugar cuenta y recibe el cambio; puede ser una parte de lo que falta. */
+export function FormularioCambioAnticipo({ codigo, clave, pendiente, recibe }: { codigo: string; clave: string; pendiente: string; recibe: string }) {
   const [estado, accion, enviando] = useActionState(accionRecibirCambioAnticipo, null);
   return (
     <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-cambio-anticipo">
@@ -419,7 +419,7 @@ export function FormularioCambioAnticipo({ codigo, clave, cambio, recibe }: { co
         <div className="importe"><span aria-hidden="true">$</span>
           <input id="importe-cambio" name="importe" inputMode="decimal" defaultValue={estado?.valores?.importe ?? ""} aria-invalid={estado?.errores?.importe ? true : undefined} />
         </div>
-        <span className="sub">Deben ser {pesosMx(cambio)}. Entra a caja y sube el esperado una sola vez.</span>
+        <span className="sub">Faltan {pesosMx(pendiente)}. Si te devuelve una parte, registra lo que contaste: el anticipo sigue abierto por el resto. Entra a caja y sube el esperado una sola vez.</span>
         <ErrorCampo estado={estado} campo="importe" />
       </div>
       <button className="boton boton-principal" type="submit" disabled={enviando}>Recibir cambio</button>
