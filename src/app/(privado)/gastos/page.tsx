@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
-import { bandejaGastos, NOMBRE_ESTADO_GASTO, TEXTO_IMPEDIMENTO, type VistaBandeja } from "@/lib/gastos";
+import { bandejaGastos, NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, TEXTO_IMPEDIMENTO, type VistaBandeja } from "@/lib/gastos";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
 export const metadata = { title: "Bandeja de gastos · Fitnessland" };
@@ -48,7 +48,7 @@ export default async function BandejaGastos({ searchParams }: PageProps<"/gastos
                     <td data-etiqueta="Importe" style={{ whiteSpace: "nowrap" }}>{pesos.format(Number(g.importe))}</td>
                     <td data-etiqueta="Solicitó">{g.solicitadoPor}<br /><span className="sub">{fechaHora.format(g.solicitadoEn)}</span></td>
                     <td data-etiqueta="Estado">
-                      {NOMBRE_ESTADO_GASTO[g.estado]}{g.decididoPor ? ` por ${g.decididoPor}` : ""}
+                      {NOMBRE_ESTADO_GASTO[g.estado]}{g.origenPago ? " · pagado" : ""}{g.comprobacion && g.comprobacion !== "comprobado" ? <><br /><span className="sub">{NOMBRE_COMPROBACION[g.comprobacion]}</span></> : null}{g.decididoPor ? ` por ${g.decididoPor}` : ""}
                       {g.estado === "por_autorizar" ? (
                         g.impedimento === null ? <><br /><strong className="sub">Puedes decidirlo</strong></>
                           : g.impedimento !== "sin_facultad" ? <><br /><span className="sub">{TEXTO_IMPEDIMENTO[g.impedimento]}</span></> : null

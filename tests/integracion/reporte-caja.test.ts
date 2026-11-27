@@ -955,9 +955,12 @@ describe.skipIf(!URL_ADMIN)("claves fijas para los casos que ya existían", () =
     url.pathname = `/${nombre}`;
     sql = postgresCliente(url.toString(), { max: 6, prepare: false, onnotice: () => {} });
     previas = await mkdtemp(path.join(tmpdir(), "migraciones-"));
-    // Antes de las claves (0044) y de lo que depende de ellas (0045). Las posteriores que no dependen de ellas (desde
-    // 0046, gastos) se aplican desde el principio para que el código actual de accesos funcione con estos datos.
-    for (const a of (await readdir(DIRECTORIO_MIGRACIONES)).filter((a) => a < "0044" || a >= "0046")) await copyFile(path.join(DIRECTORIO_MIGRACIONES, a), path.join(previas, a));
+    // Antes de las claves (0044) y de lo que depende de ellas (0045). Las de gastos que no dependen de ellas (0046 a
+    // 0048) se aplican desde el principio para que el código actual de accesos funcione con estos datos.
+    const independientes = ["0046", "0047", "0048"];
+    for (const a of (await readdir(DIRECTORIO_MIGRACIONES)).filter((a) => a < "0044" || independientes.some((x) => a.startsWith(x)))) {
+      await copyFile(path.join(DIRECTORIO_MIGRACIONES, a), path.join(previas, a));
+    }
     await aplicarMigraciones(sql, { directorio: previas });
     await cargarDatosPrueba(sql, { entorno: "pruebas" });
     for (const x of await sql<{ id: string; correo: string }[]>`select id, correo from usuario`) u[x.correo.replace("@prueba.fitnessland.invalid", "")] = x.id;

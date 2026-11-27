@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { FormularioSolicitud } from "@/components/Gastos";
 import { obtenerBaseDatos } from "@/lib/db";
-import { NOMBRE_ESTADO_GASTO, pantallaGastos } from "@/lib/gastos";
+import { NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, pantallaGastos } from "@/lib/gastos";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
 export const metadata = { title: "Gastos · Fitnessland" };
@@ -48,7 +48,7 @@ export default async function Gastos({ params }: PageProps<"/sucursales/[codigo]
                     <td data-etiqueta="Sucursales">{g.pagaOtra ? <>Para {g.beneficiada}<br /><span className="sub">Paga {g.paga}</span></> : g.beneficiada}</td>
                     <td data-etiqueta="Solicitó">{g.solicitadoPor}<br /><span className="sub">{fechaHora.format(g.solicitadoEn)}</span></td>
                     <td data-etiqueta="Estado" data-testid="estado-fila">
-                      {NOMBRE_ESTADO_GASTO[g.estado]}{g.decididoPor ? ` · ${g.decididoPor}` : ""}
+                      {NOMBRE_ESTADO_GASTO[g.estado]}{g.origenPago ? " · pagado" : ""}{g.comprobacion && g.comprobacion !== "comprobado" ? <><br /><span className="sub">{NOMBRE_COMPROBACION[g.comprobacion]}</span></> : null}{g.decididoPor ? ` · ${g.decididoPor}` : ""}
                       {g.estado === "por_autorizar" && g.impedimento === null ? <><br /><strong className="sub">Puedes decidirlo</strong></> : null}
                       {g.version > 1 ? <><br /><span className="sub">Versión {g.version}</span></> : null}
                     </td>

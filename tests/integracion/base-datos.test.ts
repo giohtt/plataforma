@@ -134,7 +134,7 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect(filas.filter((f) => f.permiso === "gasto.consultar").map((f) => f.rol).sort())
         .toEqual(["administracion", "direccion", "encargado", "gestion_administrativa"]);
       const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso).sort();
-      expect(recepcion).toEqual(["acceso.registrar_apertura", "caja.retirar", "gasto.solicitar", "sobre.entregar", "sucursal.consultar", "turno.abrir", "turno.cerrar", "turno.consultar", "turno.entregar", "turno.recibir", "visita.consultar", "visita.registrar", "visita.resumen_otras", "visita.solicitar_cancelacion", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
+      expect(recepcion).toEqual(["acceso.registrar_apertura", "caja.retirar", "gasto.pagar", "gasto.solicitar", "sobre.entregar", "sucursal.consultar", "turno.abrir", "turno.cerrar", "turno.consultar", "turno.entregar", "turno.recibir", "visita.consultar", "visita.registrar", "visita.resumen_otras", "visita.solicitar_cancelacion", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
       // Registrar visitas: solo Recepción (provisional); además, solo la responsable de la bolsa.
       expect(filas.filter((f) => f.permiso === "visita.registrar").map((f) => f.rol)).toEqual(["recepcion"]);
       // Verificar abonos de transferencias: Administración y Dirección (provisional). Recepción no.
