@@ -129,8 +129,8 @@ describe.skipIf(!URL_ADMIN)("permisos y alcance por sucursal", () => {
       await asignar(u, "direccion", "TEN");
       await expect(sql`insert into facultad_otorgada (usuario_id, permiso, sucursal_id, motivo)
                        values (${u}, 'autorizacion.gasto', ${ids.TEN}, 'Sin límite')`).rejects.toThrow(/límite/);
-      await sql`insert into facultad_otorgada (usuario_id, permiso, sucursal_id, limite_monto, motivo)
-                values (${u}, 'autorizacion.gasto', ${ids.TEN}, 500, 'Con límite')`;
+      await sql`insert into facultad_otorgada (usuario_id, permiso, sucursal_id, limite_monto, limite_diario, motivo)
+                values (${u}, 'autorizacion.gasto', ${ids.TEN}, 500, 800, 'Con límite')`;
       expect(await tienePermiso(sql, u, "autorizacion.gasto", ids.TEN)).toBe(true);
       expect(await tienePermiso(sql, u, "autorizacion.gasto", ids.STG)).toBe(false);
     });
@@ -156,10 +156,10 @@ describe.skipIf(!URL_ADMIN)("permisos y alcance por sucursal", () => {
       expect((await codigos(await de("direccion.general"))).length).toBe(total);
     });
 
-    it("las facultades de prueba son explícitas: Dirección general (gastos) y Dirección Tenango (cancelaciones, $150; respaldo para autorizar accesos)", async () => {
+    it("las facultades de prueba son explícitas: Dirección Tenango (cancelaciones, $150; respaldo para autorizar accesos); nadie autoriza gastos por omisión", async () => {
       const r = await resumenAccesos(sql, await de("direccion.general"));
       expect(r.alcancesGenerales.map((g) => g.rol)).toEqual(["direccion"]);
-      expect(r.facultades).toMatchObject([{ permiso: "autorizacion.gasto", todas: true, limite: "1000.00" }]);
+      expect(r.facultades).toEqual([]);
       const d = (await resumenAccesos(sql, await de("direccion"))).facultades;
       expect(d.map((f) => [f.permiso, f.todas, f.limite]).sort()).toEqual([
         ["acceso.autorizar", false, null],

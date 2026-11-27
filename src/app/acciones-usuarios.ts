@@ -61,10 +61,15 @@ const MENSAJES_USUARIOS: Record<ErrorUsuarios, string> = {
   sin_cambio: "No hay cambios que guardar.",
   bloqueado_produccion: "Esta sección está desactivada fuera del entorno de pruebas.",
   sin_consulta: "Para descargar el reporte de caja ahí, primero dale «Consultar el reporte de caja» en esas mismas sucursales (en todas, si eliges todas).",
+  diario: "Escribe el acumulado diario: un importe mayor que 0 y no menor que el límite por gasto.",
+  sin_limite_montos: "Con «Sin límite» no se escriben montos.",
+  ya_tiene_gasto: "Ya tiene una facultad de gastos vigente ahí (o en todas). Para cambiar sus límites, quítala primero; la anterior queda en el historial.",
+  usar_facultad_gasto: "Para autorizar gastos usa «Autorizar gastos»: lleva límite por gasto y acumulado diario.",
 };
 const CAMPO: Partial<Record<ErrorUsuarios, string>> = {
   nombre: "nombre", correo: "correo", correo_repetido: "correo", puesto: "puesto", motivo: "motivo", rol: "rol", permiso: "permiso",
   alcance: "alcance", sucursales: "alcance", sin_consulta: "alcance", limite: "limite", sin_limite: "limite", hasta: "hasta", no_direccion: "alcance",
+  diario: "diario", sin_limite_montos: "limite", ya_tiene_gasto: "alcance", usar_facultad_gasto: "permiso",
 };
 function conError(error: ErrorUsuarios, valores: Record<string, string>, intento: number): EstadoUsuarios {
   const campo = CAMPO[error];
@@ -123,7 +128,8 @@ function leerCambio(datos: FormData): { cambio: CambioAcceso | null; valores: Re
   const motivo = leer("motivo", 400);
   const alcance = leerAlcance(datos);
   const valores: Record<string, string> = {
-    tipo, motivo, rol: leer("rol", 40), permiso: leer("permiso", 60), limite: leer("limite", 20), hasta: leer("hasta", 10),
+    tipo, motivo, rol: leer("rol", 40), permiso: leer("permiso", 60), limite: leer("limite", 20), diario: leer("diario", 20),
+    sinLimite: leer("sinLimite", 2), hasta: leer("hasta", 10),
     alcance: leer("alcance", 10), sucursales: alcance.todas ? "" : alcance.sucursales.join(","), id: leer("id", 40), general: leer("general", 5),
   };
   const comun = { motivo, hasta: valores.hasta };
@@ -131,6 +137,7 @@ function leerCambio(datos: FormData): { cambio: CambioAcceso | null; valores: Re
     case "dar_perfil": return { cambio: { tipo, rol: valores.rol, alcance, ...comun }, valores };
     case "dar_permiso": return { cambio: { tipo, permiso: valores.permiso, alcance, limite: valores.limite, ...comun }, valores };
     case "restringir": return { cambio: { tipo, permiso: valores.permiso, alcance, ...comun }, valores };
+    case "facultad_gasto": return { cambio: { tipo, alcance, sinLimite: valores.sinLimite === "si", limite: valores.limite, diario: valores.diario, ...comun }, valores };
     case "autorrevision":
     case "autorresolucion": return { cambio: { tipo, alcance, ...comun }, valores };
     case "quitar_perfil": return { cambio: { tipo, id: valores.id, general: valores.general === "si", motivo }, valores };

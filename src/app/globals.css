@@ -1332,3 +1332,13 @@ td.mono {
 }
 .grupo-contenido { padding: 0 16px 14px; }
 .clave-caso { font-family: var(--f-mono, ui-monospace, monospace); font-weight: 800; white-space: nowrap; }
+
+/* Dos campos lado a lado en computadora (por ejemplo, límite por gasto y acumulado diario); uno bajo otro en celular. */
+.campos-fila {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0 16px;
+}
+@media (min-width: 640px) {
+  .campos-fila { grid-template-columns: 1fr 1fr; }
+}

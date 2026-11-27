@@ -99,15 +99,23 @@ export async function resumenPermisos(db: Sql | Tx, usuarioId: string): Promise<
                              and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en)))
              and not exists (select 1 from restriccion_permiso r where r.usuario_id = ${usuarioId} and r.permiso = p.clave and r.todas_las_sucursales
                              and vigente(r.vigente_desde, r.vigente_hasta, r.revocada_en)) as futuras,
-           (select max(f.limite_monto)::text from facultad_otorgada f where f.usuario_id = ${usuarioId} and f.permiso = p.clave and f.todas_las_sucursales
-              and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en)) as limite_futuras
+           case when p.clave = 'autorizacion.gasto' then
+             -- Gastos: «sin límite» o «por gasto|al día»; sin acumulado diario queda incompleta (no autoriza).
+             (select case when f.sin_limite then 'sin' else f.limite_monto::text || '|' || f.limite_diario::text end
+              from facultad_otorgada f where f.usuario_id = ${usuarioId} and f.permiso = p.clave and f.todas_las_sucursales
+                and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en) and (f.sin_limite or f.limite_diario is not null)
+              order by f.sin_limite desc, f.limite_monto desc limit 1)
+           else (select max(f.limite_monto)::text from facultad_otorgada f where f.usuario_id = ${usuarioId} and f.permiso = p.clave and f.todas_las_sucursales
+              and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en)) end as limite_futuras
     from permiso p order by p.clave`;
   // Cada permiso en cada sucursal, con el límite que aplica ahí (el mismo cálculo que usa la autorización).
   const celdas = await db<{ clave: string; sucursal: string; ok: boolean; limite: string | null }[]>`
     -- Descargar el reporte de caja solo tiene efecto donde también puede consultarlo (aprobado el 21 nov 2026).
     select p.clave, s.nombre as sucursal,
            tiene_permiso(${usuarioId}, p.clave, s.id) and (p.clave <> 'reporte.caja_descargar' or tiene_permiso(${usuarioId}, 'reporte.caja', s.id)) as ok,
-           case when p.es_autorizacion then (select max(f.limite_monto)::text from facultad_otorgada f
+           case when p.clave = 'autorizacion.gasto' then (select case when g.sin_limite then 'sin' else g.limite_monto::text || '|' || g.limite_diario::text end
+                                                          from facultad_gasto(${usuarioId}, s.id) g)
+                when p.es_autorizacion then (select max(f.limite_monto)::text from facultad_otorgada f
                 where f.usuario_id = ${usuarioId} and f.permiso = p.clave and (f.sucursal_id = s.id or f.todas_las_sucursales)
                   and vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en)) end as limite
     from permiso p cross join sucursal s where p.ambito = 'sucursal' order by s.nombre`;
@@ -128,6 +136,11 @@ export async function resumenPermisos(db: Sql | Tx, usuarioId: string): Promise<
     if (!p.general && !p.futuras && !si.length) continue;
     const limites: LimiteAplicado[] = [];
     if (p.es_autorizacion) {
+      const gasto = p.clave === "autorizacion.gasto";
+      if (gasto) {
+        for (const c of si) c.limite ??= "inc";
+        if (p.futuras) p.limite_futuras ??= "inc";
+      }
       for (const c of si) {
         if (!c.limite) continue;
         const l = limites.find((x) => x.limite === c.limite);
@@ -139,7 +152,7 @@ export async function resumenPermisos(db: Sql | Tx, usuarioId: string): Promise<
         if (l) l.futuras = true;
         else limites.push({ limite: p.limite_futuras, sucursales: [], futuras: true });
       }
-      limites.sort((a, b) => Number(a.limite) - Number(b.limite));
+      limites.sort((a, b) => ordenLimite(a.limite) - ordenLimite(b.limite));
     }
     salida.push({
       clave: p.clave, descripcion: p.descripcion, area: areaDe(p.clave), tipo: tipoDe(p.clave, p.es_autorizacion),
@@ -157,6 +170,17 @@ export type VistaPrevia = {
 };
 const pesosTexto = (v: string) => `$${Number(v).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const lista = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} y ${xs[xs.length - 1]}`;
+/**
+ * Cómo se lee un límite: «sin límite» (solo Dirección, explícito), «límite $X por gasto y $Y al día» (gastos),
+ * «incompleta» (facultad de gastos anterior sin acumulado diario: no autoriza) o «límite $X» (otras autorizaciones).
+ */
+export function etiquetaLimite(l: string): string {
+  if (l === "sin") return "sin límite";
+  if (l === "inc") return "incompleta, sin acumulado diario: no autoriza gastos";
+  const [gasto, diario] = l.split("|");
+  return diario ? `límite ${pesosTexto(gasto)} por gasto y ${pesosTexto(diario)} al día` : `límite ${pesosTexto(gasto)}`;
+}
+const ordenLimite = (l: string) => l === "inc" ? -1 : l === "sin" ? Number.MAX_SAFE_INTEGER : Number(l.split("|")[0]);
 /** Dónde vale un permiso, con sus excepciones por sucursal y el límite que aplica en cada una. */
 export function textoDonde(p: PermisoEfectivo | undefined): string {
   if (!p) return "—";
@@ -164,7 +188,7 @@ export function textoDonde(p: PermisoEfectivo | undefined): string {
   if (!p.limites.length) return base;
   const lims = p.limites.map((l) => {
     const donde = l.futuras && l.sucursales.length === p.sucursales.length ? "todas" : lista(l.futuras ? [...l.sucursales, "las futuras"] : l.sucursales);
-    return `límite ${pesosTexto(l.limite)} en ${donde}`;
+    return `${etiquetaLimite(l.limite)} en ${donde}`;
   });
   return `${base} · ${lims.join(" · ")}`;
 }
@@ -235,7 +259,8 @@ export type PersonaDetalle = {
   invitacion: { estado: "pendiente" | "vencida"; expira: Date; generadoPor: string | null } | null;
   alcances: (Otorgamiento & { rol: Rol; nombre: string })[];
   asignaciones: (Otorgamiento & { rol: Rol; nombre: string; sucursal: string })[];
-  permisos: (Otorgamiento & { permiso: string; descripcion: string; todas: boolean; sucursal: string | null; limite: string | null })[];
+  permisos: (Otorgamiento & { permiso: string; descripcion: string; todas: boolean; sucursal: string | null; limite: string | null;
+                              diario: string | null; sinLimite: boolean })[];
   restricciones: (Otorgamiento & { permiso: string; descripcion: string; todas: boolean; sucursal: string | null })[];
   autorrevision: (Otorgamiento & { todas: boolean; sucursal: string | null }) | null;
   /** Autorización aparte para resolver faltantes en los que participó (26 nov 2026). */
@@ -289,9 +314,9 @@ export async function pantallaPersona(sql: Sql, usuarioId: string, id: string): 
     from asignacion a join sucursal s on s.id = a.sucursal_id left join usuario o on o.id = a.otorgada_por
     where a.usuario_id = ${id} and a.revocada_en is null and (a.vigente_hasta is null or a.vigente_hasta > now()) order by a.rol, s.nombre`;
   const permisos = await sql<{ id: string; permiso: string; descripcion: string; todas: boolean; sucursal: string | null; limite: string | null;
-                               desde: Date; hasta: Date | null; por: string | null; motivo: string; vigente: boolean }[]>`
+                               diario: string | null; sinLimite: boolean; desde: Date; hasta: Date | null; por: string | null; motivo: string; vigente: boolean }[]>`
     select f.id, f.permiso, p.descripcion, f.todas_las_sucursales as todas, s.nombre as sucursal, f.limite_monto::text as limite,
-           f.vigente_desde as desde, f.vigente_hasta as hasta, o.nombre as por, f.motivo, vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en) as vigente
+           f.limite_diario::text as diario, f.sin_limite as "sinLimite", f.vigente_desde as desde, f.vigente_hasta as hasta, o.nombre as por, f.motivo, vigente(f.vigente_desde, f.vigente_hasta, f.revocada_en) as vigente
     from facultad_otorgada f join permiso p on p.clave = f.permiso left join sucursal s on s.id = f.sucursal_id left join usuario o on o.id = f.otorgada_por
     where f.usuario_id = ${id} and f.revocada_en is null and (f.vigente_hasta is null or f.vigente_hasta > now()) order by f.permiso`;
   const restricciones = await sql<{ id: string; permiso: string; descripcion: string; todas: boolean; sucursal: string | null;
@@ -346,7 +371,7 @@ export async function pantallaPerfiles(sql: Sql, usuarioId: string) {
 export type EntradaHistorial = { id: string; en: Date; por: string | null; persona: string | null; accion: string; detalle: string; motivo: string | null };
 const ACCIONES: Record<string, string> = {
   crear_cuenta: "Creó la cuenta", editar_cuenta: "Cambió nombre o puesto", activar: "Activó la cuenta", desactivar: "Desactivó la cuenta",
-  invitar: "Generó invitación (48 horas)", dar_perfil: "Dio un perfil", quitar_perfil: "Quitó un perfil", dar_permiso: "Dio un permiso",
+  invitar: "Generó invitación (48 horas)", dar_perfil: "Dio un perfil", quitar_perfil: "Quitó un perfil", dar_permiso: "Dio un permiso", facultad_gasto: "Dio la facultad para autorizar gastos",
   quitar_permiso: "Quitó un permiso otorgado", restringir: "Restringió un permiso", quitar_restriccion: "Quitó una restricción",
   autorrevision: "Autorizó revisar lo propio", renovar_autorrevision: "Renovó la autorización para revisar lo propio",
   terminar_autorrevision: "Terminó la autorización para revisar lo propio",
@@ -374,9 +399,15 @@ export async function historialAccesos(db: Sql | Tx, personaId: string | null = 
 export type ErrorUsuarios =
   | "sin_permiso" | "no_encontrada" | "nombre" | "correo" | "correo_repetido" | "puesto" | "motivo" | "propia" | "sin_canal"
   | "ultimo_administrador" | "rol" | "permiso" | "alcance" | "sucursales" | "limite" | "sin_limite" | "hasta" | "ya_tiene"
-  | "no_vigente" | "no_direccion" | "ya_autorizada" | "sin_cambio" | "bloqueado_produccion" | "sin_consulta";
+  | "no_vigente" | "no_direccion" | "ya_autorizada" | "sin_cambio" | "bloqueado_produccion" | "sin_consulta"
+  | "diario" | "sin_limite_montos" | "ya_tiene_gasto" | "usar_facultad_gasto";
 
 const motivoValido = (m: string) => m.trim().length >= 5 && m.trim().length <= 300;
+/** Importe mayor que 0 (hasta $10,000,000), con dos decimales; null si no es válido. */
+function monto(texto: string): string | null {
+  const n = Number(texto.replace(/[$,\s]/g, ""));
+  return texto.trim() && Number.isFinite(n) && n > 0 && n <= 10_000_000 ? n.toFixed(2) : null;
+}
 const ULTIMO = /al menos una cuenta activa que administre accesos/;
 async function conProteccion<T>(f: () => Promise<T>): Promise<T | { ok: false; error: "ultimo_administrador" }> {
   try {
@@ -497,6 +528,7 @@ export type CambioAcceso =
   | { tipo: "dar_perfil"; rol: string; alcance: Alcance; hasta: string; motivo: string }
   | { tipo: "quitar_perfil"; id: string; general: boolean; motivo: string }
   | { tipo: "dar_permiso"; permiso: string; alcance: Alcance; limite: string; hasta: string; motivo: string }
+  | { tipo: "facultad_gasto"; alcance: Alcance; sinLimite: boolean; limite: string; diario: string; hasta: string; motivo: string }
   | { tipo: "quitar_permiso"; id: string; motivo: string }
   | { tipo: "restringir"; permiso: string; alcance: Alcance; hasta: string; motivo: string }
   | { tipo: "quitar_restriccion"; id: string; motivo: string }
@@ -588,6 +620,8 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
       const [p] = await tx<{ clave: string; descripcion: string; ambito: string; es_autorizacion: boolean }[]>`
         select clave, descripcion, ambito, es_autorizacion from permiso where clave = ${c.permiso}`;
       if (!p) return { ok: false, error: "permiso" };
+      // Autorizar gastos lleva límite por gasto y acumulado diario: se otorga con «Autorizar gastos» (27 nov 2026).
+      if (c.tipo === "dar_permiso" && p.clave === "autorizacion.gasto") return { ok: false, error: "usar_facultad_gasto" };
       if (p.ambito === "general" && !c.alcance.todas) return { ok: false, error: "alcance" };
       const s = await sucursalesValidas(tx, c.alcance);
       if (!s) return { ok: false, error: "sucursales" };
@@ -622,6 +656,51 @@ async function aplicar(tx: Tx, actor: string, personaId: string, c: CambioAcceso
                  values (${personaId}, ${p.clave}, ${l}, ${l === null}, ${h.valor ? finDelDia(tx, h.valor) : null}, ${actor}, ${motivo})`;
       }
       return { ok: true, accion: "restringir", detalle: `No puede: ${p.descripcion} en ${textoAlcance(c.alcance, s)} (prevalece sobre sus perfiles)${h.valor ? ` · hasta ${h.valor}` : ""}` };
+    }
+    case "facultad_gasto": {
+      const s = await sucursalesValidas(tx, c.alcance);
+      if (!s) return { ok: false, error: "sucursales" };
+      const h = await hastaDe(c.hasta);
+      if (!h.ok) return { ok: false, error: "hasta" };
+      let limite: string | null = null;
+      let diario: string | null = null;
+      if (c.sinLimite) {
+        if (c.limite.trim() || c.diario.trim()) return { ok: false, error: "sin_limite_montos" };
+      } else {
+        limite = monto(c.limite);
+        if (!limite) return { ok: false, error: "limite" };
+        diario = monto(c.diario);
+        if (!diario || Number(diario) < Number(limite)) return { ok: false, error: "diario" };
+      }
+      const ids = s.map((x) => x.id);
+      // Una sola facultad de gastos vigente por lugar: para cambiar los límites se quita la anterior (queda en el historial).
+      const [ya] = await tx`
+        select 1 from facultad_otorgada f
+        where f.usuario_id = ${personaId} and f.permiso = 'autorizacion.gasto' and f.revocada_en is null
+          and (f.vigente_hasta is null or f.vigente_hasta > now())
+          and (f.todas_las_sucursales or ${c.alcance.todas} or f.sucursal_id = any(${ids}::uuid[]))`;
+      if (ya) return { ok: false, error: "ya_tiene_gasto" };
+      if (c.sinLimite) {
+        // «Sin límite» solo para Dirección, explícito (la base también lo exige).
+        const [d] = await tx<{ ok: boolean }[]>`
+          select case when ${c.alcance.todas}
+                      then exists (select 1 from alcance_general g where g.usuario_id = ${personaId} and g.rol = 'direccion' and vigente(g.vigente_desde, g.vigente_hasta, g.revocado_en))
+                      else not exists (select 1 from unnest(${ids}::uuid[]) x
+                                       where not exists (select 1 from perfiles_en_sucursal(${personaId}, x) r where r = 'direccion')) end as ok`;
+        if (!d.ok) return { ok: false, error: "no_direccion" };
+      }
+      for (const l of c.alcance.todas ? [null] : ids) {
+        await tx`insert into facultad_otorgada (usuario_id, permiso, sucursal_id, todas_las_sucursales, limite_monto, limite_diario, sin_limite,
+                                                vigente_hasta, otorgada_por, motivo)
+                 values (${personaId}, 'autorizacion.gasto', ${l}, ${l === null}, ${limite}, ${diario}, ${c.sinLimite},
+                         ${h.valor ? finDelDia(tx, h.valor) : null}, ${actor}, ${motivo})`;
+      }
+      const montos = c.sinLimite ? "sin límite" : `hasta ${pesosTexto(limite!)} por gasto y ${pesosTexto(diario!)} en total por día`;
+      return {
+        ok: true, accion: "facultad_gasto",
+        detalle: `Autorizar gastos en ${textoAlcance(c.alcance, s)} · ${montos}${h.valor ? ` · hasta ${h.valor}` : ""}. `
+          + "Lo que pase de ahí se escala; nunca se aprueba en parte. Quien solicita o paga un gasto no lo autoriza (salvo Dirección, lo propio)",
+      };
     }
     case "quitar_permiso": {
       if (!esIdentificadorValido(c.id)) return { ok: false, error: "no_vigente" };
