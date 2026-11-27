@@ -276,6 +276,12 @@ export default async function Turno({ params, searchParams }: PageProps<"/sucurs
                       <dd data-testid="entradas-fondo">+ {pesos.format(Number(l.fondos))}</dd>
                     </>
                   ) : null}
+                  {l.cantidadDevoluciones ? (
+                    <>
+                      <dt>Devoluciones de cambio a visitantes ({l.cantidadDevoluciones})</dt>
+                      <dd data-testid="devoluciones">− {pesos.format(-Number(l.devoluciones))}</dd>
+                    </>
+                  ) : null}
                   <dt>Efectivo esperado</dt>
                   <dd data-testid="esperado" className={l.esperado === null ? "dd-largo" : undefined}>
                     {l.esperado !== null ? <strong>{pesos.format(Number(l.esperado))}</strong> : "No calculado: faltan datos de Open Desk"}

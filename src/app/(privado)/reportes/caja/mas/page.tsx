@@ -168,6 +168,9 @@ function Movimientos({ r, c, varias }: { r: ReporteCaja; c: CajaSucursal; varias
           <span className="renglon-importe">{$(m.retiros.importe)}{m.retiros.ocultos ? <span className="importe-oculto"> + {m.retiros.ocultos} oculto</span> : null}</span>
         </li>
         <li><span>Entradas al fondo recibidas ({m.entradasFondo.n})</span><span className="renglon-importe">{$(m.entradasFondo.importe)}</span></li>
+        {m.devoluciones.n ? (
+          <li data-testid="mov-devoluciones"><span>Devoluciones de cambio a visitantes ({m.devoluciones.n}) · no restan del ingreso</span><span className="renglon-importe">{$(m.devoluciones.importe)}</span></li>
+        ) : null}
         <li><span>Depositado en el banco ({m.depositado.n})</span><span className="renglon-importe">{$(m.depositado.importe)}</span></li>
       </ul>
       <p className="sub">
@@ -184,11 +187,11 @@ function Diferencias({ r, c, varias }: { r: ReporteCaja; c: CajaSucursal; varias
   const neto = aPesos(c.diferencias.filter((d) => d.neto).reduce((n, d) => n + centavos(d.importe), 0));
   const operativo = (d: CajaSucursal["diferencias"][number]) =>
     d.clase === "retiro_importe" ? `/sucursales/${c.codigo}/retiros/${d.id}` : d.clase === "sobre" ? `/sucursales/${c.codigo}/recoleccion` : null;
-  const ACCION: Record<string, string> = { por_revisar: "Ir a revisar", pendiente_resolucion: "Ir a resolver", correccion_pendiente: "Ver el caso", cerrada: "Ver el caso" };
+  const ACCION: Record<string, string> = { por_revisar: "Ir a revisar", pendiente_resolucion: "Ir a resolver", correccion_pendiente: "Ver el caso", devolucion_pendiente: "Ver el caso", cerrada: "Ver el caso" };
   return (
     <section className="tarjeta" data-testid={`diferencias-${c.codigo}`}>
       {varias ? <h2 className="titulo-seccion">{c.nombre}</h2> : null}
-      {(["por_revisar", "pendiente_resolucion", "correccion_pendiente", "cerrada"] as const).map((etapa) => {
+      {(["por_revisar", "pendiente_resolucion", "correccion_pendiente", "devolucion_pendiente", "cerrada"] as const).map((etapa) => {
         const lista = c.diferencias.filter((d) => d.etapa === etapa);
         if (!lista.length) return null;
         return (

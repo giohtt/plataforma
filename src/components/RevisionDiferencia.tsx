@@ -5,9 +5,20 @@ import { accionRegistrarCorreccion, accionResolverDiferencia, accionRevisarDifer
 import { opcionesRevision } from "@/lib/datos-diferencia";
 
 /** Resultado de UNA diferencia: dos opciones según su signo y motivo obligatorio. No cambia ningún importe. */
-export function FormularioRevision({ codigo, diferenciaId, importe }: { codigo: string; diferenciaId: string; importe: string }) {
+export function FormularioRevision({ codigo, diferenciaId, importe, cobros = [] }: {
+  codigo: string; diferenciaId: string; importe: string;
+  /** Cobros que pueden ser el origen «cambio mal entregado» (solo para un sobrante de la bolsa contra el esperado). */
+  cobros?: { cobroId: string; texto: string; cambio: string }[];
+}) {
   const [estado, accion, enviando] = useActionState(accionRevisarDiferencia, null);
   const id = (c: string) => `${c}-${diferenciaId}`;
+  const [resultado, setResultado] = useState(estado?.valores?.resultado ?? "");
+  const [origen, setOrigen] = useState(estado?.valores?.origen === "cambio");
+  const [cobro, setCobro] = useState(estado?.valores?.cobro ?? "");
+  const [cambio, setCambio] = useState(estado?.valores?.cambio ?? "");
+  const elegido = cobros.find((c) => c.cobroId === cobro);
+  const porDevolver = elegido && /^\d+(\.\d{1,2})?$/.test(cambio.trim()) ? Math.round(Number(elegido.cambio) * 100) - Math.round(Number(cambio) * 100) : null;
+  const sobrante = Math.round(Number(importe) * 100);
   return (
     <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate data-testid="formulario-revision">
       {estado?.error ? <p className="aviso aviso-error" role="alert">{estado.error}</p> : null}
@@ -17,12 +28,44 @@ export function FormularioRevision({ codigo, diferenciaId, importe }: { codigo: 
         <legend>Resultado</legend>
         {opcionesRevision(importe).map((o) => (
           <label key={o.valor} className="opcion-revision">
-            <input type="radio" name="resultado" value={o.valor} defaultChecked={estado?.valores?.resultado === o.valor} />
+            <input type="radio" name="resultado" value={o.valor} checked={resultado === o.valor} onChange={() => setResultado(o.valor)} />
             <span><strong>{o.titulo}</strong><br /><span className="sub">{o.ayuda}</span></span>
           </label>
         ))}
         {estado?.errores?.resultado ? <span className="campo-error">{estado.errores.resultado}</span> : null}
       </fieldset>
+      {resultado === "sobrante_confirmado" && cobros.length ? (
+        <fieldset className="campo campo-grupo" data-testid="origen-cambio-form">
+          <legend>Origen</legend>
+          <label className="opcion-revision">
+            <input type="checkbox" name="origen" value="cambio" checked={origen} onChange={(e) => setOrigen(e.target.checked)} />
+            <span><strong>Cambio mal entregado</strong><br /><span className="sub">Se entregó menos cambio del registrado en un cobro en efectivo de este turno. Lo que faltó entregar se devuelve a la persona visitante si Dirección lo autoriza.</span></span>
+          </label>
+          {origen ? (
+            <>
+              <div className="campo">
+                <label htmlFor={id("cobro")}>Cobro donde se entregó mal el cambio</label>
+                <select id={id("cobro")} name="cobro" value={cobro} onChange={(e) => setCobro(e.target.value)}>
+                  <option value="">Elige el cobro</option>
+                  {cobros.map((c) => <option key={c.cobroId} value={c.cobroId}>{c.texto}</option>)}
+                </select>
+                <span className="sub">Solo cobros en efectivo de esta bolsa y este turno, de una visita con ficha y con «Recibido» anotado.</span>
+                {estado?.errores?.cobro ? <span className="campo-error">{estado.errores.cobro}</span> : null}
+              </div>
+              <div className="campo">
+                <label htmlFor={id("cambio")}>Cambio que realmente se entregó</label>
+                <input id={id("cambio")} name="cambio" inputMode="decimal" value={cambio} onChange={(e) => setCambio(e.target.value)} />
+                {porDevolver !== null ? (
+                  <span className={porDevolver === sobrante ? "sub" : "campo-error"} data-testid="por-devolver-calculado">
+                    Por devolver: ${(porDevolver / 100).toFixed(2)}{porDevolver === sobrante ? " · coincide con el sobrante" : " · no coincide con el sobrante; este origen no se puede registrar"}
+                  </span>
+                ) : null}
+                {estado?.errores?.cambio ? <span className="campo-error">{estado.errores.cambio}</span> : null}
+              </div>
+            </>
+          ) : null}
+        </fieldset>
+      ) : null}
       <div className="campo">
         <label htmlFor={id("motivo")}>Motivo (obligatorio)</label>
         <textarea id={id("motivo")} name="motivo" rows={2} maxLength={300} defaultValue={estado?.valores?.motivo ?? ""}
@@ -39,7 +82,11 @@ export function FormularioRevision({ codigo, diferenciaId, importe }: { codigo: 
  * Resolución de Dirección. Faltante: «Lo absorbe la sucursal». Sobrante: «Se queda en la bolsa» u «Origen identificado»
  * (con o sin corrección pendiente). Motivo obligatorio. No cambia ningún importe.
  */
-export function FormularioResolucion({ codigo, diferenciaId, importe }: { codigo: string; diferenciaId: string; importe: string }) {
+export function FormularioResolucion({ codigo, diferenciaId, importe, devolver = null }: {
+  codigo: string; diferenciaId: string; importe: string;
+  /** Con origen «cambio mal entregado»: «$20.00 a Visitante…», para autorizar la devolución. */
+  devolver?: string | null;
+}) {
   const [estado, accion, enviando] = useActionState(accionResolverDiferencia, null);
   const faltante = Number(importe) < 0;
   const [decision, setDecision] = useState(estado?.valores?.resultado ?? (faltante ? "absorbe_sucursal" : ""));
@@ -49,6 +96,8 @@ export function FormularioResolucion({ codigo, diferenciaId, importe }: { codigo
     : [
         { valor: "queda_en_bolsa", titulo: "Se queda en la bolsa", ayuda: "El excedente permanece en el efectivo de la sucursal. Cierra el seguimiento." },
         { valor: "origen_identificado", titulo: "Origen identificado", ayuda: "Se documenta de dónde salió. Si queda una corrección pendiente, el caso sigue abierto hasta registrarla." },
+        ...(devolver ? [{ valor: "devolver_visitante", titulo: `Por devolver a la persona visitante: ${devolver}`,
+                          ayuda: "Autoriza la devolución del cambio que faltó entregar. El dinero sigue en el efectivo de la sucursal, desglosado como «por devolver», hasta que Recepción lo entregue y lo registre en la sucursal del cobro. No cambia el ingreso." }] : []),
       ];
   return (
     <form action={accion} className="formulario" key={estado?.intento ?? 0} noValidate data-testid="formulario-resolucion">

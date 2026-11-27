@@ -40,7 +40,7 @@ function Resumen({ c, s, r }: { c: CajaSucursal; s: ResumenCaja; r: ReporteCaja 
   const l = lectura(s);
   const ciegas = c.sobres.some((x) => x.oculto) || c.pendientes.some((p) => p.oculto);
   const destino: Record<string, string> = {
-    atrasados: mas("folio", { solo: "atrasados" }), por_revisar: mas("diferencias"), pendiente_resolucion: mas("diferencias"), correcciones: mas("diferencias"),
+    atrasados: mas("folio", { solo: "atrasados" }), por_revisar: mas("diferencias"), pendiente_resolucion: mas("diferencias"), correcciones: mas("diferencias"), por_devolver: mas("diferencias"),
     investigar: mas("folio", { etapa: "investigar" }), entradas: mas("folio", { etapa: "entrada" }),
   };
   return (
@@ -54,7 +54,7 @@ function Resumen({ c, s, r }: { c: CajaSucursal; s: ResumenCaja; r: ReporteCaja 
               <span>{x.etiqueta}<span className="renglon-detalle">{x.detalle}</span></span>
               {x.importe === null
                 ? <Link prefetch={false} href={mas("folio", { etapa: x.clave })} className="importe-oculto" data-testid={`renglon-${x.clave}-importe`}>{x.sinImporte}</Link>
-                : <Link prefetch={false} href={mas("folio", { etapa: x.clave })} className="renglon-importe" data-testid={`renglon-${x.clave}-importe`}>{$(x.importe)}</Link>}
+                : <Link prefetch={false} href={x.clave === "devolver" ? mas("diferencias") : mas("folio", { etapa: x.clave })} className="renglon-importe" data-testid={`renglon-${x.clave}-importe`}>{$(x.importe)}</Link>}
             </li>
           ))}
         </ul>

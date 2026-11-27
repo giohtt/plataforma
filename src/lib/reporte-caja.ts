@@ -64,9 +64,10 @@ export type Confirmado =
   | { clase: "retiro_pausa"; id: string; folio: string; lugar: TipoLugar; encargada: string; desde: Date; saldo: string; anterior: boolean };
 export type Deposito = { clase: "recoleccion" | "retiro"; origenId: string; folio: string | null; por: string; en: Date; fecha: string; referencia: string; importe: string };
 type Dif = Omit<Diferencia, "clave" | "referencia">;
-export type EtapaDiferencia = "por_revisar" | "pendiente_resolucion" | "correccion_pendiente" | "cerrada";
+export type EtapaDiferencia = "por_revisar" | "pendiente_resolucion" | "correccion_pendiente" | "devolucion_pendiente" | "cerrada";
 export const ETAPA_DIFERENCIA: Record<EtapaDiferencia, string> = {
-  por_revisar: "Por revisar", pendiente_resolucion: "Pendiente de resolución", correccion_pendiente: "Corrección pendiente", cerrada: "Cerrada",
+  por_revisar: "Por revisar", pendiente_resolucion: "Pendiente de resolución", correccion_pendiente: "Corrección pendiente",
+  devolucion_pendiente: "Devolución pendiente", cerrada: "Cerrada",
 };
 const PENDIENTE_DIRECCION = "Faltante confirmado · pendiente de resolución de Dirección";
 const RESUELTA_ABSORBE = "Resuelta por Dirección · Lo absorbe la sucursal";
@@ -125,6 +126,8 @@ export type Movimientos = {
   cobros: Grupo; cancelaciones: Grupo; recogido: Grupo; depositado: Grupo;
   /** Entradas al fondo recibidas (confirmadas) dentro del periodo. */
   entradasFondo: Grupo;
+  /** Devoluciones de cambio mal entregado a personas visitantes (salidas de la bolsa; no restan del ingreso). */
+  devoluciones: Grupo;
   sellados: { n: number; anotado: string | null; ocultos: number };
   retiros: { n: number; importe: string; ocultos: number; confirmados: number; pendientes: number };
   /** Lo que hay detrás de cada línea, para abrir su detalle. */
@@ -142,6 +145,8 @@ export type CajaSucursal = {
   diferencias: Diferencia[]; investigar: PorInvestigar[]; movimientos: Movimientos;
   /** Entradas al fondo pendientes de confirmar al corte (aparte: no se suman). */
   entradas: EntradaPendiente[];
+  /** De este efectivo, lo autorizado por Dirección para devolver a personas visitantes y aún no entregado al corte. */
+  porDevolver: Grupo;
   /** Origen y destino del dinero confirmado (depositado antes, durante y saldo al corte). */
   origenes: OrigenDestino[];
   /** Suma de lo visible en las etapas 1 a 4. Con importes ocultos o lugares sin datos es un subtotal. */
@@ -409,11 +414,14 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
 
   // Aparte: diferencias (del periodo, más las anteriores que siguen abiertas al corte).
   const difTurno = await tx<{ id: string; entrega_id: string; entrega_tipo: string; entrega_en: Date; tipo: string; importe: string; registrada_en: Date; lugar: TipoLugar;
-                               revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null; revisada_propia: boolean }[]>`
+                               revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null; revisada_propia: boolean;
+                               devuelta: boolean }[]>`
     select d.id, d.entrega_id, e.tipo as entrega_tipo, e.creada_en as entrega_en, d.tipo, d.importe::text as importe, d.registrada_en, l.tipo as lugar,
            (select v.resultado from revision_diferencia v where v.diferencia_id = d.id and v.en <= ${corteBd}::text::timestamptz) as revision,
            exists (select 1 from revision_diferencia v where v.diferencia_id = d.id and v.en <= ${corteBd}::text::timestamptz and v.autorrevision_id is not null) as revisada_propia,
-           x.decision, x.requiere_correccion as requiere, x.correccion_en <= ${corteBd}::text::timestamptz as corregida
+           x.decision, x.requiere_correccion as requiere, x.correccion_en <= ${corteBd}::text::timestamptz as corregida,
+           exists (select 1 from devolucion_cambio dc join devolucion_entregada de on de.devolucion_id = dc.id
+                   where dc.diferencia_id = d.id and de.en <= ${corteBd}::text::timestamptz) as devuelta
     from diferencia_efectivo d join entrega_turno e on e.id = d.entrega_id join lugar_efectivo l on l.id = d.lugar_id
     left join resolucion_diferencia x on x.diferencia_id = d.id and x.en <= ${corteBd}::text::timestamptz
     where l.sucursal_id = ${s.id} and d.registrada_en <= ${corteBd}::text::timestamptz
@@ -488,13 +496,15 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
     order by x.registrada_en`).map((x) => ({ ...x, anterior: anterior(x.en) }));
 
   // Movimientos dentro del periodo (pasos del mismo dinero: no se suman entre sí).
-  const [m] = await tx<{ cobros: string; n_cobros: number; ajustes: string; n_ajustes: number; fondo: string; n_fondo: number }[]>`
+  const [m] = await tx<{ cobros: string; n_cobros: number; ajustes: string; n_ajustes: number; fondo: string; n_fondo: number; devol: string; n_devol: number }[]>`
     select coalesce(sum(me.importe) filter (where me.tipo = 'entrada_cobro_visita'), 0)::numeric(12, 2)::text as cobros,
            (count(*) filter (where me.tipo = 'entrada_cobro_visita'))::int as n_cobros,
            coalesce(sum(me.importe) filter (where me.tipo = 'ajuste_cancelacion_cobro'), 0)::numeric(12, 2)::text as ajustes,
            (count(*) filter (where me.tipo = 'ajuste_cancelacion_cobro'))::int as n_ajustes,
            coalesce(sum(me.importe) filter (where me.tipo = 'entrada_fondo'), 0)::numeric(12, 2)::text as fondo,
-           (count(*) filter (where me.tipo = 'entrada_fondo'))::int as n_fondo
+           (count(*) filter (where me.tipo = 'entrada_fondo'))::int as n_fondo,
+           coalesce(sum(me.importe) filter (where me.tipo = 'salida_devolucion_cambio'), 0)::numeric(12, 2)::text as devol,
+           (count(*) filter (where me.tipo = 'salida_devolucion_cambio'))::int as n_devol
     from movimiento_efectivo me join lugar_efectivo l on l.id = me.lugar_id
     where l.sucursal_id = ${s.id} and me.en >= ${inicio} and me.en <= ${corteBd}::text::timestamptz`;
   const selLista = await tx<{ id: string; folio: string; lugar: TipoLugar; en: Date; importe: string; contado_ya: boolean }[]>`
@@ -520,6 +530,7 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
     cobros: { n: m.n_cobros, importe: m.cobros },
     cancelaciones: { n: m.n_ajustes, importe: m.ajustes },
     entradasFondo: { n: m.n_fondo, importe: m.fondo },
+    devoluciones: { n: m.n_devol, importe: m.devol },
     sellados: { n: sel.n, anotado: recogedor && sel.sin_contar > 0 ? null : sel.anotado, ocultos: recogedor ? sel.sin_contar : 0 },
     recogido: { n: recogidas.length, importe: pesos(recogidas.reduce((n, r) => n + cent(r.recogido), 0)) },
     retiros: {
@@ -540,9 +551,14 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
     + pendientes.reduce((n, p) => n + cent(p.importe), 0) + confirmados.reduce((n, c) => n + cent(c.saldo), 0);
   const ocultos = sobres.filter((x) => x.oculto).length + pendientes.filter((p) => p.oculto).length;
   const sinContar = sobres.length > 0 || entregasSobres.some((r) => !r.confirmada_ya) || sel.sin_contar > 0;
+  // Por devolver a personas visitantes: autorizado al corte y aún no entregado. Sigue dentro del efectivo (no se suma otra vez).
+  const [pd] = await tx<{ n: number; importe: string }[]>`
+    select count(*)::int as n, coalesce(sum(dc.importe), 0)::numeric(12, 2)::text as importe from devolucion_cambio dc
+    where dc.sucursal_id = ${s.id} and dc.autorizada_en <= ${corteBd}::text::timestamptz
+      and not exists (select 1 from devolucion_entregada e where e.devolucion_id = dc.id and e.en <= ${corteBd}::text::timestamptz)`;
   return {
     id: s.id, codigo: s.codigo, nombre: s.nombre, recogedor, lugares, sobres, pendientes, confirmados, depositos, diferencias: difVisibles, investigar, movimientos,
-    entradas, origenes, visible: pesos(visible), ocultos, sinDatos: lugares.filter((l) => l.estado === "sin_datos").length, anotadosSinContar: !recogedor && sinContar,
+    entradas, porDevolver: { n: pd.n, importe: pd.importe }, origenes, visible: pesos(visible), ocultos, sinDatos: lugares.filter((l) => l.estado === "sin_datos").length, anotadosSinContar: !recogedor && sinContar,
   };
 }
 
@@ -632,6 +648,7 @@ const NOMBRE_LUGAR: Record<TipoLugar, string> = { bolsa_visitas: "Bolsa de visit
 export const nombreLugar = (t: TipoLugar) => NOMBRE_LUGAR[t];
 const TIPO_MOVIMIENTO: Record<string, string> = {
   entrada_cobro_visita: "Cobro de visita en efectivo", ajuste_cancelacion_cobro: "Cancelación de un cobro", salida_retiro: "Retiro entregado a Encargada de retiros",
+  salida_devolucion_cambio: "Devolución de cambio a una persona visitante",
   entrada_fondo: "Entrada al fondo de caja", salida_sobre: "Excedente al sobre del cierre",
 };
 const VERIFICACION: Record<string, string> = { correcto: "cerrado y con su folio", falta: "no estaba", abierto: "llegó abierto o con el sello roto", otro_folio: "traía otro folio" };
@@ -870,6 +887,21 @@ async function armarDetalle(tx: Tx, usuarioId: string, sucursalId: string, caja:
       eventos.push(ev(x.en, `Dirección resolvió: ${DECISION[x.decision] ?? x.decision} · «${x.motivo}»`, x.por));
       if (x.correccion_en) eventos.push(ev(x.correccion_en, `Registró la corrección: «${x.correccion}»`, x.corrigio));
     }
+    for (const o of await tx<{ en: Date; por: string; visitante: string; registrado: string; entregado: string; devolver: string }[]>`
+      select oc.en, u.nombre as por, v.nombre as visitante, oc.cambio_registrado::text as registrado, oc.cambio_entregado::text as entregado,
+             oc.por_devolver::text as devolver
+      from origen_cambio_mal_entregado oc join usuario u on u.id = oc.registrado_por join visitante v on v.id = oc.visitante_id
+      where oc.diferencia_id = ${id}`) {
+      eventos.push(ev(o.en, `Origen: cambio mal entregado a ${o.visitante} (cambio registrado ${dinero(o.registrado)}, entregado ${dinero(o.entregado)}; por devolver ${dinero(o.devolver)})`, o.por));
+    }
+    for (const x of await tx<{ importe: string; en: Date; por: string; visitante: string; entregada_en: Date | null; entrego: string | null }[]>`
+      select dc.importe::text as importe, dc.autorizada_en as en, u.nombre as por, v.nombre as visitante, de.en as entregada_en, w.nombre as entrego
+      from devolucion_cambio dc join usuario u on u.id = dc.autorizada_por join visitante v on v.id = dc.visitante_id
+      left join devolucion_entregada de on de.devolucion_id = dc.id left join usuario w on w.id = de.entregada_por
+      where dc.diferencia_id = ${id}`) {
+      eventos.push(ev(x.en, `Devolución autorizada: ${dinero(x.importe)} a ${x.visitante}`, x.por));
+      if (x.entregada_en) eventos.push(ev(x.entregada_en, `Devolución entregada a ${x.visitante}: ${dinero(x.importe)} · salida de la bolsa (no cambia el ingreso)`, x.entrego));
+    }
     const k = await eventosClave(tx, [{ clase: "turno", id }], ev);
     eventos.push(...k.eventos);
     // Si la diferencia ya no está en la lista al corte (anterior al periodo y cerrada), su estado se calcula igual.
@@ -986,7 +1018,8 @@ async function eventosClave(tx: Tx, casos: { clase: string; id: string }[], ev: 
   return { eventos, claves };
 }
 
-const DECISION: Record<string, string> = { absorbe_sucursal: "Lo absorbe la sucursal", queda_en_bolsa: "Queda en la bolsa", origen_identificado: "Origen identificado" };
+const DECISION: Record<string, string> = { absorbe_sucursal: "Lo absorbe la sucursal", queda_en_bolsa: "Queda en la bolsa", origen_identificado: "Origen identificado",
+                                          devolver_visitante: "Por devolver a la persona visitante" };
 
 /**
  * Cómo se nombra una diferencia de entrega. Todas se registran al confirmar la entrega: en un cierre, la diferencia
@@ -1007,18 +1040,24 @@ function textoDiferencia(d: { entrega_tipo: string; entrega_en: Date; registrada
 /** Estado al corte de una diferencia de turno (misma regla que la lista del reporte). */
 async function estadoDiferenciaAlCorte(tx: Tx, id: string, corte: Date) {
   const corteBd = hastaElCorte(corte);
-  const [d] = await tx<{ revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null }[]>`
+  const [d] = await tx<{ revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null; devuelta: boolean }[]>`
     select (select v.resultado from revision_diferencia v where v.diferencia_id = d.id and v.en <= ${corteBd}::text::timestamptz) as revision,
-           x.decision, x.requiere_correccion as requiere, x.correccion_en <= ${corteBd}::text::timestamptz as corregida
+           x.decision, x.requiere_correccion as requiere, x.correccion_en <= ${corteBd}::text::timestamptz as corregida,
+           exists (select 1 from devolucion_cambio dc join devolucion_entregada de on de.devolucion_id = dc.id
+                   where dc.diferencia_id = d.id and de.en <= ${corteBd}::text::timestamptz) as devuelta
     from diferencia_efectivo d left join resolucion_diferencia x on x.diferencia_id = d.id and x.en <= ${corteBd}::text::timestamptz where d.id = ${id}`;
   return estadoDiferencia(d).estado;
 }
-function estadoDiferencia(d: { revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null }):
+function estadoDiferencia(d: { revision: string | null; decision: string | null; requiere: boolean | null; corregida: boolean | null; devuelta?: boolean }):
   { estado: string; abierta: boolean; etapa: EtapaDiferencia } {
   if (d.revision === null) return { estado: "Por revisar", abierta: true, etapa: "por_revisar" };
   if (d.revision === "aclarada") return { estado: "Aclarada", abierta: false, etapa: "cerrada" };
   if (d.decision === null) return { estado: `${RESULTADO[d.revision]} · pendiente para Dirección`, abierta: true, etapa: "pendiente_resolucion" };
   if (d.requiere && !d.corregida) return { estado: "Resuelta por Dirección · corrección pendiente", abierta: true, etapa: "correccion_pendiente" };
+  if (d.decision === "devolver_visitante") {
+    return d.devuelta ? { estado: "Resuelta por Dirección · Devuelta a la persona visitante", abierta: false, etapa: "cerrada" }
+      : { estado: "Autorizada por Dirección · por devolver a la persona visitante", abierta: true, etapa: "devolucion_pendiente" };
+  }
   return { estado: `Resuelta por Dirección · ${DECISION[d.decision] ?? d.decision}`, abierta: false, etapa: "cerrada" };
 }
 /**

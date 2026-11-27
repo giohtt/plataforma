@@ -44,7 +44,7 @@ export type Total = {
   nota: string;
 };
 export type Atencion = {
-  clave: "atrasados" | "por_revisar" | "pendiente_resolucion" | "correcciones" | "investigar" | "entradas"; texto: string; n: number; importe: string; nota: string;
+  clave: "atrasados" | "por_revisar" | "pendiente_resolucion" | "correcciones" | "por_devolver" | "investigar" | "entradas"; texto: string; n: number; importe: string; nota: string;
   /** Diferencias: cada caso con su importe (no se suman entre sí: mezclan faltantes y sobrantes). */
   casos?: { texto: string; importe: string }[];
 };
@@ -69,6 +69,8 @@ export type FilaFolio = {
 export type PorPersona = { persona: string; n: number; rangos: [number, number, number]; total: number; atrasados: number };
 export type ResumenCaja = {
   enSucursal: Cifra; sobres: Cifra; pendiente: Cifra; porDepositar: Cifra; total: Total;
+  /** De este efectivo, lo que se debe devolver a personas visitantes (ya incluido; no se suma otra vez). */
+  porDevolver: { importe: string; n: number };
   depositado: { importe: string; n: number };
   atencion: Atencion[];
   porPersona: PorPersona[];
@@ -157,6 +159,7 @@ export function resumirCaja(c: CajaSucursal, corte: Date): ResumenCaja {
   const porRevisar = c.diferencias.filter((d) => d.etapa === "por_revisar");
   const porResolver = c.diferencias.filter((d) => d.etapa === "pendiente_resolucion");
   const correcciones = c.diferencias.filter((d) => d.etapa === "correccion_pendiente");
+  const porDevolver = c.diferencias.filter((d) => d.etapa === "devolucion_pendiente");
   const casos = (l: CajaSucursal["diferencias"]) => l.map((d) => ({ texto: textoCaso(d), importe: d.importe }));
   const suma = (l: { importe: string }[]) => pesos(l.reduce((n, x) => n + cent(x.importe), 0));
   const atencion: Atencion[] = [
@@ -167,6 +170,8 @@ export function resumirCaja(c: CajaSucursal, corte: Date): ResumenCaja {
       nota: "Confirmadas; falta la decisión de Dirección", casos: casos(porResolver) },
     { clave: "correcciones", texto: "Corrección pendiente", n: correcciones.length, importe: suma(correcciones),
       nota: "Ya tienen decisión; falta completarla", casos: casos(correcciones) },
+    { clave: "por_devolver", texto: "Por devolver a visitantes", n: porDevolver.length, importe: suma(porDevolver),
+      nota: "Autorizadas por Dirección; el dinero sigue en el efectivo, desglosado", casos: casos(porDevolver) },
     { clave: "investigar", texto: "Sobres por investigar", n: c.investigar.length, importe: pesos(c.investigar.reduce((n, x) => n + cent(x.anotado), 0)),
       nota: "Importe anotado; aparte, no se suma" },
     { clave: "entradas", texto: "Entradas al fondo sin confirmar", n: c.entradas.length, importe: suma(c.entradas),
@@ -246,7 +251,7 @@ export function resumirCaja(c: CajaSucursal, corte: Date): ResumenCaja {
   }
 
   return {
-    enSucursal, sobres, pendiente, porDepositar, total,
+    enSucursal, sobres, pendiente, porDepositar, total, porDevolver: c.porDevolver,
     depositado: { importe: c.movimientos.depositado.importe, n: c.movimientos.depositado.n },
     atencion, porPersona: [...mapa.values()], folios, lugaresSinDatos, ocultos: c.ocultos, conocido,
   };
@@ -282,6 +287,10 @@ export function lectura(s: ResumenCaja) {
   else ceros.push("0 entregas por confirmar");
   if (s.porDepositar.n) efectivo.push({ clave: "4", etiqueta: "Confirmado, por depositar", importe: s.porDepositar.importe, detalle: "Quién lo tiene, abajo" });
   else ceros.push("nada por depositar");
+  if (s.porDevolver.n) {
+    efectivo.push({ clave: "devolver", etiqueta: "De este efectivo, por devolver a visitantes", importe: s.porDevolver.importe,
+                    detalle: "Ya incluido arriba; no se suma otra vez" });
+  }
   const personas = s.porPersona.map((p) => ({
     persona: p.persona, importe: pesos(p.total), atrasados: p.atrasados,
     detalle: [`${p.n} ${p.n === 1 ? "saldo" : "saldos"}`,
