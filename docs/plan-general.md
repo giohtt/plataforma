@@ -374,8 +374,8 @@ Acuerdos del 27 nov 2026 sobre las maquetas de las partes 1 (versión 3), 2 (ver
 **Orden de trabajo (PR pequeños, cada uno abierto hasta su revisión):**
 1. Acuerdos del bloque en este plan.
 2. ~~Cargo «Gestión administrativa» y facultad para autorizar gastos~~ (unido en el PR #74): límite por gasto, acumulado diario, «sin límite» explícito y solo para Dirección, sucursales y vigencia. Sin facultades ni montos configurados.
-3. Solicitudes con clave fija (por sucursal beneficiada: TEN-G1), versiones con motivo, sucursal que paga y beneficiada, y «parte de una compra ya solicitada». Recepción ve lo que ella solicitó; Encargado, Administración, Gestión administrativa y Dirección, los gastos de sus sucursales. Solicitar no mueve dinero ni autoriza.
-4. Ruta de autorización, rechazos con motivo, bandejas y delegaciones temporales (límites y sucursales fijados por Dirección, con inicio y fin).
+3. ~~Solicitudes~~ (unido en el PR #75; clave por sucursal beneficiada confirmada el 27 nov 2026): clave fija (TEN-G1), versiones con motivo, sucursal que paga y beneficiada, y «parte de una compra ya solicitada». Recepción ve lo que ella solicitó; Encargado, Administración, Gestión administrativa y Dirección, los gastos de sus sucursales. Solicitar no mueve dinero ni autoriza.
+4. Ruta de autorización, rechazos con motivo, bandejas y delegaciones temporales (límites y sucursales fijados por Dirección, con inicio y fin). Decide quien tiene facultad vigente en la beneficiada y en la que paga, dentro de su límite por gasto (contra el total de la compra) y de su acumulado diario; la primera persona que decide lo resuelve; una decisión por versión. Pendiente: marca «nuevo para ti» en la bandeja.
 5. Pagos y comprobantes (sin fotos).
 6. Anticipos.
 7. Reembolsos.

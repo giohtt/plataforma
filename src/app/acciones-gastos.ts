@@ -7,7 +7,7 @@
 import { redirect } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
-import { corregirGasto, solicitarGasto, type ErrorGasto } from "@/lib/gastos";
+import { corregirGasto, decidirGasto, solicitarGasto, TEXTO_IMPEDIMENTO, type ErrorGasto } from "@/lib/gastos";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
 
 export type EstadoGasto = { error?: string; errores?: Partial<Record<string, string>>; valores?: Record<string, string>; intento: number } | null;
@@ -27,6 +27,9 @@ const MENSAJES: Record<ErrorGasto, string> = {
   sin_cambio: "No hay cambios: la solicitud ya tiene esos datos.",
   repetida: "Esta solicitud ya se envió. Recarga la página.",
   bloqueado_produccion: "Los gastos están desactivados fuera del entorno de pruebas.",
+  decision: "Elige autorizar o rechazar.",
+  ...TEXTO_IMPEDIMENTO,
+  ya_decidido: "Esta versión ya se decidió (quizá otra persona la decidió al mismo tiempo). Recarga la página.",
 };
 const CAMPO: Partial<Record<ErrorGasto, string>> = {
   concepto: "concepto", categoria: "categoria", importe: "importe", proveedor: "proveedor", nota: "nota",
@@ -74,5 +77,22 @@ export async function accionCorregirGasto(previo: EstadoGasto, datos: FormData):
   const intento = (previo?.intento ?? 0) + 1;
   const r = await corregirGasto(sql, sesion.usuarioId, codigo, { ...valores, clave, version: Number(leer("version", 8)) }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=corregido`);
+  return conError(r.error, valores, intento);
+}
+
+export async function accionDecidirGasto(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const clave = leer("clave", 20);
+  const decision = leer("decision", 12);
+  const valores = { motivo: leer("motivo", 400) };
+  const intento = (previo?.intento ?? 0) + 1;
+  if (decision === "rechazado" && valores.motivo.trim().length < 5) {
+    return { error: "Revisa los campos marcados.", errores: { motivo: "Para rechazar escribe el motivo (de 5 a 300 caracteres)." }, valores, intento };
+  }
+  const r = await decidirGasto(sql, sesion.usuarioId, codigo, { clave, version: Number(leer("version", 8)), decision, motivo: valores.motivo }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=${decision}`);
+  if (r.error === "motivo") return { error: "Revisa los campos marcados.", errores: { motivo: "El motivo debe tener de 5 a 300 caracteres." }, valores, intento };
   return conError(r.error, valores, intento);
 }
