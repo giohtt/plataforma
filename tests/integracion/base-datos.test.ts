@@ -13,6 +13,7 @@ import {
   ALCANCES_PRUEBA,
   ASIGNACIONES_PRUEBA,
   cargarDatosPrueba,
+  CATEGORIAS_PRUEBA,
   FACULTADES_PRUEBA,
   VISITANTES_PRUEBA,
   DISTINTOS_PRUEBA,
@@ -122,13 +123,18 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
       expect([as, ag, fa]).toEqual([0, 0, 0]);
     });
 
-    it("los perfiles solo tienen permisos de los bloques construidos (1 a 5) y ninguno de autorización", async () => {
+    it("los perfiles solo tienen permisos de los bloques construidos (1 a 6) y ninguno de autorización", async () => {
       const filas = await sql`
         select rp.rol, rp.permiso, p.bloque, p.es_autorizacion from rol_permiso rp join permiso p on p.clave = rp.permiso`;
       expect(filas.length).toBeGreaterThan(0);
-      expect(filas.every((f) => f.bloque <= 5 && !f.es_autorizacion)).toBe(true);
+      expect(filas.every((f) => f.bloque <= 6 && !f.es_autorizacion)).toBe(true);
+      // Bloque 6 (27 nov 2026): solicitar gastos los cinco perfiles con funciones; consultar, todos menos Recepción.
+      expect(filas.filter((f) => f.permiso === "gasto.solicitar").map((f) => f.rol).sort())
+        .toEqual(["administracion", "direccion", "encargado", "gestion_administrativa", "recepcion"]);
+      expect(filas.filter((f) => f.permiso === "gasto.consultar").map((f) => f.rol).sort())
+        .toEqual(["administracion", "direccion", "encargado", "gestion_administrativa"]);
       const recepcion = filas.filter((f) => f.rol === "recepcion").map((f) => f.permiso).sort();
-      expect(recepcion).toEqual(["acceso.registrar_apertura", "caja.retirar", "sobre.entregar", "sucursal.consultar", "turno.abrir", "turno.cerrar", "turno.consultar", "turno.entregar", "turno.recibir", "visita.consultar", "visita.registrar", "visita.resumen_otras", "visita.solicitar_cancelacion", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
+      expect(recepcion).toEqual(["acceso.registrar_apertura", "caja.retirar", "gasto.solicitar", "sobre.entregar", "sucursal.consultar", "turno.abrir", "turno.cerrar", "turno.consultar", "turno.entregar", "turno.recibir", "visita.consultar", "visita.registrar", "visita.resumen_otras", "visita.solicitar_cancelacion", "visitante.buscar", "visitante.consultar", "visitante.crear"]);
       // Registrar visitas: solo Recepción (provisional); además, solo la responsable de la bolsa.
       expect(filas.filter((f) => f.permiso === "visita.registrar").map((f) => f.rol)).toEqual(["recepcion"]);
       // Verificar abonos de transferencias: Administración y Dirección (provisional). Recepción no.
@@ -243,9 +249,10 @@ describe.skipIf(!URL_ADMIN)("base de datos", () => {
         facultades: FACULTADES_PRUEBA.length,
         visitantes: VISITANTES_PRUEBA.length,
         distintos: DISTINTOS_PRUEBA.length,
+        categorias: CATEGORIAS_PRUEBA.length,
       });
       const segunda = await cargarDatosPrueba(sql, { entorno: "pruebas" });
-      expect(segunda).toEqual({ sucursales: 0, usuarios: 0, asignaciones: 0, alcances: 0, facultades: 0, visitantes: 0, distintos: 0 });
+      expect(segunda).toEqual({ sucursales: 0, usuarios: 0, asignaciones: 0, alcances: 0, facultades: 0, visitantes: 0, distintos: 0, categorias: 0 });
 
       const [{ n }] = await sql`select count(*)::int as n from usuario where es_prueba`;
       expect(n).toBe(USUARIOS_PRUEBA.length);

@@ -65,7 +65,7 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
   // Sin permiso, la misma respuesta que si no existiera.
   if (!sucursal) notFound();
   const { aviso } = await searchParams;
-  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo, caja, puedeVerReporteCaja, devoluciones] = await Promise.all([
+  const [puedeEditar, puedeDesactivar, puedeVerUsuarios, puedeBuscarVisitantes, puedeVerExpedientes, puedeAbrirTurno, puedeVerTurno, puedeVerReporteTurnos, puedeVerReporteVisitas, puedeVerificarAbonos, puedeAutorizarCancel, puedeAutorizarAcceso, puedeRevisarAccesos, puedeCobertura, diferenciasPendientes, [apoyosPendientes], historial, retirosRevisar, retirosConfirmar, puedeConfigurarCustodia, [custodiaPendiente], puedeReponerFondo, entradasFondo, caja, puedeVerReporteCaja, devoluciones, puedeSolicitarGasto, puedeConsultarGastos] = await Promise.all([
     tienePermiso(sql, sesion.usuarioId, "sucursal.editar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "sucursal.desactivar", sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "usuario.consultar", sucursal.id),
@@ -95,6 +95,8 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
     accesoRecoleccion(sql, sesion.usuarioId, sucursal.id),
     tienePermiso(sql, sesion.usuarioId, "reporte.caja", sucursal.id),
     devolucionesPendientes(sql, sesion.usuarioId, sucursal.id),
+    tienePermiso(sql, sesion.usuarioId, "gasto.solicitar", sucursal.id),
+    tienePermiso(sql, sesion.usuarioId, "gasto.consultar", sucursal.id),
   ]);
 
   const permisos = await sql<{ clave: string; descripcion: string }[]>`
@@ -202,6 +204,13 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
             {puedeVerificarAbonos ? (
               <Link className="boton" href={`/sucursales/${sucursal.codigo}/transferencias`} data-testid="transferencias">
                 Transferencias por verificar
+              </Link>
+            ) : null}
+          </Grupo>
+          <Grupo clave="gastos" titulo="Gastos">
+            {puedeSolicitarGasto || puedeConsultarGastos ? (
+              <Link className="boton" href={`/sucursales/${sucursal.codigo}/gastos`} data-testid="gastos">
+                {puedeConsultarGastos ? "Gastos de la sucursal" : "Solicitar gasto"}
               </Link>
             ) : null}
           </Grupo>
