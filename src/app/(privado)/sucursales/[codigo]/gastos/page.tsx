@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { FormularioSolicitud } from "@/components/Gastos";
+import { FormularioGastoPagado, FormularioSolicitud } from "@/components/Gastos";
 import { obtenerBaseDatos } from "@/lib/db";
 import { NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, pantallaGastos } from "@/lib/gastos";
 import { requerirSesion } from "@/lib/sesion-servidor";
@@ -29,6 +29,13 @@ export default async function Gastos({ params }: PageProps<"/sucursales/[codigo]
         <details className="tarjeta" data-testid="solicitar-gasto">
           <summary className="titulo-seccion" data-testid="abrir-solicitud">Solicitar gasto</summary>
           <FormularioSolicitud codigo={p.sucursal.codigo} sucursalId={p.sucursal.id} categorias={p.categorias} sucursales={p.sucursalesPaga} compras={p.compras} />
+        </details>
+      ) : null}
+
+      {p.yaPagado ? (
+        <details className="tarjeta" data-testid="registrar-ya-pagado">
+          <summary className="titulo-seccion" data-testid="abrir-ya-pagado">Registrar un gasto ya pagado</summary>
+          <FormularioGastoPagado codigo={p.sucursal.codigo} categorias={p.categorias} opciones={p.yaPagado} />
         </details>
       ) : null}
 

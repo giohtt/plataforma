@@ -3,10 +3,10 @@
 import { useActionState, useState } from "react";
 import {
   accionComprobarAnticipo, accionConfirmarAnticipo, accionConfirmarReembolso, accionCorregirGasto, accionDecidirReembolso, accionPagarReembolso, accionPresentarReembolso, accionDecidirGasto, accionEntregarAnticipo, accionPedirExcedente,
-  accionRecibirCambioAnticipo, accionRegistrarComprobante, accionRegistrarPago, accionSolicitarGasto, type EstadoGasto,
+  accionRecibirCambioAnticipo, accionRegistrarComprobante, accionRegistrarGastoPagado, accionRegistrarPago, accionSolicitarGasto, type EstadoGasto,
 } from "@/app/acciones-gastos";
 import { NOMBRE_ORIGEN, type LugarAnticipo, type OrigenPago, type OrigenReembolso } from "@/lib/datos-gasto";
-import type { Categoria, SucursalOpcion } from "@/lib/gastos";
+import type { Categoria, OpcionesGastoPagado, SucursalOpcion } from "@/lib/gastos";
 
 function ErrorCampo({ estado, campo }: { estado: EstadoGasto; campo: string }) {
   const e = estado?.errores?.[campo];
@@ -17,22 +17,24 @@ function Aviso({ estado }: { estado: EstadoGasto }) {
 }
 
 /** Campos de una versión: concepto, categoría, importe, proveedor y nota. */
-function CamposVersion({ estado, categorias, inicial }: {
+function CamposVersion({ estado, categorias, inicial, prefijo = "" }: {
   estado: EstadoGasto; categorias: Categoria[];
+  /** Para ids únicos cuando hay dos formularios en la misma página. */
+  prefijo?: string;
   inicial?: { concepto: string; categoria: string; importe: string; proveedor: string | null; nota: string | null };
 }) {
   const v = (c: string, d = "") => estado?.valores?.[c] ?? d;
   return (
     <>
       <div className="campo">
-        <label htmlFor="concepto">Qué se va a comprar o pagar</label>
-        <input id="concepto" name="concepto" maxLength={120} defaultValue={v("concepto", inicial?.concepto)} aria-invalid={estado?.errores?.concepto ? true : undefined} />
+        <label htmlFor={`${prefijo}concepto`}>Qué se va a comprar o pagar</label>
+        <input id={`${prefijo}concepto`} name="concepto" maxLength={120} defaultValue={v("concepto", inicial?.concepto)} aria-invalid={estado?.errores?.concepto ? true : undefined} />
         <ErrorCampo estado={estado} campo="concepto" />
       </div>
       <div className="campos-fila">
         <div className="campo">
-          <label htmlFor="categoria">Categoría</label>
-          <select id="categoria" name="categoria" defaultValue={v("categoria", inicial?.categoria)} aria-invalid={estado?.errores?.categoria ? true : undefined}>
+          <label htmlFor={`${prefijo}categoria`}>Categoría</label>
+          <select id={`${prefijo}categoria`} name="categoria" defaultValue={v("categoria", inicial?.categoria)} aria-invalid={estado?.errores?.categoria ? true : undefined}>
             <option value="">Elige una categoría…</option>
             {categorias.map((c) => <option key={c.clave} value={c.clave}>{c.nombre}</option>)}
           </select>
@@ -40,21 +42,21 @@ function CamposVersion({ estado, categorias, inicial }: {
           <ErrorCampo estado={estado} campo="categoria" />
         </div>
         <div className="campo">
-          <label htmlFor="importe">Importe</label>
+          <label htmlFor={`${prefijo}importe`}>Importe</label>
           <div className="importe"><span aria-hidden="true">$</span>
-            <input id="importe" name="importe" inputMode="decimal" defaultValue={v("importe", inicial?.importe)} aria-invalid={estado?.errores?.importe ? true : undefined} />
+            <input id={`${prefijo}importe`} name="importe" inputMode="decimal" defaultValue={v("importe", inicial?.importe)} aria-invalid={estado?.errores?.importe ? true : undefined} />
           </div>
           <ErrorCampo estado={estado} campo="importe" />
         </div>
       </div>
       <div className="campo">
-        <label htmlFor="proveedor">Proveedor o a quién se paga (opcional)</label>
-        <input id="proveedor" name="proveedor" maxLength={120} defaultValue={v("proveedor", inicial?.proveedor ?? "")} aria-invalid={estado?.errores?.proveedor ? true : undefined} />
+        <label htmlFor={`${prefijo}proveedor`}>Proveedor o a quién se paga (opcional)</label>
+        <input id={`${prefijo}proveedor`} name="proveedor" maxLength={120} defaultValue={v("proveedor", inicial?.proveedor ?? "")} aria-invalid={estado?.errores?.proveedor ? true : undefined} />
         <ErrorCampo estado={estado} campo="proveedor" />
       </div>
       <div className="campo">
-        <label htmlFor="nota">Nota (opcional)</label>
-        <textarea id="nota" name="nota" maxLength={300} defaultValue={v("nota", inicial?.nota ?? "")} aria-invalid={estado?.errores?.nota ? true : undefined} />
+        <label htmlFor={`${prefijo}nota`}>Nota (opcional)</label>
+        <textarea id={`${prefijo}nota`} name="nota" maxLength={300} defaultValue={v("nota", inicial?.nota ?? "")} aria-invalid={estado?.errores?.nota ? true : undefined} />
         <ErrorCampo estado={estado} campo="nota" />
       </div>
     </>
@@ -538,6 +540,93 @@ export function FormularioPresentarReembolso({ codigo, clave }: { codigo: string
         <ErrorCampo estado={estado} campo="nota" />
       </div>
       <button className="boton boton-principal" type="submit" disabled={enviando}>Presentar de nuevo</button>
+    </form>
+  );
+}
+
+const fechaTurno = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+
+/**
+ * Registrar un gasto que ya se pagó (PR 8): con quién pagó, de dónde salió, fecha, motivo y comprobante. No es aprobarlo:
+ * queda «Pagado sin autorización previa · por revisar · Dirección». Efectivo: solo de un turno ya cerrado.
+ */
+export function FormularioGastoPagado({ codigo, categorias, opciones }: { codigo: string; categorias: Categoria[]; opciones: OpcionesGastoPagado }) {
+  const [estado, accion, enviando] = useActionState(accionRegistrarGastoPagado, null);
+  const [envio] = useState(() => crypto.randomUUID());
+  const [origen, setOrigen] = useState(estado?.valores?.origen ?? "");
+  const [turno, setTurno] = useState(estado?.valores?.turno ?? "");
+  const efectivo = origen === "bolsa_visitas" || origen === "cajon_mensualidades";
+  const t = opciones.turnos.find((x) => x.id === turno);
+  const personas = efectivo
+    ? (t?.responsables.filter((r) => r.lugar === origen).map((r) => ({ id: r.usuarioId, nombre: r.nombre })) ?? [])
+    : opciones.personas;
+  return (
+    <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-gasto-pagado">
+      <Aviso estado={estado} />
+      <input type="hidden" name="codigo" value={codigo} />
+      <input type="hidden" name="envio" value={envio} />
+      <p className="aviso aviso-info">Registrar no es aprobar ni autorizar un reembolso: queda «Pagado sin autorización previa · por revisar · Dirección».</p>
+      <CamposVersion estado={estado} categorias={categorias} prefijo="ya-" />
+      <fieldset className="campo campo-grupo" aria-invalid={estado?.errores?.origen ? true : undefined}>
+        <legend>¿De dónde salió el dinero?</legend>
+        {opciones.origenes.map((o) => (
+          <label key={o} className="opcion-revision">
+            <input type="radio" name="origen" value={o} checked={origen === o} onChange={() => setOrigen(o)} />
+            <span>{NOMBRE_ORIGEN[o]}</span>
+          </label>
+        ))}
+        <span className="sub">Efectivo solo de un turno ya cerrado: se conservan sus registros y no se descuenta del turno actual.</span>
+        <ErrorCampo estado={estado} campo="origen" />
+      </fieldset>
+      {efectivo ? (
+        <div className="campo">
+          <label htmlFor="turno">Turno cerrado del que salió</label>
+          <select id="turno" name="turno" value={turno} onChange={(e) => setTurno(e.target.value)} aria-invalid={estado?.errores?.turno ? true : undefined}>
+            <option value="">Elige el turno…</option>
+            {opciones.turnos.map((x) => <option key={x.id} value={x.id}>{fechaTurno.format(x.abierto)} – {fechaTurno.format(x.cerrado)}</option>)}
+          </select>
+          <ErrorCampo estado={estado} campo="turno" />
+        </div>
+      ) : null}
+      <div className="campos-fila">
+        <div className="campo">
+          <label htmlFor="pagadoPor">Quién pagó</label>
+          <select id="pagadoPor" name="pagadoPor" defaultValue={estado?.valores?.pagadoPor ?? ""} aria-invalid={estado?.errores?.pagadoPor ? true : undefined}>
+            <option value="">Elige a la persona…</option>
+            {personas.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </select>
+          {efectivo ? <span className="sub">Responsables de ese lugar en ese turno.</span>
+            : origen === "dinero_personal" ? <span className="sub">Queda pendiente de reembolso para esta persona.</span> : null}
+          <ErrorCampo estado={estado} campo="pagadoPor" />
+        </div>
+        <div className="campo">
+          <label htmlFor="pagadoEl-ya">Fecha del pago</label>
+          <input id="pagadoEl-ya" name="pagadoEl" type="date" max={opciones.hoy} defaultValue={estado?.valores?.pagadoEl ?? ""} aria-invalid={estado?.errores?.pagadoEl ? true : undefined} />
+          <ErrorCampo estado={estado} campo="pagadoEl" />
+        </div>
+      </div>
+      {origen === "transferencia" || origen === "tarjeta" ? (
+        <div className="campos-fila">
+          <div className="campo">
+            <label htmlFor="cuenta-ya">{origen === "tarjeta" ? "Tarjeta (nombre corto)" : "Cuenta de origen (nombre corto)"}</label>
+            <input id="cuenta-ya" name="cuenta" maxLength={40} defaultValue={estado?.valores?.cuenta ?? ""} aria-invalid={estado?.errores?.cuenta ? true : undefined} />
+            <span className="sub">Sin números de cuenta ni de tarjeta.</span>
+            <ErrorCampo estado={estado} campo="cuenta" />
+          </div>
+          <div className="campo">
+            <label htmlFor="referencia-ya">{origen === "transferencia" ? "Referencia de la operación" : "Referencia del voucher (opcional)"}</label>
+            <input id="referencia-ya" name="referencia" maxLength={60} defaultValue={estado?.valores?.referencia ?? ""} aria-invalid={estado?.errores?.referencia ? true : undefined} />
+            <ErrorCampo estado={estado} campo="referencia" />
+          </div>
+        </div>
+      ) : null}
+      <div className="campo">
+        <label htmlFor="motivoPagado">Por qué se pagó sin pedir autorización antes (obligatorio)</label>
+        <textarea id="motivoPagado" name="motivoPagado" maxLength={300} defaultValue={estado?.valores?.motivoPagado ?? ""} aria-invalid={estado?.errores?.motivoPagado ? true : undefined} />
+        <ErrorCampo estado={estado} campo="motivoPagado" />
+      </div>
+      <CamposComprobante estado={estado} opcional={false} />
+      <button className="boton boton-principal" type="submit" disabled={enviando}>{enviando ? "Registrando…" : "Registrar gasto ya pagado"}</button>
     </form>
   );
 }

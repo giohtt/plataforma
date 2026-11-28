@@ -8,7 +8,7 @@ import { redirect } from "next/navigation";
 import { obtenerBaseDatos } from "@/lib/db";
 import { leerEntorno } from "@/lib/entorno";
 import {
-  comprobarAnticipo, confirmarAnticipo, confirmarReembolso, corregirGasto, decidirGasto, decidirReembolso, entregarAnticipo, pagarReembolso, pedirExcedente,
+  registrarGastoPagado, comprobarAnticipo, confirmarAnticipo, confirmarReembolso, corregirGasto, decidirGasto, decidirReembolso, entregarAnticipo, pagarReembolso, pedirExcedente,
   presentarReembolso, recibirCambioAnticipo, registrarComprobante, registrarPago, solicitarGasto, TEXTO_IMPEDIMENTO, type ErrorGasto,
 } from "@/lib/gastos";
 import { obtenerSesionActual } from "@/lib/sesion-servidor";
@@ -63,6 +63,10 @@ const MENSAJES: Record<ErrorGasto, string> = {
   propio_reembolso: "Tú recibes este reembolso: lo paga otra persona.",
   motivo_sin_comprobante: "Falta comprobante: para autorizar el reembolso así, escribe expresamente el motivo (de 5 a 300 caracteres).",
   no_rechazado: "Solo se presenta de nuevo un reembolso rechazado (y una vez por rechazo). Recarga la página.",
+  pagado_por: "Elige a la persona que pagó. Si fue en efectivo, debe haber sido responsable de ese lugar en ese turno.",
+  turno: "Elige el turno cerrado del que salió el efectivo.",
+  turno_abierto: "Del turno abierto no se registra como ya pagado: al contar se verá la salida; cuando se cierre, regístralo como pago de ese turno cerrado.",
+  motivo_ya_pagado: "Escribe por qué se pagó sin pedir autorización antes (de 5 a 300 caracteres).",
   excedente_anticipo: "Este excedente ya se pagó al proveedor con dinero de quien recibió el anticipo: lo registra esa persona, como dinero personal. Lo que salga de caja para devolvérselo es su reembolso.",
 };
 const CAMPO: Partial<Record<ErrorGasto, string>> = {
@@ -70,6 +74,7 @@ const CAMPO: Partial<Record<ErrorGasto, string>> = {
   sucursal_paga: "paga", compra: "compra", motivo: "motivo",
   origen: "origen", excede: "importe", fecha: "pagadoEl", cuenta: "cuenta", referencia: "referencia", a_quien: "aQuien", comprobante: "tipo", folio: "folio",
   no_excede: "importeReal",
+  pagado_por: "pagadoPor", turno: "turno", turno_abierto: "turno", motivo_ya_pagado: "motivoPagado",
 };
 
 async function inicio() {
@@ -279,5 +284,22 @@ export async function accionPresentarReembolso(previo: EstadoGasto, datos: FormD
   const r = await presentarReembolso(sql, sesion.usuarioId, codigo, { clave, nota: valores.nota }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=reembolso_presentado`);
   if (r.error === "nota") return { error: "Revisa los campos marcados.", errores: { nota: "Escribe qué corregiste o qué información agregas (de 5 a 300 caracteres)." }, valores, intento };
+  return conError(r.error, valores, intento);
+}
+
+export async function accionRegistrarGastoPagado(previo: EstadoGasto, datos: FormData): Promise<EstadoGasto> {
+  const { sesion, sql } = await inicio();
+  const leer = lector(datos);
+  const codigo = leer("codigo", 8);
+  const valores = {
+    ...campos(leer), ...comprobante(leer), origen: leer("origen", 30), pagadoPor: leer("pagadoPor", 40), pagadoEl: leer("pagadoEl", 10),
+    turno: leer("turno", 40), aQuien: leer("aQuien", 200), cuenta: leer("cuenta", 60), referencia: leer("referencia", 80), motivoPagado: leer("motivoPagado", 400),
+  };
+  const intento = (previo?.intento ?? 0) + 1;
+  const r = await registrarGastoPagado(sql, sesion.usuarioId, codigo, { ...valores, envio: leer("envio", 40) }, { entorno: leerEntorno() });
+  if (r.ok) redirect(`/sucursales/${codigo}/gastos/${r.clave}?aviso=ya_pagado`);
+  if (r.error === "motivo") return { error: "Revisa los campos marcados.", errores: { motivoSin: "Escribe por qué no hay comprobante (de 5 a 300 caracteres)." }, valores, intento };
+  if (r.error === "comprobante") return { error: "Revisa los campos marcados.", errores: { tipo: "Elige ticket, nota o factura, o «Sin comprobante» con motivo." }, valores, intento };
+  if (r.error === "fecha") return { error: "Revisa los campos marcados.", errores: { pagadoEl: "La fecha no puede ser futura y, si fue en efectivo, cae dentro del turno elegido." }, valores, intento };
   return conError(r.error, valores, intento);
 }

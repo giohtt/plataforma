@@ -10,7 +10,7 @@ const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN
 const fechaHora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
 const VISTAS: [VistaBandeja, string][] = [
   ["tuyos", "Puedes decidir"], ["por_autorizar", "Por autorizar"], ["autorizados", "Autorizados"], ["rechazados", "Rechazados"],
-  ["reembolsos", "Reembolsos por decidir"], ["todos", "Todos"],
+  ["reembolsos", "Reembolsos por decidir"], ["sin_autorizacion", "Pagados sin autorización previa"], ["todos", "Todos"],
 ];
 
 /**
