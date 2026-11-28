@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { LEYENDA_ANOTADOS } from "@/lib/archivo-caja";
 import { obtenerBaseDatos } from "@/lib/db";
+import { TEXTO_PENDIENTE_GASTO } from "@/lib/gastos-caja";
 import { reporteCaja, type CajaSucursal, type ReporteCaja } from "@/lib/reporte-caja";
 import { lectura, lineaCasos, resumirCaja, resumirVarias, type ResumenCaja } from "@/lib/resumen-caja";
 import { requerirSesion } from "@/lib/sesion-servidor";
@@ -104,7 +105,48 @@ function Resumen({ c, s, r }: { c: CajaSucursal; s: ResumenCaja; r: ReporteCaja 
         ) : null}
         {ceros(l.atencionCeros) ? <p className="sub" data-testid="atencion-ceros">{ceros(l.atencionCeros)}</p> : null}
       </section>
+
+      <GastosEnCaja c={c} />
     </>
+  );
+}
+
+/** Gastos que paga esta sucursal: fuera de caja y pendientes al corte, con enlace a cada gasto (bloque 6, PR 9). */
+function GastosEnCaja({ c }: { c: CajaSucursal }) {
+  const g = c.gastos;
+  const fuera = g.fueraDeCaja;
+  const conPendientes = g.pendientes.filter((p) => p.n > 0);
+  return (
+    <section className="tarjeta" aria-labelledby="t-gastos-caja" data-testid="gastos-caja">
+      <h2 id="t-gastos-caja" className="titulo-seccion">Gastos</h2>
+      <ul className="renglones">
+        <li data-testid="fuera-de-caja">
+          <span>Fuera de caja: anticipos por comprobar y cambio por devolver
+            <span className="renglon-detalle">A cargo de quien recibió el anticipo · no se suma al efectivo en la sucursal
+              {fuera.anticipos.n ? ` · ${fuera.anticipos.n} por comprobar (${$(fuera.anticipos.importe)})` : ""}
+              {fuera.cambio.n ? ` · ${fuera.cambio.n} con cambio por devolver (${$(fuera.cambio.importe)})` : ""}</span>
+          </span>
+          <span className="renglon-importe" data-testid="fuera-de-caja-importe">{$(((Math.round(Number(fuera.anticipos.importe) * 100) + Math.round(Number(fuera.cambio.importe) * 100)) / 100).toFixed(2))}</span>
+        </li>
+        {conPendientes.map((p) => (
+          <li key={p.clave} data-testid={`gasto-pendiente-${p.clave}`}>
+            <details>
+              <summary><span className="numero-pendiente">{p.n}</span>{TEXTO_PENDIENTE_GASTO[p.clave]}</summary>
+              <ul>{p.lista.map((x) => (
+                <li key={x.clave}><Link prefetch={false} href={`/sucursales/${x.codigo}/gastos/${x.clave}`}><span className="mono">{x.clave}</span></Link> · {x.concepto} · {$(x.importe)} · {x.nota}</li>
+              ))}</ul>
+            </details>
+            <span className="renglon-importe">{$(p.importe)}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="sub" data-testid="gastos-pendientes-total">
+        {g.totalPendientes.n
+          ? <>Gastos con algún pendiente: <b>{g.totalPendientes.n}</b> · <b>{$(g.totalPendientes.importe)}</b>. Un gasto con varios pendientes se suma una sola vez.</>
+          : "Sin gastos pendientes al corte."}
+        {" "}Las salidas por gastos, anticipos y reembolsos ya están dentro del efectivo de la bolsa o el cajón.
+      </p>
+    </section>
   );
 }
 

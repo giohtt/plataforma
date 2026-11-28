@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
 import { dinero, ETAPA_DIFERENCIA, nombreLugar, type ArchivoCaja, type CajaSucursal, type Detalle } from "@/lib/reporte-caja";
+import { TEXTO_PENDIENTE_GASTO } from "@/lib/gastos-caja";
 import { aPesos, centavos, INCOMPLETO, lectura, lineaCasos, NOTA_RANGOS, RANGOS, resumirCaja, resumirVarias, type ResumenCaja } from "@/lib/resumen-caja";
 
 const ORDEN_ETAPA = { por_revisar: 0, pendiente_resolucion: 1, correccion_pendiente: 2, devolucion_pendiente: 3, cerrada: 4 } as const;
@@ -70,6 +71,19 @@ function filasResumen(c: CajaSucursal, s: ResumenCaja): Fila[] {
     f.push({ celdas: [`Requiere atención · ${a.texto} (${a.n})`, a.casos ? null : $c(a.importe), "Aparte: no se suma",
                       a.casos ? [a.nota, lineaCasos(a)].filter(Boolean).join(" · ") : a.nota] });
   }
+  // Gastos que paga la sucursal (bloque 6, PR 9): fuera de caja y pendientes al corte, cada gasto una vez en el total.
+  const g = c.gastos;
+  const fuera = (Math.round(Number(g.fueraDeCaja.anticipos.importe) * 100) + Math.round(Number(g.fueraDeCaja.cambio.importe) * 100)) / 100;
+  if (g.fueraDeCaja.lista.length) f.push({ celdas: ["Fuera de caja: anticipos por comprobar y cambio por devolver", { importe: fuera.toFixed(2) }, "Aparte: no se suma",
+                    [`A cargo de quien recibió el anticipo`, ...g.fueraDeCaja.lista.map((x) => `${x.clave} ${dinero(x.importe)} (${x.nota})`)].join(" · ")] });
+  for (const p of g.pendientes.filter((x) => x.n > 0)) {
+    f.push({ celdas: [`Requiere atención · gastos · ${TEXTO_PENDIENTE_GASTO[p.clave]} (${p.n})`, { importe: p.importe }, "Aparte: no se suma",
+                      p.lista.map((x) => `${x.clave} ${dinero(x.importe)} (${x.nota})`).join(" · ")] });
+  }
+  if (g.totalPendientes.n) {
+    f.push({ celdas: [`Gastos con algún pendiente (${g.totalPendientes.n})`, { importe: g.totalPendientes.importe }, "Aparte: no se suma",
+                      "Cada gasto se suma una sola vez aunque tenga varios pendientes. Las salidas por gastos ya están dentro del efectivo."] });
+  }
   return f;
 }
 
@@ -135,6 +149,12 @@ function tablasSucursal(c: CajaSucursal, s: ResumenCaja, detalles: Detalle[] | u
       { celdas: ["Entradas al fondo recibidas", { n: m.entradasFondo.n }, { importe: m.entradasFondo.importe }, ""] },
       { celdas: ["Devoluciones de cambio a visitantes", { n: m.devoluciones.n }, { importe: m.devoluciones.importe }, "Salida de la bolsa; no resta del ingreso de visitas"] },
       { celdas: ["Depositado en el banco", { n: m.depositado.n }, { importe: m.depositado.importe }, "Detalle en «Depositado»"] },
+      { celdas: ["Gastos pagados de la bolsa o el cajón", { n: c.gastos.movimientos.gastos.n }, { importe: c.gastos.movimientos.gastos.importe }, "Ya dentro del efectivo del lugar"] },
+      { celdas: ["Anticipos entregados", { n: c.gastos.movimientos.anticipos.n }, { importe: c.gastos.movimientos.anticipos.importe }, "Quedan a cargo de quien los recibió hasta comprobarlos"] },
+      { celdas: ["Cambio de anticipos recibido", { n: c.gastos.movimientos.cambios.n }, { importe: c.gastos.movimientos.cambios.importe }, "Regresa a la bolsa o el cajón"] },
+      { celdas: ["Reembolsos pagados de la bolsa o el cajón", { n: c.gastos.movimientos.reembolsos.n }, { importe: c.gastos.movimientos.reembolsos.importe }, "No son gastos nuevos"] },
+      { celdas: ["Aparte: pagos de turnos cerrados registrados", { n: c.gastos.turnosCerrados.n }, { importe: c.gastos.turnosCerrados.importe },
+                 `No cambian el esperado ni se vuelven a descontar${c.gastos.turnosCerrados.lista.length ? ` · ${c.gastos.turnosCerrados.lista.map((x) => x.clave).join(", ")}` : ""}`] },
       { celdas: ["Mensualidades", "", "No calculado", "Faltan datos de Open Desk"] },
       { celdas: ["Cobros de visitas", "", "", "Están en el reporte de visitas"] },
     ],
@@ -409,6 +429,17 @@ export async function pdfCaja(a: ArchivoCaja): Promise<Buffer> {
               x.clave !== "atrasados" && !x.casos);
     }
     ceros(l.atencionCeros);
+    // Gastos que paga la sucursal (bloque 6, PR 9): fuera de caja y pendientes; cada gasto una vez en el total.
+    bloque("Gastos");
+    const fuera = (centavos(c.gastos.fueraDeCaja.anticipos.importe) + centavos(c.gastos.fueraDeCaja.cambio.importe));
+    renglon("Fuera de caja: anticipos por comprobar y cambio por devolver",
+            ["A cargo de quien recibió el anticipo; no se suma al efectivo", ...c.gastos.fueraDeCaja.lista.map((x) => `${x.clave} ${dinero(x.importe)}`)].join(" · "), dinero(aPesos(fuera)));
+    for (const x of c.gastos.pendientes.filter((y) => y.n > 0)) {
+      renglon(`${x.n} · ${TEXTO_PENDIENTE_GASTO[x.clave]}`, x.lista.map((y) => `${y.clave} ${dinero(y.importe)} (${y.nota})`).join(" · "), dinero(x.importe), false);
+    }
+    escribir(c.gastos.totalPendientes.n
+      ? `Gastos con algún pendiente: ${c.gastos.totalPendientes.n} · ${dinero(c.gastos.totalPendientes.importe)} (cada gasto una sola vez).`
+      : "Sin gastos pendientes al corte.", normal, 9, gris, ancho1);
     // Después, las tablas para analizar (la tabla por persona ya está resumida arriba).
     nueva();
     escribir(`Detalle al corte · ${c.nombre}`, negrita, 13);

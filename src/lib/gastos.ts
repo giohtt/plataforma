@@ -94,26 +94,8 @@ const RESUMEN = (db: Sql | Tx, usuarioId: string) => db`
          o.clave as "compraDe", u.nombre as "solicitadoPor", g.solicitado_en as "solicitadoEn",
          g.solicitado_por = ${usuarioId} as propia,
          case when yp.gasto_id is not null then 'sin_autorizacion_previa' else coalesce(d.decision, 'por_autorizar') end as estado,
-         -- Autorización previa (PR 8, precisión del 27 nov 2026, 23:35): se compara fecha y hora del pago con fecha y hora de
-         -- la autorización. Solo con el día y el mismo día, no se puede comprobar el orden.
-         case when yp.gasto_id is not null then 'sin_autorizacion_previa'
-              -- Excedente de un anticipo: se pagó al proveedor antes de comprobar el anticipo, y la solicitud del excedente
-              -- nace en la comprobación; su autorización (si la hay) es posterior.
-              when kx.en is not null then case when d.decision is null then 'pendiente'
-                                               when kx.en < d.en then 'sin_autorizacion_previa' else 'no_comprobada' end
-              when pg.id is null then null
-              when d.decision is distinct from 'autorizado' then 'pendiente'
-              -- Efectivo del turno abierto: se registra al pagar (la hora del registro es la del pago).
-              when pg.origen in ('bolsa_visitas', 'cajon_mensualidades') and pg.turno_cerrado_id is null
-                then case when pg.en > d.en then 'comprobada' else 'sin_autorizacion_previa' end
-              -- Anticipo: se entregó (y luego se pagó al proveedor) después de autorizar.
-              when pg.origen = 'anticipo' then case when (select a.en from anticipo_gasto a where a.gasto_id = g.id) > d.en
-                                                    then 'comprobada' else 'no_comprobada' end
-              -- Transferencia, tarjeta o dinero personal con hora declarada: se comparan fecha y hora.
-              when pg.hora_declarada is not null then case when momento_declarado_pago(pg.id) > d.en then 'comprobada' else 'sin_autorizacion_previa' end
-              when pg.pagado_el > dia_en_sucursal(g.sucursal_paga_id, d.en) then 'comprobada'
-              when pg.pagado_el < dia_en_sucursal(g.sucursal_paga_id, d.en) then 'sin_autorizacion_previa'
-              else 'no_comprobada' end as "autorizacionPrevia", du.nombre as "decididoPor", d.en as "decididoEn", d.motivo as "motivoDecision",
+         -- Autorización previa por fecha y hora (PR 8; la regla está en autorizacion_previa_al, 0058).
+         autorizacion_previa_al(g.id, now()) as "autorizacionPrevia", du.nombre as "decididoPor", d.en as "decididoEn", d.motivo as "motivoDecision",
          impedimento_decision_gasto(${usuarioId}, g.id) as impedimento,
          pg.origen as "origenPago", pg.importe::text as "importePagado",
          case when pg.id is null then null
@@ -130,7 +112,6 @@ const RESUMEN = (db: Sql | Tx, usuarioId: string) => db`
               else 'recibido' end as reembolso
   from gasto g
   left join gasto_ya_pagado yp on yp.gasto_id = g.id
-  left join anticipo_comprobado kx on kx.excedente_gasto_id = g.id
   left join pago_gasto pg on pg.gasto_id = g.id
   left join lateral (select * from decision_reembolso x where x.pago_id = pg.id order by x.ronda desc limit 1) dr on true
   left join reembolso_gasto rg on rg.pago_id = pg.id

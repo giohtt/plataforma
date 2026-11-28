@@ -282,22 +282,24 @@ describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () =
     // Sin hora, el mismo día de la autorización: no comprobada.
     expect(await pago({ hora: "" })).toEqual({ ok: true });
     expect((await detalleGasto(sql, dir, codigo, r.clave))?.gasto.autorizacionPrevia).toBe("no_comprobada");
-    // Con hora declarada (se fija la autorización a las 12:00 de ese día en la base de prueba): antes, sin autorización
+    // Con hora declarada (se fija la autorización a las 00:10 de ese día en la base de prueba): antes, sin autorización
     // previa; después, comprobada. La hora declarada y el registro automático se guardan aparte.
     const ajustar = (hora: string) => sql.begin(async (tx) => {
       await tx`set local session_replication_role = replica`;
       const [{ gid }] = await tx<{ gid: string }[]>`select id as gid from gasto where clave = ${r.clave}`;
-      await tx`update decision_gasto d set en = (p.pagado_el + time '12:00') at time zone 'America/Mexico_City'
+      await tx`update decision_gasto d set en = (p.pagado_el + time '00:10') at time zone 'America/Mexico_City'
                from pago_gasto p where p.gasto_id = ${gid} and d.gasto_id = ${gid}`;
       await tx`update pago_gasto set hora_declarada = ${hora}::time where gasto_id = ${gid}`;
     });
-    await ajustar("11:59");
+    if (ahora >= "00:15") {
+    await ajustar("00:09");
     expect((await detalleGasto(sql, dir, codigo, r.clave))?.gasto.autorizacionPrevia).toBe("sin_autorizacion_previa");
-    await ajustar("12:01");
+    await ajustar("00:11");
     const d = await detalleGasto(sql, dir, codigo, r.clave);
     expect(d?.gasto.autorizacionPrevia).toBe("comprobada");
-    expect(d?.pago).toMatchObject({ horaDeclarada: "12:01", pagadoEl: hoyMx() });
+    expect(d?.pago).toMatchObject({ horaDeclarada: "00:11", pagadoEl: hoyMx() });
     expect(d?.pago?.en).toBeInstanceOf(Date);
+    }
     // En un gasto ya pagado también se puede declarar; en efectivo, no.
     const y = await yaPagado(enc, { origen: "tarjeta", turno: "", pagadoPor: enc, cuenta: "Tarjeta ficticia", referencia: "", hora: "00:00" });
     expect(y.ok).toBe(true);

@@ -35,6 +35,7 @@ export default async function Inicio({ searchParams }: PageProps<"/">) {
             ? <Link className="boton" href="/usuarios" data-testid="ir-usuarios">Usuarios, roles y permisos</Link> : null}
           {reporteCaja.n ? <Link className="boton" href="/reportes/caja" data-testid="ir-reporte-caja">Reporte de caja</Link> : null}
           {gastos.n ? <Link className="boton" href="/gastos" data-testid="ir-bandeja-gastos">Bandeja de gastos</Link> : null}
+          {gastos.n ? <Link className="boton" href="/reportes/gastos" data-testid="ir-reporte-gastos">Reporte de gastos</Link> : null}
         </p>
       ) : null}
 
