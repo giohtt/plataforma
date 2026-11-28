@@ -63,7 +63,7 @@ test("gasto ya pagado de la bolsa de un turno cerrado: sin autorización previa,
   await f.getByLabel("Importe").fill("120");
   await f.getByLabel(/Proveedor/).fill("Agua ficticia");
   await f.getByRole("radio", { name: "Bolsa de visitas" }).check();
-  await f.getByLabel("Turno cerrado del que salió").selectOption({ index: 1 });
+  await f.getByLabel("Turno del que salió").selectOption((await f.locator("#turno option", { hasText: "(cerrado)" }).first().getAttribute("value"))!);
   await f.getByLabel("Quién pagó").selectOption({ label: rec.nombre });
   await f.getByLabel("Fecha del pago").fill(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date()));
   await f.getByLabel(/Por qué se pagó sin pedir autorización/).fill("Prueba ficticia: se acabó el agua en la tarde");
@@ -85,6 +85,30 @@ test("gasto ya pagado de la bolsa de un turno cerrado: sin autorización previa,
   await expect(page.getByTestId("esperado").first()).toHaveText("$500.00");
   await expect(page.getByTestId("gastos-pagados")).toHaveCount(0);
 
+  // Efectivo que ya salió del turno abierto: se registra ahora y baja el esperado una sola vez.
+  await entrar(page, enc.correo);
+  await page.goto(`/sucursales/${codigo}/gastos`);
+  await page.getByTestId("abrir-ya-pagado").click();
+  const g = page.getByTestId("formulario-gasto-pagado");
+  await g.getByLabel("Qué se va a comprar o pagar").fill("Foco ficticio");
+  await g.getByLabel("Categoría").selectOption({ label: "Mantenimiento (de prueba)" });
+  await g.getByLabel("Importe").fill("50");
+  await g.getByRole("radio", { name: "Bolsa de visitas" }).check();
+  await g.getByLabel("Turno del que salió").selectOption((await g.locator("#turno option", { hasText: "Turno abierto" }).first().getAttribute("value"))!);
+  await expect(g.getByTestId("efecto-turno")).toContainText(`Responsable del lugar: ${rec2.nombre}`);
+  await g.getByLabel("Quién pagó").selectOption({ label: enc.nombre });
+  await g.getByLabel(/Por qué se pagó sin pedir autorización/).fill("Prueba ficticia: se fundió el foco de la entrada");
+  await g.getByLabel("Tipo de comprobante").selectOption("nota");
+  await capturar(page, "ya-pagado-turno-abierto");
+  await g.getByRole("button", { name: "Registrar gasto ya pagado" }).click();
+  await expect(page.getByTestId("turno-abierto")).toContainText(`responsable del lugar: ${rec2.nombre}`);
+  const clave2 = (await page.getByTestId("clave-gasto").textContent())!;
+  await page.reload();
+  await entrar(page, rec2.correo);
+  await page.goto(`/sucursales/${codigo}/turno`);
+  await expect(page.getByTestId("gastos-pagados").first()).toHaveText("− $50.00");
+  await expect(page.getByTestId("esperado").first()).toHaveText("$450.00");
+
   // Dirección lo ve en su bandeja, sin botón para autorizarlo.
   await entrar(page, dir.correo);
   await page.goto("/gastos?vista=sin_autorizacion");
@@ -93,4 +117,10 @@ test("gasto ya pagado de la bolsa de un turno cerrado: sin autorización previa,
   await page.goto(`/sucursales/${codigo}/gastos/${clave}`);
   await expect(page.getByTestId("estado-gasto")).toContainText("Pagado sin autorización previa");
   await expect(page.getByTestId("formulario-decision")).toHaveCount(0);
+  // Revisarlo no vuelve a descontar.
+  await page.goto(`/sucursales/${codigo}/gastos/${clave2}`);
+  await expect(page.getByTestId("estado-gasto")).toContainText("Pagado sin autorización previa");
+  await entrar(page, rec2.correo);
+  await page.goto(`/sucursales/${codigo}/turno`);
+  await expect(page.getByTestId("esperado").first()).toHaveText("$450.00");
 });

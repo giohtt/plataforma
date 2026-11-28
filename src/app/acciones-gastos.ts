@@ -293,7 +293,7 @@ export async function accionRegistrarGastoPagado(previo: EstadoGasto, datos: For
   const codigo = leer("codigo", 8);
   const valores = {
     ...campos(leer), ...comprobante(leer), origen: leer("origen", 30), pagadoPor: leer("pagadoPor", 40), pagadoEl: leer("pagadoEl", 10),
-    turno: leer("turno", 40), aQuien: leer("aQuien", 200), cuenta: leer("cuenta", 60), referencia: leer("referencia", 80), motivoPagado: leer("motivoPagado", 400),
+    pagaId: leer("paga", 40), turno: leer("turno", 40), aQuien: leer("aQuien", 200), cuenta: leer("cuenta", 60), referencia: leer("referencia", 80), motivoPagado: leer("motivoPagado", 400),
   };
   const intento = (previo?.intento ?? 0) + 1;
   const r = await registrarGastoPagado(sql, sesion.usuarioId, codigo, { ...valores, envio: leer("envio", 40) }, { entorno: leerEntorno() });

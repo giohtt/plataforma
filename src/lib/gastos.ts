@@ -62,8 +62,8 @@ export type GastoResumen = {
   /** Solo si se pagó con dinero personal. */
   reembolso: EstadoReembolso | null;
   /**
-   * Pagado sin una autorización registrada antes del pago: un gasto registrado ya pagado, el excedente de un anticipo
-   * (se pagó al proveedor antes de autorizarse) o un pago con fecha anterior a su autorización.
+   * Pagado sin autorización previa: un gasto registrado ya pagado, o uno autorizado con fecha de pago (para el excedente
+   * de un anticipo, la del pago al proveedor) anterior a la fecha de su autorización.
    */
   sinAutorizacionPrevia: boolean;
 };
@@ -93,8 +93,10 @@ const RESUMEN = (db: Sql | Tx, usuarioId: string) => db`
          o.clave as "compraDe", u.nombre as "solicitadoPor", g.solicitado_en as "solicitadoEn",
          g.solicitado_por = ${usuarioId} as propia,
          case when yp.gasto_id is not null then 'sin_autorizacion_previa' else coalesce(d.decision, 'por_autorizar') end as estado,
-         (yp.gasto_id is not null or exists (select 1 from anticipo_comprobado ka where ka.excedente_gasto_id = g.id)
-          or (pg.id is not null and d.decision = 'autorizado' and pg.pagado_el < dia_en_sucursal(g.sucursal_paga_id, d.en))) as "sinAutorizacionPrevia", du.nombre as "decididoPor", d.en as "decididoEn", d.motivo as "motivoDecision",
+         coalesce(yp.gasto_id is not null
+          or (d.decision = 'autorizado' and coalesce(pg.pagado_el, (select pa.pagado_el from anticipo_comprobado ka join pago_gasto pa on pa.id = ka.pago_id
+                                                                     where ka.excedente_gasto_id = g.id))
+                                            < dia_en_sucursal(g.sucursal_paga_id, d.en)), false) as "sinAutorizacionPrevia", du.nombre as "decididoPor", d.en as "decididoEn", d.motivo as "motivoDecision",
          impedimento_decision_gasto(${usuarioId}, g.id) as impedimento,
          pg.origen as "origenPago", pg.importe::text as "importePagado",
          case when pg.id is null then null
@@ -166,7 +168,7 @@ export type PantallaGastos = {
   yaPagado: OpcionesGastoPagado | null;
 };
 
-export async function pantallaGastos(sql: Sql, usuarioId: string, codigo: string): Promise<PantallaGastos | null> {
+export async function pantallaGastos(sql: Sql, usuarioId: string, codigo: string, pagaYaPagado = ""): Promise<PantallaGastos | null> {
   const s = await sucursalDe(sql, usuarioId, codigo);
   if (!s) return null;
   const categorias = await sql<Categoria[]>`
@@ -190,7 +192,7 @@ export async function pantallaGastos(sql: Sql, usuarioId: string, codigo: string
   return {
     sucursal: { id: s.id, codigo: s.codigo, nombre: s.nombre }, puedeSolicitar: s.solicitar, consultaTodos: s.consultar,
     categorias: [...categorias], sucursalesPaga: [...sucursalesPaga], compras: [...compras], gastos: [...gastos],
-    yaPagado: await opcionesGastoPagado(sql, usuarioId, s.id),
+    yaPagado: await opcionesGastoPagado(sql, usuarioId, s.id, pagaYaPagado),
   };
 }
 
@@ -213,7 +215,9 @@ export type DetalleGasto = {
   pago: { origen: OrigenPago; importe: string; pagadoEl: string; pagadoPor: string; registradoPor: string; en: Date;
           aQuien: string | null; cuenta: string | null; referencia: string | null;
           /** Registrado después de pagarse; si fue en efectivo, el turno cerrado del que salió (sin salida en el turno actual). */
-          posterior: boolean; turnoCerrado: { abierto: Date; cerrado: Date } | null } | null;
+          posterior: boolean; turnoCerrado: { abierto: Date; cerrado: Date } | null;
+          /** Si salió de caja: la responsable del lugar en el movimiento (en un gasto ya pagado, la vigente al registrarlo). */
+          salidaResponsable: string | null } | null;
   /** Gasto registrado ya pagado (PR 8): por qué no se pidió antes, quién y cuándo lo registró. */
   yaPagado: { motivo: string; registradoPor: string; en: Date } | null;
   comprobantes: { tipo: "ticket" | "nota" | "factura"; folio: string | null; registradoPor: string; en: Date }[];
@@ -347,9 +351,12 @@ export async function detalleGasto(sql: Sql, usuarioId: string, codigo: string, 
   const [pago] = await sql<NonNullable<DetalleGasto["pago"]>[]>`
     select p.origen, p.importe::text as importe, to_char(p.pagado_el, 'YYYY-MM-DD') as "pagadoEl", a.nombre as "pagadoPor",
            r.nombre as "registradoPor", p.en, p.a_quien as "aQuien", p.cuenta, p.referencia, p.posterior,
-           case when t.id is null then null else json_build_object('abierto', t.abierto_en, 'cerrado', t.cerrado_en) end as "turnoCerrado"
+           case when t.id is null then null else json_build_object('abierto', t.abierto_en, 'cerrado', t.cerrado_en) end as "turnoCerrado",
+           mr.nombre as "salidaResponsable"
     from pago_gasto p join usuario a on a.id = p.pagado_por join usuario r on r.id = p.registrado_por
-    left join turno t on t.id = p.turno_cerrado_id where p.gasto_id = ${g.id}`;
+    left join turno t on t.id = p.turno_cerrado_id
+    left join movimiento_efectivo m on m.pago_gasto_id = p.id left join usuario mr on mr.id = m.responsable_id
+    where p.gasto_id = ${g.id}`;
   if (pago?.turnoCerrado) pago.turnoCerrado = { abierto: new Date(pago.turnoCerrado.abierto), cerrado: new Date(pago.turnoCerrado.cerrado) };
   const [yaPagado] = await sql<NonNullable<DetalleGasto["yaPagado"]>[]>`
     select y.motivo, u.nombre as "registradoPor", y.en from gasto_ya_pagado y join usuario u on u.id = y.registrado_por where y.gasto_id = ${g.id}`;
@@ -1243,35 +1250,48 @@ export async function reembolsosPendientes(sql: Sql, usuarioId: string, sucursal
  * - Registrar no es aprobar ni autorizar un reembolso: queda «Pagado sin autorización previa · por revisar · Dirección».
  * - Efectivo: solo de un turno ya cerrado (se conservan sus registros y no se descuenta del turno actual).
  */
-export type TurnoCerradoOpcion = {
-  id: string; abierto: Date; cerrado: Date;
-  /** Quiénes fueron responsables de cada lugar en ese turno. */
+export type TurnoOpcion = {
+  id: string; abierto: Date;
+  /** null: es el turno abierto (el efectivo sale ahora, una vez, y baja su esperado). */
+  cerrado: Date | null;
+  /** Responsables de cada lugar: en un turno cerrado, quienes lo fueron; en el abierto, quien lo es ahora. */
   responsables: { lugar: LugarAnticipo; usuarioId: string; nombre: string }[];
 };
 export type OpcionesGastoPagado = {
+  /** Sucursales que pueden pagar (con el permiso para registrar gastos ya pagados); la beneficiada es esta. */
+  sucursalesPaga: SucursalOpcion[];
+  pagaId: string;
   origenes: OrigenPago[];
   personas: { id: string; nombre: string }[];
-  turnos: TurnoCerradoOpcion[];
+  turnos: TurnoOpcion[];
   hoy: string;
 };
 
-/** Qué puede registrar esta persona como ya pagado en la sucursal (null si no puede). */
-export async function opcionesGastoPagado(db: Sql | Tx, usuarioId: string, sucursalId: string): Promise<OpcionesGastoPagado | null> {
-  const [p] = await db<{ puede: boolean; admin: boolean; hoy: string }[]>`
-    select tiene_permiso(${usuarioId}, 'gasto.registrar_pagado', ${sucursalId}) as puede,
-           exists (select 1 from perfiles_en_sucursal(${usuarioId}, ${sucursalId}) r where r in ('administracion', 'gestion_administrativa', 'direccion')) as admin,
-           to_char(dia_en_sucursal(${sucursalId}, now()), 'YYYY-MM-DD') as hoy`;
-  if (!p.puede) return null;
+/**
+ * Qué puede registrar esta persona como ya pagado para la sucursal beneficiada, pagado por `pagaId` (por omisión, la
+ * misma). null si no puede registrar gastos ya pagados en la beneficiada.
+ */
+export async function opcionesGastoPagado(db: Sql | Tx, usuarioId: string, sucursalId: string, pagaId = ""): Promise<OpcionesGastoPagado | null> {
+  const [b] = await db<{ puede: boolean }[]>`select tiene_permiso(${usuarioId}, 'gasto.registrar_pagado', ${sucursalId}) as puede`;
+  if (!b.puede) return null;
+  const sucursalesPaga = await db<SucursalOpcion[]>`
+    select id, codigo, nombre from sucursal x
+    where tiene_permiso(${usuarioId}, 'gasto.registrar_pagado', x.id) and tiene_permiso(${usuarioId}, 'sucursal.consultar', x.id)
+    order by x.id <> ${sucursalId}, nombre limit 300`;
+  const paga = sucursalesPaga.find((x) => x.id === pagaId)?.id ?? sucursalId;
+  const [p] = await db<{ admin: boolean; hoy: string }[]>`
+    select exists (select 1 from perfiles_en_sucursal(${usuarioId}, ${paga}) r where r in ('administracion', 'gestion_administrativa', 'direccion')) as admin,
+           to_char(dia_en_sucursal(${paga}, now()), 'YYYY-MM-DD') as hoy`;
   const personas = await db<{ id: string; nombre: string }[]>`
     select u.id, u.nombre from usuario u
-    where tiene_permiso(u.id, 'sucursal.consultar', ${sucursalId}) and tiene_permiso(u.id, 'gasto.solicitar', ${sucursalId})
+    where tiene_permiso(u.id, 'sucursal.consultar', ${paga}) and tiene_permiso(u.id, 'gasto.solicitar', ${paga})
     order by u.id <> ${usuarioId}, u.nombre limit 200`;
-  const filas = await db<{ id: string; abierto: Date; cerrado: Date; lugar: LugarAnticipo; usuario_id: string; nombre: string }[]>`
+  const filas = await db<{ id: string; abierto: Date; cerrado: Date | null; lugar: LugarAnticipo; usuario_id: string; nombre: string }[]>`
     select t.id, t.abierto_en as abierto, t.cerrado_en as cerrado, l.tipo as lugar, r.usuario_id, u.nombre
     from turno t join responsable_lugar r on r.turno_id = t.id join lugar_efectivo l on l.id = r.lugar_id join usuario u on u.id = r.usuario_id
-    where t.sucursal_id = ${sucursalId} and t.cerrado_en is not null and t.cerrado_en > now() - interval '30 days'
-    order by t.abierto_en desc, l.tipo, r.desde`;
-  const turnos: TurnoCerradoOpcion[] = [];
+    where t.sucursal_id = ${paga} and (t.cerrado_en is null and r.hasta is null or t.cerrado_en > now() - interval '30 days')
+    order by t.cerrado_en is not null, t.abierto_en desc, l.tipo, r.desde`;
+  const turnos: TurnoOpcion[] = [];
   for (const f of filas) {
     let t = turnos.find((x) => x.id === f.id);
     if (!t) turnos.push(t = { id: f.id, abierto: f.abierto, cerrado: f.cerrado, responsables: [] });
@@ -1281,19 +1301,24 @@ export async function opcionesGastoPagado(db: Sql | Tx, usuarioId: string, sucur
   if (turnos.length) origenes.push("bolsa_visitas", "cajon_mensualidades");
   if (p.admin) origenes.push("transferencia");
   origenes.push("tarjeta", "dinero_personal");
-  return { origenes, personas: [...personas], turnos: turnos.slice(0, 40), hoy: p.hoy };
+  return { sucursalesPaga: [...sucursalesPaga], pagaId: paga, origenes, personas: [...personas], turnos: turnos.slice(0, 40), hoy: p.hoy };
 }
 
-/** Registra un gasto que ya se pagó, con su pago (posterior) y su comprobante. Idempotente por la clave de envío. */
+/**
+ * Registra un gasto que ya se pagó, con su pago (posterior) y su comprobante. Idempotente por la clave de envío.
+ * Efectivo del turno abierto: una sola salida en ese turno (baja el esperado una vez). De un turno cerrado: sin salida.
+ */
 export async function registrarGastoPagado(
   sql: Sql, usuarioId: string, codigo: string,
   d: CamposGasto & DatosComprobante & {
-    envio: string; origen: string; pagadoPor: string; pagadoEl: string; turno: string; aQuien: string; cuenta: string; referencia: string; motivoPagado: string;
+    envio: string; pagaId: string; origen: string; pagadoPor: string; pagadoEl: string; turno: string; aQuien: string; cuenta: string;
+    referencia: string; motivoPagado: string;
   },
   { entorno }: { entorno: Entorno },
 ): Promise<{ ok: true; clave: string } | { ok: false; error: ErrorGasto }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
   if (!esIdentificadorValido(d.envio)) return { ok: false, error: "repetida" };
+  if (d.pagaId && !esIdentificadorValido(d.pagaId)) return { ok: false, error: "sucursal_paga" };
   const origen = (["bolsa_visitas", "cajon_mensualidades", "transferencia", "tarjeta", "dinero_personal"] as const).find((o) => o === d.origen);
   if (!origen) return { ok: false, error: "origen" };
   const efectivo = origen === "bolsa_visitas" || origen === "cajon_mensualidades";
@@ -1319,36 +1344,52 @@ export async function registrarGastoPagado(
       if (!s) return { ok: false as const, error: "no_encontrada" as const };
       const [ya] = await tx<{ clave: string; solicitado_por: string }[]>`select clave, solicitado_por from gasto where clave_envio = ${d.envio}`;
       if (ya) return ya.solicitado_por === usuarioId ? { ok: true as const, clave: ya.clave } : { ok: false as const, error: "repetida" as const };
-      const op = await opcionesGastoPagado(tx, usuarioId, s.id);
+      const op = await opcionesGastoPagado(tx, usuarioId, s.id, d.pagaId);
       if (!op) return { ok: false as const, error: "sin_permiso" as const };
+      if (d.pagaId && op.pagaId !== d.pagaId) return { ok: false as const, error: "sucursal_paga" as const };
+      const paga = op.pagaId;
       const v = await validar(tx, d);
       if (!v.ok) return v;
       if (!op.origenes.includes(origen)) return { ok: false as const, error: efectivo ? "turno" as const : "origen" as const };
       if (!op.personas.some((p) => p.id === d.pagadoPor)) return { ok: false as const, error: "pagado_por" as const };
       if (d.pagadoEl > op.hoy) return { ok: false as const, error: "fecha" as const };
-      let turno: string | null = null;
+      let turnoCerrado: string | null = null;
+      let salida: { turnoId: string; lugarId: string; responsableId: string } | null = null;
       if (efectivo) {
-        const [t] = await tx<{ id: string; cerrado: boolean; dentro: boolean; responsable: boolean }[]>`
-          select t.id, t.cerrado_en is not null as cerrado,
+        const [t] = await tx<{ id: string; cerrado: boolean; dentro: boolean; fue_responsable: boolean; lugar_id: string; vigente: string | null; entrega: boolean }[]>`
+          select t.id, t.cerrado_en is not null as cerrado, l.id as lugar_id,
                  ${d.pagadoEl}::date between dia_en_sucursal(t.sucursal_id, t.abierto_en) and dia_en_sucursal(t.sucursal_id, coalesce(t.cerrado_en, now())) as dentro,
-                 exists (select 1 from responsable_lugar r join lugar_efectivo l on l.id = r.lugar_id
-                         where r.turno_id = t.id and l.tipo = ${origen} and r.usuario_id = ${d.pagadoPor}) as responsable
-          from turno t where t.id = ${d.turno} and t.sucursal_id = ${s.id}`;
+                 exists (select 1 from responsable_lugar r where r.turno_id = t.id and r.lugar_id = l.id and r.usuario_id = ${d.pagadoPor}) as fue_responsable,
+                 (select r.usuario_id from responsable_lugar r where r.turno_id = t.id and r.lugar_id = l.id and r.hasta is null) as vigente,
+                 exists (select 1 from entrega_turno e where e.turno_id = t.id and e.estado in ('pendiente', 'recuento')) as entrega
+          from turno t join lugar_efectivo l on l.sucursal_id = t.sucursal_id and l.tipo = ${origen}
+          where t.id = ${d.turno} and t.sucursal_id = ${paga} for update of t`;
         if (!t) return { ok: false as const, error: "turno" as const };
-        if (!t.cerrado) return { ok: false as const, error: "turno_abierto" as const };
         if (!t.dentro) return { ok: false as const, error: "fecha" as const };
-        if (!t.responsable) return { ok: false as const, error: "pagado_por" as const };
-        turno = t.id;
+        if (t.cerrado) {
+          if (!t.fue_responsable) return { ok: false as const, error: "pagado_por" as const };
+          turnoCerrado = t.id;
+        } else {
+          if (!t.vigente) return { ok: false as const, error: "no_responsable" as const };
+          if (t.entrega) return { ok: false as const, error: "entrega_en_curso" as const };
+          salida = { turnoId: t.id, lugarId: t.lugar_id, responsableId: t.vigente };
+        }
       }
       const [g] = await tx<{ id: string; clave: string }[]>`
         insert into gasto (sucursal_id, sucursal_paga_id, compra_de, solicitado_por, clave_envio, numero, clave)
-        values (${s.id}, ${s.id}, null, ${usuarioId}, ${d.envio}, 0, '') returning id, clave`;
+        values (${s.id}, ${paga}, null, ${usuarioId}, ${d.envio}, 0, '') returning id, clave`;
       await tx`insert into gasto_version (gasto_id, version, concepto, categoria, importe, proveedor, nota, registrada_por)
                values (${g.id}, 1, ${v.v.concepto}, ${v.v.categoria}, ${v.v.importe}, ${v.v.proveedor}, ${v.v.nota}, ${usuarioId})`;
       await tx`insert into gasto_ya_pagado (gasto_id, motivo, registrado_por) values (${g.id}, ${motivo}, ${usuarioId})`;
-      await tx`insert into pago_gasto (gasto_id, version, origen, importe, pagado_el, pagado_por, registrado_por, a_quien, cuenta, referencia, posterior, turno_cerrado_id)
-               values (${g.id}, 1, ${origen}, ${v.v.importe}, ${d.pagadoEl}, ${d.pagadoPor}, ${usuarioId}, ${aQuien || v.v.proveedor},
-                       ${origen === "transferencia" || origen === "tarjeta" ? cuenta : null}, ${referencia || null}, true, ${turno})`;
+      const [pago] = await tx<{ id: string }[]>`
+        insert into pago_gasto (gasto_id, version, origen, importe, pagado_el, pagado_por, registrado_por, a_quien, cuenta, referencia, posterior, turno_cerrado_id)
+        values (${g.id}, 1, ${origen}, ${v.v.importe}, ${d.pagadoEl}, ${d.pagadoPor}, ${usuarioId}, ${aQuien || v.v.proveedor},
+                ${origen === "transferencia" || origen === "tarjeta" ? cuenta : null}, ${referencia || null}, true, ${turnoCerrado})
+        returning id`;
+      if (salida) {
+        await tx`insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, pago_gasto_id, responsable_id, registrado_por)
+                 values (${salida.lugarId}, ${salida.turnoId}, 'salida_pago_gasto', ${(-Number(v.v.importe)).toFixed(2)}, ${pago.id}, ${salida.responsableId}, ${usuarioId})`;
+      }
       await guardarComprobante(tx, usuarioId, g.id, c.v!);
       return { ok: true as const, clave: g.clave };
     });

@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useActionState, useState } from "react";
 import {
   accionComprobarAnticipo, accionConfirmarAnticipo, accionConfirmarReembolso, accionCorregirGasto, accionDecidirReembolso, accionPagarReembolso, accionPresentarReembolso, accionDecidirGasto, accionEntregarAnticipo, accionPedirExcedente,
@@ -547,18 +548,23 @@ export function FormularioPresentarReembolso({ codigo, clave }: { codigo: string
 const fechaTurno = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
 /**
- * Registrar un gasto que ya se pagó (PR 8): con quién pagó, de dónde salió, fecha, motivo y comprobante. No es aprobarlo:
- * queda «Pagado sin autorización previa · por revisar · Dirección». Efectivo: solo de un turno ya cerrado.
+ * Registrar un gasto que ya se pagó (PR 8): sucursal que paga, con quién pagó, de dónde salió, fecha, motivo y
+ * comprobante. No es aprobarlo: queda «Pagado sin autorización previa · por revisar · Dirección». Efectivo del turno
+ * abierto: sale ahora, una vez; de un turno cerrado: sin salida, ligado a ese turno.
  */
-export function FormularioGastoPagado({ codigo, categorias, opciones }: { codigo: string; categorias: Categoria[]; opciones: OpcionesGastoPagado }) {
+export function FormularioGastoPagado({ codigo, sucursalId, categorias, opciones }: {
+  codigo: string; sucursalId: string; categorias: Categoria[]; opciones: OpcionesGastoPagado;
+}) {
   const [estado, accion, enviando] = useActionState(accionRegistrarGastoPagado, null);
   const [envio] = useState(() => crypto.randomUUID());
+  const router = useRouter();
   const [origen, setOrigen] = useState(estado?.valores?.origen ?? "");
   const [turno, setTurno] = useState(estado?.valores?.turno ?? "");
   const efectivo = origen === "bolsa_visitas" || origen === "cajon_mensualidades";
   const t = opciones.turnos.find((x) => x.id === turno);
-  const personas = efectivo
-    ? (t?.responsables.filter((r) => r.lugar === origen).map((r) => ({ id: r.usuarioId, nombre: r.nombre })) ?? [])
+  const responsable = t && !t.cerrado ? t.responsables.find((r) => r.lugar === origen) : undefined;
+  const personas = efectivo && t?.cerrado
+    ? t.responsables.filter((r) => r.lugar === origen).map((r) => ({ id: r.usuarioId, nombre: r.nombre }))
     : opciones.personas;
   return (
     <form action={accion} className="formulario" noValidate key={estado?.intento ?? 0} data-testid="formulario-gasto-pagado">
@@ -567,6 +573,15 @@ export function FormularioGastoPagado({ codigo, categorias, opciones }: { codigo
       <input type="hidden" name="envio" value={envio} />
       <p className="aviso aviso-info">Registrar no es aprobar ni autorizar un reembolso: queda «Pagado sin autorización previa · por revisar · Dirección».</p>
       <CamposVersion estado={estado} categorias={categorias} prefijo="ya-" />
+      <div className="campo">
+        <label htmlFor="paga-ya">Sucursal que pagó</label>
+        <select id="paga-ya" name="paga" value={opciones.pagaId} aria-invalid={estado?.errores?.paga ? true : undefined}
+          onChange={(e) => router.replace(`/sucursales/${codigo}/gastos?paga=${e.target.value}#ya-pagado`, { scroll: false })}>
+          {opciones.sucursalesPaga.map((x) => <option key={x.id} value={x.id}>{x.id === sucursalId ? `${x.nombre} (esta sucursal)` : x.nombre}</option>)}
+        </select>
+        <span className="sub">El gasto se carga a esta sucursal; el dinero salió de la que pagó.</span>
+        <ErrorCampo estado={estado} campo="paga" />
+      </div>
       <fieldset className="campo campo-grupo" aria-invalid={estado?.errores?.origen ? true : undefined}>
         <legend>¿De dónde salió el dinero?</legend>
         {opciones.origenes.map((o) => (
@@ -575,16 +590,22 @@ export function FormularioGastoPagado({ codigo, categorias, opciones }: { codigo
             <span>{NOMBRE_ORIGEN[o]}</span>
           </label>
         ))}
-        <span className="sub">Efectivo solo de un turno ya cerrado: se conservan sus registros y no se descuenta del turno actual.</span>
         <ErrorCampo estado={estado} campo="origen" />
       </fieldset>
       {efectivo ? (
         <div className="campo">
-          <label htmlFor="turno">Turno cerrado del que salió</label>
+          <label htmlFor="turno">Turno del que salió</label>
           <select id="turno" name="turno" value={turno} onChange={(e) => setTurno(e.target.value)} aria-invalid={estado?.errores?.turno ? true : undefined}>
             <option value="">Elige el turno…</option>
-            {opciones.turnos.map((x) => <option key={x.id} value={x.id}>{fechaTurno.format(x.abierto)} – {fechaTurno.format(x.cerrado)}</option>)}
+            {opciones.turnos.map((x) => (
+              <option key={x.id} value={x.id}>{x.cerrado ? `${fechaTurno.format(x.abierto)} – ${fechaTurno.format(x.cerrado)} (cerrado)` : `Turno abierto (desde ${fechaTurno.format(x.abierto)})`}</option>
+            ))}
           </select>
+          <span className="sub" data-testid="efecto-turno">
+            {!t ? "Turno abierto: la salida se registra ahora, una sola vez, y baja el esperado. Turno cerrado: se conservan sus registros y no se descuenta del actual."
+              : t.cerrado ? "Turno cerrado: se conservan sus registros y no se descuenta del turno actual."
+              : `Turno abierto: la salida se registra ahora, una sola vez, y baja el esperado. Responsable del lugar: ${responsable?.nombre ?? "nadie (no se puede registrar)"}.`}
+          </span>
           <ErrorCampo estado={estado} campo="turno" />
         </div>
       ) : null}
@@ -595,13 +616,13 @@ export function FormularioGastoPagado({ codigo, categorias, opciones }: { codigo
             <option value="">Elige a la persona…</option>
             {personas.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
           </select>
-          {efectivo ? <span className="sub">Responsables de ese lugar en ese turno.</span>
+          {efectivo && t?.cerrado ? <span className="sub">Responsables de ese lugar en ese turno.</span>
             : origen === "dinero_personal" ? <span className="sub">Queda pendiente de reembolso para esta persona.</span> : null}
           <ErrorCampo estado={estado} campo="pagadoPor" />
         </div>
         <div className="campo">
           <label htmlFor="pagadoEl-ya">Fecha del pago</label>
-          <input id="pagadoEl-ya" name="pagadoEl" type="date" max={opciones.hoy} defaultValue={estado?.valores?.pagadoEl ?? ""} aria-invalid={estado?.errores?.pagadoEl ? true : undefined} />
+          <input id="pagadoEl-ya" name="pagadoEl" type="date" max={opciones.hoy} defaultValue={estado?.valores?.pagadoEl ?? opciones.hoy} aria-invalid={estado?.errores?.pagadoEl ? true : undefined} />
           <ErrorCampo estado={estado} campo="pagadoEl" />
         </div>
       </div>

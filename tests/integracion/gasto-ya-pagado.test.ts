@@ -11,9 +11,10 @@ import { cargarDatosPrueba } from "../../scripts/datos-prueba.mjs";
 import { crearBaseTemporal, URL_ADMIN } from "./bd-temporal";
 
 /**
- * Bloque 6, PR 8 (acordado el 27 nov 2026; solo datos ficticios; facultades ficticias solo dentro de la prueba): gastos
- * que ya se pagaron y pagos de turnos cerrados. Registrar no es aprobar ni autorizar un reembolso; el efectivo de un
- * turno cerrado conserva los registros de ese turno y no se descuenta del actual.
+ * Bloque 6, PR 8 (acordado el 27 nov 2026; precisiones de las 22:22; solo datos ficticios; facultades ficticias solo
+ * dentro de la prueba): gastos que ya se pagaron. Registrar no es aprobar ni autorizar un reembolso. Efectivo del turno
+ * abierto: una sola salida al registrarlo; de un turno cerrado: sin salida, ligado a ese turno. Registrar o revisar el
+ * gasto no vuelve a descontar el dinero. La sucursal que paga y la beneficiada siguen separadas.
  */
 let sql: postgres.Sql;
 let cerrar: () => Promise<void>;
@@ -22,7 +23,7 @@ const D = "@prueba.fitnessland.invalid";
 const hoyMx = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date());
 const manana = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date(Date.now() + 86_400_000));
 
-let codigo: string, sucursal: string;
+let codigo: string, sucursal: string, codigo2: string, sucursal2: string;
 let rec: string, rec2: string, enc: string, adm: string, ges: string, dir: string;
 let turno1: string;
 
@@ -35,11 +36,14 @@ async function cuenta(nombre: string, rol: string | null, general = false) {
 type Datos = Parameters<typeof registrarGastoPagado>[3];
 const yaPagado = (u: string, x: Partial<Datos> = {}) => registrarGastoPagado(sql, u, codigo, {
   concepto: "Garrafones ficticios", categoria: "prueba_agua", importe: "120", proveedor: "Agua ficticia", nota: "",
-  origen: "bolsa_visitas", pagadoPor: rec, pagadoEl: hoyMx(), turno: turno1, aQuien: "", cuenta: "", referencia: "",
+  pagaId: "", origen: "bolsa_visitas", pagadoPor: rec, pagadoEl: hoyMx(), turno: turno1, aQuien: "", cuenta: "", referencia: "",
   motivoPagado: "Prueba ficticia: se acabó el agua y no había quién autorizara", tipo: "ticket", folio: "A-1", motivoSin: "",
   envio: randomUUID(), ...x,
 }, PRUEBAS);
-const bolsa = async () => (await estadoTurno(sql, rec, codigo))!.turno!.lugares.find((l) => l.tipo === "bolsa_visitas")!;
+const bolsa = async () => (await estadoTurno(sql, rec2, codigo))!.turno!.lugares.find((l) => l.tipo === "bolsa_visitas")!;
+const movimientos = async () => (await sql<{ n: number; neto: string }[]>`
+  select count(*)::int as n, coalesce(sum(me.importe), 0)::text as neto from movimiento_efectivo me join turno t on t.id = me.turno_id
+  where t.sucursal_id = ${sucursal}`)[0];
 
 describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () => {
   beforeAll(async () => {
@@ -47,6 +51,8 @@ describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () =
     await cargarDatosPrueba(sql, { entorno: "pruebas" });
     codigo = `Y${randomUUID().replace(/[^0-9]/g, "").slice(0, 3)}`;
     [{ id: sucursal }] = await sql<{ id: string }[]>`insert into sucursal (nombre, codigo) values (${"Ya pagados " + codigo}, ${codigo}) returning id`;
+    codigo2 = `Z${randomUUID().replace(/[^0-9]/g, "").slice(0, 3)}`;
+    [{ id: sucursal2 }] = await sql<{ id: string }[]>`insert into sucursal (nombre, codigo) values (${"Paga " + codigo2}, ${codigo2}) returning id`;
     rec = await cuenta("Recepción Y", "recepcion");
     rec2 = await cuenta("Recepción Y2", "recepcion");
     enc = await cuenta("Encargado Y", "encargado");
@@ -77,12 +83,12 @@ describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () =
     expect(await opcionesGastoPagado(sql, rec, sucursal)).toBeNull();
     expect(await yaPagado(rec)).toEqual({ ok: false, error: "sin_permiso" });
     // Validaciones: turno abierto, quien no fue responsable, fecha futura, sin comprobante ni motivo.
-    expect(await yaPagado(enc, { turno: t2.id, pagadoPor: rec2 })).toEqual({ ok: false, error: "turno_abierto" });
     expect(await yaPagado(enc, { pagadoPor: enc })).toEqual({ ok: false, error: "pagado_por" });
     expect(await yaPagado(enc, { pagadoEl: manana() })).toEqual({ ok: false, error: "fecha" });
     expect(await yaPagado(enc, { tipo: "" })).toEqual({ ok: false, error: "comprobante" });
     expect(await yaPagado(enc, { motivoPagado: "x" })).toEqual({ ok: false, error: "motivo_ya_pagado" });
     expect(await yaPagado(enc, { origen: "transferencia", cuenta: "Banco ficticio", referencia: "REF-1" })).toEqual({ ok: false, error: "origen" });
+    expect(await yaPagado(enc, { pagaId: sucursal2 })).toEqual({ ok: false, error: "sucursal_paga" });
 
     const r = await yaPagado(enc);
     expect(r.ok).toBe(true);
@@ -110,6 +116,70 @@ describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () =
     expect((await pagosPosterioresDelTurno(sql, turno1)).map((p) => [p.clave, p.importe, p.pagadoPor])).toEqual([[clave, "120.00", "Recepción Y"]]);
     // Quien pagó lo ve aunque no consulte todos los gastos.
     expect((await detalleGasto(sql, rec, codigo, clave))?.gasto.clave).toBe(clave);
+  });
+
+  it("efectivo del turno abierto: una sola salida al registrarlo; registrar de nuevo o revisar no vuelve a descontar", async () => {
+    const t2 = (await estadoTurno(sql, rec2, codigo))!.turno!;
+    const antes = Number((await bolsa()).esperado);
+    const m0 = await movimientos();
+    const envio = randomUUID();
+    const datos = { turno: t2.id, pagadoPor: enc, importe: "75", concepto: "Foco ficticio", motivoPagado: "Prueba ficticia: se fundió el foco de la entrada", envio };
+    expect(await yaPagado(enc, { ...datos, pagadoEl: manana() })).toEqual({ ok: false, error: "fecha" });
+    const r = await yaPagado(enc, datos);
+    expect(r.ok).toBe(true);
+    const clave = r.ok ? r.clave : "";
+    // Baja el esperado una sola vez, en el turno abierto, con la responsable vigente del lugar.
+    expect(Number((await bolsa()).esperado)).toBe(antes - 75);
+    expect(await bolsa()).toMatchObject({ cantidadGastos: 1 });
+    const [m] = await sql<{ n: number; responsable: string; registro: string; importe: string; turno: string }[]>`
+      select count(*) over ()::int as n, me.responsable_id as responsable, me.registrado_por as registro, me.importe::text, me.turno_id as turno
+      from movimiento_efectivo me join pago_gasto p on p.id = me.pago_gasto_id join gasto g on g.id = p.gasto_id where g.clave = ${clave}`;
+    expect(m).toEqual({ n: 1, responsable: rec2, registro: enc, importe: "-75.00", turno: t2.id });
+    const d = await detalleGasto(sql, enc, codigo, clave);
+    expect(d?.gasto).toMatchObject({ estado: "sin_autorizacion_previa", sinAutorizacionPrevia: true });
+    expect(d?.pago).toMatchObject({ posterior: true, turnoCerrado: null, salidaResponsable: "Recepción Y2", pagadoPor: "Encargado Y" });
+    // Reenviar el mismo formulario, consultar, verlo en la bandeja o intentar autorizarlo no vuelve a descontar.
+    expect(await yaPagado(enc, datos)).toEqual(r);
+    await detalleGasto(sql, dir, codigo, clave);
+    await bandejaGastos(sql, dir, "sin_autorizacion");
+    expect(await decidirGasto(sql, dir, codigo, { clave, version: 1, decision: "autorizado", motivo: "" }, PRUEBAS)).toEqual({ ok: false, error: "ya_pagado" });
+    expect(Number((await bolsa()).esperado)).toBe(antes - 75);
+    const m1 = await movimientos();
+    expect(m1.n).toBe(m0.n + 1);
+    expect(Number(m1.neto)).toBe(Number(m0.neto) - 75);
+    // Un segundo pago o una segunda salida del mismo gasto, no.
+    const [{ gid, pid }] = await sql<{ gid: string; pid: string }[]>`select g.id as gid, p.id as pid from gasto g join pago_gasto p on p.gasto_id = g.id where g.clave = ${clave}`;
+    const [{ lugar }] = await sql<{ lugar: string }[]>`select id as lugar from lugar_efectivo where sucursal_id = ${sucursal} and tipo = 'bolsa_visitas'`;
+    await expect(sql`insert into pago_gasto (gasto_id, version, origen, importe, pagado_el, pagado_por, registrado_por, posterior)
+                     values (${gid}, 1, 'dinero_personal', 75, ${hoyMx()}, ${enc}, ${enc}, true)`).rejects.toThrow(/duplicate|unique/);
+    await expect(sql`insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, pago_gasto_id, responsable_id, registrado_por)
+                     values (${lugar}, ${t2.id}, 'salida_pago_gasto', -75, ${pid}, ${rec2}, ${enc})`).rejects.toThrow(/duplicate|unique/);
+    expect(Number((await bolsa()).esperado)).toBe(antes - 75);
+  });
+
+  it("sucursal que paga y beneficiada separadas: la clave es de la beneficiada; el efectivo sale del turno de la que paga", async () => {
+    // Gestión administrativa con alcance en ambas sucursales (ficticio).
+    await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${ges}, 'gestion_administrativa', ${sucursal2}, 'Prueba')`;
+    const recZ = await cuenta("Recepción Z", null);
+    await sql`insert into asignacion (usuario_id, rol, sucursal_id, motivo) values (${recZ}, 'recepcion', ${sucursal2}, 'Prueba')`;
+    const tz = await abrirTurno(sql, recZ, codigo2, { bolsa: "800.00", cajon: "0.00" }, PRUEBAS);
+    if (!tz.ok) throw new Error(tz.error);
+    const op = await opcionesGastoPagado(sql, ges, sucursal, sucursal2);
+    expect(op?.pagaId).toBe(sucursal2);
+    expect(op?.sucursalesPaga.map((x) => x.id).sort()).toEqual([sucursal, sucursal2].sort());
+    const turnoZ = op!.turnos.find((t) => t.cerrado === null)!;
+    const antesY = Number((await bolsa()).esperado);
+    const r = await yaPagado(ges, { pagaId: sucursal2, turno: turnoZ.id, pagadoPor: recZ, importe: "60", concepto: "Material para Y pagado en Z" });
+    expect(r.ok).toBe(true);
+    const clave = r.ok ? r.clave : "";
+    expect(clave.startsWith(`${codigo}-G`)).toBe(true);
+    const d = await detalleGasto(sql, ges, codigo, clave);
+    expect(d?.gasto).toMatchObject({ beneficiada: `Ya pagados ${codigo}`, paga: `Paga ${codigo2}`, pagaOtra: true });
+    expect(Number((await bolsa()).esperado)).toBe(antesY);
+    const z = (await estadoTurno(sql, recZ, codigo2))!.turno!.lugares.find((l) => l.tipo === "bolsa_visitas")!;
+    expect(z.esperado).toBe("740.00");
+    // Se consulta igual desde la sucursal que pagó, con la misma clave.
+    expect((await detalleGasto(sql, ges, codigo2, clave))?.gasto.clave).toBe(clave);
   });
 
   it("dinero personal: queda pendiente de reembolso de quien puso el dinero; registrar no autoriza el reembolso", async () => {
@@ -141,7 +211,7 @@ describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () =
     expect((await yaPagado(enc, { origen: "tarjeta", turno: "", pagadoPor: enc, cuenta: "Tarjeta ficticia", referencia: "" })).ok).toBe(true);
   });
 
-  it("el excedente de un anticipo se marca «Pagado sin autorización previa» (se pagó antes de autorizarse)", async () => {
+  it("excedente de un anticipo: se marca solo si el pago al proveedor fue antes del día de su autorización", async () => {
     const s = await solicitarGasto(sql, rec2, codigo, { concepto: "Material ficticio", categoria: "prueba_limpieza", importe: "100",
       proveedor: "", nota: "", pagaId: "", compraDe: "", envio: randomUUID() }, PRUEBAS);
     if (!s.ok) throw new Error(s.error);
@@ -151,9 +221,18 @@ describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () =
     const c = await comprobarAnticipo(sql, adm, codigo, { clave: s.clave, gastado: "130", pagadoEl: hoyMx(), aQuien: "", envio: randomUUID(),
       tipo: "nota", folio: "", motivoSin: "" }, PRUEBAS);
     const exc = c.ok ? c.excedente! : "";
-    expect((await detalleGasto(sql, adm, codigo, exc))?.gasto).toMatchObject({ estado: "por_autorizar", sinAutorizacionPrevia: true });
+    // Por autorizar: no se marca. Autorizado el mismo día del pago al proveedor: tampoco.
+    expect((await detalleGasto(sql, adm, codigo, exc))?.gasto).toMatchObject({ estado: "por_autorizar", sinAutorizacionPrevia: false });
+    expect(await decidirGasto(sql, enc, codigo, { clave: exc, version: 1, decision: "autorizado", motivo: "" }, PRUEBAS)).toEqual({ ok: true });
+    expect((await detalleGasto(sql, adm, codigo, exc))?.gasto).toMatchObject({ estado: "autorizado", sinAutorizacionPrevia: false });
     expect((await detalleGasto(sql, adm, codigo, s.clave))?.gasto.sinAutorizacionPrevia).toBe(false);
-    expect((await bolsa()).esperado).toBeDefined();
+    // Si el pago al proveedor fue un día antes de la autorización, sí (se simula la fecha en la base de prueba).
+    await sql.begin(async (tx) => {
+      await tx`set local session_replication_role = replica`;
+      await tx`update pago_gasto set pagado_el = pagado_el - 1
+               where id = (select k.pago_id from anticipo_comprobado k join gasto x on x.id = k.excedente_gasto_id where x.clave = ${exc})`;
+    });
+    expect((await detalleGasto(sql, adm, codigo, exc))?.gasto.sinAutorizacionPrevia).toBe(true);
   });
 
   it("la base lo respalda: sin registro de ya pagado no hay pago posterior; sin decisión; efectivo cerrado sin salida", async () => {
@@ -174,12 +253,12 @@ describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () =
     await expect(sql`insert into pago_gasto (gasto_id, version, origen, importe, pagado_el, pagado_por, registrado_por, cuenta, posterior)
                      values (${gid}, 1, 'tarjeta', 50, ${hoyMx()}, ${enc}, ${enc}, 'Tarjeta ficticia', true)`).rejects.toThrow(/gasto registrado como ya pagado/);
     await expect(sql`insert into gasto_ya_pagado (gasto_id, motivo, registrado_por) values (${gid}, 'Prueba sin pago', ${enc})`).rejects.toThrow(/con su pago/);
-    // Un efectivo posterior sin turno cerrado, no.
+    // Un efectivo posterior sin turno cerrado ni salida en el turno abierto, no.
     await expect(sql.begin(async (tx) => {
       await tx`insert into gasto_ya_pagado (gasto_id, motivo, registrado_por) values (${gid}, 'Prueba sin turno', ${enc})`;
       await tx`insert into pago_gasto (gasto_id, version, origen, importe, pagado_el, pagado_por, registrado_por, posterior)
                values (${gid}, 1, 'bolsa_visitas', 50, ${hoyMx()}, ${rec}, ${enc}, true)`;
-    })).rejects.toThrow(/pago_posterior_efectivo_con_turno/);
+    })).rejects.toThrow(/registra su salida/);
     await expect(sql`update gasto_ya_pagado set motivo = 'Cambiado' where gasto_id = ${id}`).rejects.toThrow(/no se edita/);
   });
 });
