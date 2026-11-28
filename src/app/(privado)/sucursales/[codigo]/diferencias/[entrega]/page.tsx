@@ -338,6 +338,19 @@ export default async function CasoDiferencia({ params, searchParams }: PageProps
             El desglose ({pesos.format(Number(c.desglose.calculado))}) no coincide con el esperado guardado al entregar ({pesos.format(Number(c.lugares.bolsa_visitas.esperado))}). Revísalo con Dirección.
           </p>
         ) : null}
+        {c.pagosPosteriores.length ? (
+          <div className="aviso aviso-info" data-testid="pagos-posteriores">
+            <strong>Pagos de este turno registrados después del cierre</strong> (no cambian el esperado ni los importes de este turno):
+            <ul className="lista-simple">
+              {c.pagosPosteriores.map((p) => (
+                <li key={p.clave}>
+                  <Link href={`/sucursales/${codigo}/gastos/${p.clave}`}>{p.clave}</Link> · {p.lugar === "bolsa_visitas" ? "Bolsa de visitas" : "Cajón de mensualidades"} ·{" "}
+                  {pesos.format(Number(p.importe))} · pagó {p.pagadoPor} · registrado {hora.format(p.registradoEn)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <p className="sub" data-testid="fuera-bolsa">
           <strong>No entran a la bolsa</strong> (no cambian el esperado): tarjeta {pesos.format(Number(f.tarjeta.importe))} ({f.tarjeta.cobros});
           transferencias verificadas {pesos.format(Number(f.transferenciaVerificada.importe))}, pendientes {pesos.format(Number(f.transferenciaPendiente.importe))} y

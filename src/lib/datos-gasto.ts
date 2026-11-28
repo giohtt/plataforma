@@ -1,10 +1,19 @@
 /** Textos y tipos de gastos que también usa el navegador (sin acceso a la base). */
 
 /** Por qué una persona no puede decidir un gasto (impedimento_decision_gasto). */
-export type Impedimento = "ya_decidido" | "propio" | "de_direccion" | "sin_facultad" | "limite" | "diario";
-export type EstadoGasto = "por_autorizar" | "autorizado" | "rechazado";
+export type Impedimento = "ya_decidido" | "propio" | "de_direccion" | "sin_facultad" | "limite" | "diario" | "ya_pagado";
+/** «sin_autorizacion_previa»: se registró después de pagarse (PR 8); no pasa por la ruta de autorización. */
+export type EstadoGasto = "por_autorizar" | "autorizado" | "rechazado" | "sin_autorizacion_previa";
 export const NOMBRE_ESTADO_GASTO: Record<EstadoGasto, string> = {
   por_autorizar: "Por autorizar", autorizado: "Autorizado", rechazado: "Rechazado",
+  sin_autorizacion_previa: "Pagado sin autorización previa · por revisar · Dirección",
+};
+
+/** Autorización previa del pago, por fecha y hora (PR 8). */
+export type AutorizacionPrevia = "comprobada" | "no_comprobada" | "sin_autorizacion_previa" | "pendiente";
+export const NOMBRE_AUTORIZACION_PREVIA: Record<AutorizacionPrevia, string> = {
+  comprobada: "Autorización previa comprobada", no_comprobada: "Autorización previa no comprobada",
+  sin_autorizacion_previa: "Pagado sin autorización previa", pendiente: "Pagado · autorización pendiente",
 };
 
 export type OrigenPago = "bolsa_visitas" | "cajon_mensualidades" | "transferencia" | "tarjeta" | "dinero_personal" | "anticipo";
@@ -36,4 +45,5 @@ export const TEXTO_IMPEDIMENTO: Record<Impedimento, string> = {
   sin_facultad: "No tienes facultad vigente para autorizar gastos aquí (en la sucursal beneficiada y, si es otra, en la que paga).",
   limite: "La compra pasa tu límite por gasto: la decide quien tenga facultad suficiente (Gestión administrativa o Dirección).",
   diario: "Con este gasto pasarías tu acumulado de hoy: lo decide quien tenga facultad suficiente (Gestión administrativa o Dirección).",
+  ya_pagado: "Se registró después de pagarse: no se autoriza, lo revisa Dirección.",
 };

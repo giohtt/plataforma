@@ -326,6 +326,11 @@ export type DetalleDiferencias = {
    * presente forma parte de la diferencia contra el esperado de la entrega (el mismo caso, no otro).
    */
   deRetiros: { retiroId: string; folio: string; importe: string; presente: string; en: Date }[];
+  /**
+   * Gastos pagados en efectivo en este turno que se registraron después de su cierre (bloque 6, PR 8). No cambian el
+   * esperado ni los importes del turno: se muestran aparte para que Dirección los tenga a la vista al revisar.
+   */
+  pagosPosteriores: { clave: string; lugar: TipoLugar; importe: string; pagadoEl: string; pagadoPor: string; registradoEn: Date }[];
 };
 
 export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: string, entregaId: string): Promise<DetalleDiferencias | null> {
@@ -538,6 +543,10 @@ export async function detalleDiferencias(sql: Sql, usuarioId: string, codigo: st
       select r.id as "retiroId", r.folio, dr.importe::text, v.presente::text, dr.registrada_en as en
       from diferencia_retiro_entrega v join diferencia_retiro dr on dr.id = v.diferencia_retiro_id join retiro r on r.id = dr.retiro_id
       where v.entrega_id = ${e.id} order by dr.registrada_en`)],
+    pagosPosteriores: [...(await sql<DetalleDiferencias["pagosPosteriores"]>`
+      select g.clave, p.origen as lugar, p.importe::text as importe, to_char(p.pagado_el, 'YYYY-MM-DD') as "pagadoEl", u.nombre as "pagadoPor", p.en as "registradoEn"
+      from pago_gasto p join gasto g on g.id = p.gasto_id join usuario u on u.id = p.pagado_por
+      where p.turno_cerrado_id = ${e.turno_id} order by p.en`)],
   };
 }
 

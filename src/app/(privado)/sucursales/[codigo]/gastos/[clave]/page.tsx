@@ -6,7 +6,7 @@ import {
   FormularioPresentarReembolso,
 } from "@/components/Gastos";
 import { obtenerBaseDatos } from "@/lib/db";
-import { detalleGasto, NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, NOMBRE_ORIGEN, NOMBRE_REEMBOLSO, TEXTO_IMPEDIMENTO } from "@/lib/gastos";
+import { detalleGasto, NOMBRE_AUTORIZACION_PREVIA, NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, NOMBRE_ORIGEN, NOMBRE_REEMBOLSO, TEXTO_IMPEDIMENTO } from "@/lib/gastos";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
 export const metadata = { title: "Solicitud de gasto · Fitnessland" };
@@ -15,6 +15,7 @@ const pesos = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN
 const fechaHora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", dateStyle: "medium", timeStyle: "short" });
 const AVISO: Record<string, string> = {
   solicitado: "Solicitud registrada. No mueve dinero ni autoriza el gasto.",
+  ya_pagado: "Gasto ya pagado registrado. No es aprobarlo ni autorizar un reembolso: lo revisa Dirección.",
   corregido: "Corrección guardada como versión nueva. La anterior se conserva; si estaba decidida, se decide de nuevo.",
   autorizado: "Gasto autorizado desde tu cuenta. Autorizar no mueve dinero.",
   rechazado: "Gasto rechazado con tu motivo. Quien lo solicitó puede corregirlo y enviarlo de nuevo.",
@@ -37,7 +38,7 @@ const AVISO: Record<string, string> = {
 const TIPO_COMPROBANTE = { ticket: "Ticket", nota: "Nota", factura: "Factura" } as const;
 const hoyDe = (f: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(f);
 const hoyMx = () => hoyDe(new Date());
-const CLASE_ESTADO = { por_autorizar: "chip-programada", autorizado: "chip-vigente", rechazado: "chip-revocada" } as const;
+const CLASE_ESTADO = { por_autorizar: "chip-programada", autorizado: "chip-vigente", rechazado: "chip-revocada", sin_autorizacion_previa: "chip-programada" } as const;
 
 /** Detalle de una solicitud con todas sus versiones. Sin permiso, «No encontrada». */
 export default async function Gasto({ params, searchParams }: PageProps<"/sucursales/[codigo]/gastos/[clave]">) {
@@ -58,10 +59,19 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
         <p className="estado-gasto" data-testid="estado-gasto">
           <span className={`chip-estado ${CLASE_ESTADO[g.estado]}`}>{NOMBRE_ESTADO_GASTO[g.estado]}</span>
           {g.decididoPor ? ` por ${g.decididoPor}` : ""}{ultima.version > 1 ? ` · versión ${ultima.version}` : ""}
-          {g.origenPago ? <> · <span className="chip-estado chip-vigente" data-testid="pagado">Pagado</span></> : null}
+          {g.origenPago && g.estado !== "sin_autorizacion_previa" ? <> · <span className="chip-estado chip-vigente" data-testid="pagado">Pagado</span></> : null}
+          {g.autorizacionPrevia && g.autorizacionPrevia !== "comprobada" && g.estado !== "sin_autorizacion_previa" ? (
+            <> · <span className="chip-estado chip-programada" data-testid="autorizacion-previa">{NOMBRE_AUTORIZACION_PREVIA[g.autorizacionPrevia]}</span></>
+          ) : null}
           {d.anticipo && !d.anticipo.comprobado ? <> · <span className="chip-estado chip-programada" data-testid="anticipo-por-comprobar">Fuera de caja: anticipo por comprobar</span></> : null}
           {d.anticipo && Number(d.anticipo.pendiente) > 0 ? <> · <span className="chip-estado chip-programada" data-testid="cambio-pendiente">Fuera de caja: cambio por devolver {pesos.format(Number(d.anticipo.pendiente))}</span></> : null}
         </p>
+        {d.yaPagado ? (
+          <p className="aviso aviso-info" data-testid="ya-pagado">
+            Se registró después de pagarse ({d.yaPagado.registradoPor} · {fechaHora.format(d.yaPagado.en)}): «{d.yaPagado.motivo}». No se autoriza en la ruta normal;
+            lo revisa Dirección (qué decide al revisarlo está por definir).
+          </p>
+        ) : null}
         {g.motivoDecision ? <p className="sub" data-testid="motivo-decision">Motivo: «{g.motivoDecision}»</p> : null}
         <dl className="datos-expediente">
           <dt>Importe</dt><dd data-testid="importe-gasto">{pesos.format(Number(g.importe))}</dd>
@@ -79,10 +89,10 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
               <dd data-testid="pagado-compra">{pesos.format(Number(d.totalPagadoCompra))}
                 <span className="sub"> · {d.pagosCompra.map((p) => `${p.clave}: ${pesos.format(Number(p.importe))} (${NOMBRE_ORIGEN[p.origen]})`).join(" + ")}</span></dd></>
           ) : null}
-          <dt>Solicitó</dt><dd>{g.solicitadoPor} · {fechaHora.format(g.solicitadoEn)}</dd>
+          <dt>{d.yaPagado ? "Registró" : "Solicitó"}</dt><dd>{g.solicitadoPor} · {fechaHora.format(g.solicitadoEn)}</dd>
           {g.nota ? <><dt>Nota</dt><dd>{g.nota}</dd></> : null}
         </dl>
-        <p className="sub">Solicitar no mueve dinero ni autoriza el gasto.</p>
+        {d.yaPagado ? null : <p className="sub">Solicitar no mueve dinero ni autoriza el gasto.</p>}
         {g.estado === "por_autorizar" ? (
           <div className="aviso aviso-info" data-testid="quien-decide">
             {d.puedenDecidir.length
@@ -154,7 +164,15 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
           <dl className="datos-expediente">
             <dt>De dónde salió</dt><dd data-testid="origen-pago">{NOMBRE_ORIGEN[d.pago.origen]}{d.pago.cuenta ? ` · ${d.pago.cuenta}` : ""}</dd>
             <dt>Importe pagado</dt><dd data-testid="importe-pagado">{pesos.format(Number(d.pago.importe))}</dd>
-            <dt>Fecha del pago</dt><dd>{d.pago.pagadoEl.split("-").reverse().join("/")}</dd>
+            <dt>Fecha del pago</dt><dd data-testid="fecha-pago">{d.pago.pagadoEl.split("-").reverse().join("/")}
+              {d.pago.horaDeclarada ? <> · {d.pago.horaDeclarada} <span className="sub">(hora declarada por quien registra)</span></> : null}</dd>
+            <dt>Registrado</dt><dd data-testid="registro-pago">{fechaHora.format(d.pago.en)} <span className="sub">(automático)</span></dd>
+            {d.pago.posterior && d.pago.salidaResponsable ? (
+              <><dt>Turno</dt><dd data-testid="turno-abierto">Salió del turno abierto (responsable del lugar: {d.pago.salidaResponsable}): una sola salida, que bajó el esperado una vez</dd></>
+            ) : null}
+            {d.pago.turnoCerrado ? (
+              <><dt>Turno</dt><dd data-testid="turno-cerrado">Pago de un turno cerrado ({fechaHora.format(d.pago.turnoCerrado.abierto)} – {fechaHora.format(d.pago.turnoCerrado.cerrado)}): se conservan sus registros y no se descuenta del turno actual</dd></>
+            ) : null}
             <dt>Pagó</dt><dd>{d.pago.pagadoPor}{d.pago.registradoPor !== d.pago.pagadoPor ? ` · registró ${d.pago.registradoPor}` : ""} · {fechaHora.format(d.pago.en)}</dd>
             {d.pago.aQuien ? <><dt>A quién se pagó</dt><dd>{d.pago.aQuien}</dd></> : null}
             {d.pago.referencia ? <><dt>Referencia</dt><dd>{d.pago.referencia}</dd></> : null}
@@ -239,7 +257,7 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
                   <tr key={`v${v.version}`} data-testid="version-gasto">
                     <td data-etiqueta="Fecha y hora">{fechaHora.format(v.en)}</td>
                     <td data-etiqueta="Qué pasó">
-                      {v.version === 1 ? "Solicitud" : `Corrección · versión ${v.version}`}: {v.concepto} · {v.categoria} · {pesos.format(Number(v.importe))}
+                      {v.version === 1 ? (d.yaPagado ? "Registro de gasto ya pagado" : "Solicitud") : `Corrección · versión ${v.version}`}: {v.concepto} · {v.categoria} · {pesos.format(Number(v.importe))}
                       {v.proveedor ? ` · ${v.proveedor}` : ""}{v.motivo ? <><br /><span className="sub">Motivo: «{v.motivo}»</span></> : null}
                     </td>
                     <td data-etiqueta="Cuenta">{v.registradaPor}</td>

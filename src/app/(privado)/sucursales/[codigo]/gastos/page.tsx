@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { FormularioSolicitud } from "@/components/Gastos";
+import { FormularioGastoPagado, FormularioSolicitud } from "@/components/Gastos";
 import { obtenerBaseDatos } from "@/lib/db";
 import { NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, pantallaGastos } from "@/lib/gastos";
 import { requerirSesion } from "@/lib/sesion-servidor";
@@ -14,10 +14,11 @@ const fechaHora = new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_C
  * Gastos de la sucursal (bloque 6, PR 3): solicitar y consultar. Sin gasto.solicitar ni gasto.consultar en la sucursal:
  * «No encontrada». Quien solo solicita ve lo que pidió.
  */
-export default async function Gastos({ params }: PageProps<"/sucursales/[codigo]/gastos">) {
+export default async function Gastos({ params, searchParams }: PageProps<"/sucursales/[codigo]/gastos">) {
   const sesion = await requerirSesion();
   const { codigo } = await params;
-  const p = await pantallaGastos(obtenerBaseDatos()!, sesion.usuarioId, codigo);
+  const { paga } = await searchParams;
+  const p = await pantallaGastos(obtenerBaseDatos()!, sesion.usuarioId, codigo, typeof paga === "string" ? paga.slice(0, 40) : "");
   if (!p) notFound();
   return (
     <main className="contenedor contenedor-amplio">
@@ -29,6 +30,13 @@ export default async function Gastos({ params }: PageProps<"/sucursales/[codigo]
         <details className="tarjeta" data-testid="solicitar-gasto">
           <summary className="titulo-seccion" data-testid="abrir-solicitud">Solicitar gasto</summary>
           <FormularioSolicitud codigo={p.sucursal.codigo} sucursalId={p.sucursal.id} categorias={p.categorias} sucursales={p.sucursalesPaga} compras={p.compras} />
+        </details>
+      ) : null}
+
+      {p.yaPagado ? (
+        <details className="tarjeta" data-testid="registrar-ya-pagado" id="ya-pagado" open={typeof paga === "string" || undefined}>
+          <summary className="titulo-seccion" data-testid="abrir-ya-pagado">Registrar un gasto ya pagado</summary>
+          <FormularioGastoPagado codigo={p.sucursal.codigo} sucursalId={p.sucursal.id} categorias={p.categorias} opciones={p.yaPagado} />
         </details>
       ) : null}
 
