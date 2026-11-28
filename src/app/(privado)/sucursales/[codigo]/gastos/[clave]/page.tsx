@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
-  FormularioCambioAnticipo, FormularioComprobante, FormularioComprobarAnticipo, FormularioConfirmarAnticipo, FormularioCorreccion, FormularioDecision,
-  FormularioEntregarAnticipo, FormularioExcedente, FormularioPago,
+  FormularioCambioAnticipo, FormularioComprobante, FormularioComprobarAnticipo, FormularioConfirmarAnticipo, FormularioConfirmarReembolso, FormularioCorreccion,
+  FormularioDecision, FormularioDecisionReembolso, FormularioEntregarAnticipo, FormularioExcedente, FormularioPago, FormularioPagoReembolso,
+  FormularioPresentarReembolso,
 } from "@/components/Gastos";
 import { obtenerBaseDatos } from "@/lib/db";
-import { detalleGasto, NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, NOMBRE_ORIGEN, TEXTO_IMPEDIMENTO } from "@/lib/gastos";
+import { detalleGasto, NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, NOMBRE_ORIGEN, NOMBRE_REEMBOLSO, TEXTO_IMPEDIMENTO } from "@/lib/gastos";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
 export const metadata = { title: "Solicitud de gasto · Fitnessland" };
@@ -26,6 +27,11 @@ const AVISO: Record<string, string> = {
   anticipo_cambio: "Anticipo comprobado. Devuelve el cambio a la responsable de caja: ella lo cuenta y lo recibe.",
   anticipo_excedente: "Anticipo comprobado. Se pidió autorización por el excedente, como parte de la misma compra.",
   cambio_recibido: "Cambio recibido completo: entró a caja una sola vez y el anticipo quedó cerrado.",
+  reembolso_autorizado: "Reembolso autorizado desde tu cuenta. Autorizar no mueve dinero: el pago se registra aparte.",
+  reembolso_rechazado: "Reembolso rechazado con tu motivo. Quien puso el dinero puede presentarlo de nuevo con información corregida.",
+  reembolso_presentado: "Reembolso presentado de nuevo. El rechazo anterior se conserva; lo decide Dirección.",
+  reembolso_pagado: "Reembolso pagado una sola vez. Falta que lo confirme quien lo recibe, desde su cuenta.",
+  reembolso_recibido: "Confirmaste que recibiste el reembolso: queda liquidado.",
   cambio_parcial: "Devolución parcial recibida: entró a caja una sola vez. El anticipo sigue abierto por lo que falta.",
 };
 const TIPO_COMPROBANTE = { ticket: "Ticket", nota: "Nota", factura: "Factura" } as const;
@@ -154,7 +160,7 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
             {d.pago.referencia ? <><dt>Referencia</dt><dd>{d.pago.referencia}</dd></> : null}
             <dt>Comprobación</dt><dd data-testid="comprobacion">{g.comprobacion ? NOMBRE_COMPROBACION[g.comprobacion] : "—"}</dd>
           </dl>
-          {d.pago.origen === "dinero_personal" ? <p className="aviso aviso-info" data-testid="reembolso-pendiente">Pagado con dinero personal: pendiente de reembolso. Registrar el pago no autoriza el reembolso; lo revisa Dirección.</p> : null}
+          {d.pago.origen === "dinero_personal" && (d.reembolsoDetalle?.estado === "por_decidir" || d.reembolsoDetalle?.estado === "presentado_de_nuevo") ? <p className="aviso aviso-info" data-testid="reembolso-pendiente">Pagado con dinero personal: pendiente de reembolso. Registrar el pago no autoriza el reembolso; lo revisa Dirección.</p> : null}
           {d.comprobantes.length ? (
             <ul className="lista-simple" data-testid="comprobantes">
               {d.comprobantes.map((c, i) => <li key={i}>{TIPO_COMPROBANTE[c.tipo]}{c.folio ? ` · folio ${c.folio}` : ""} · {c.registradoPor} · {fechaHora.format(c.en)}</li>)}
@@ -163,6 +169,62 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
           {d.sinComprobante ? <p className="sub" data-testid="sin-comprobante">Sin comprobante: «{d.sinComprobante.motivo}» · {d.sinComprobante.registradoPor} · {fechaHora.format(d.sinComprobante.en)}</p> : null}
           <p className="sub">Las fotos de los comprobantes se agregarán cuando se active el almacenamiento.</p>
           {d.puedeComprobar ? <FormularioComprobante codigo={codigo} clave={g.clave} /> : null}
+        </section>
+      ) : null}
+      {d.reembolsoDetalle ? (
+        <section className="tarjeta" aria-labelledby="t-reembolso" data-testid="reembolso-gasto">
+          <h2 id="t-reembolso" className="titulo-seccion">Reembolso</h2>
+          <p data-testid="estado-reembolso"><span className={`chip-estado ${d.reembolsoDetalle.estado === "recibido" ? "chip-vigente" : d.reembolsoDetalle.estado === "rechazado" ? "chip-revocada" : "chip-programada"}`}>
+            {NOMBRE_REEMBOLSO[d.reembolsoDetalle.estado]}</span></p>
+          <dl className="datos-expediente">
+            <dt>Para</dt><dd>{d.reembolsoDetalle.beneficiario} · pagó {pesos.format(Number(d.reembolsoDetalle.importe))} con su dinero</dd>
+            {d.reembolsoDetalle.rondas.length ? (
+              <><dt>Decisiones</dt><dd><ul className="lista-simple" data-testid="rondas-reembolso">
+                {d.reembolsoDetalle.rondas.map((x, i) => (
+                  <li key={i} data-testid={x.tipo === "decision" ? "decision-reembolso" : "reenvio-reembolso"}>
+                    {x.tipo === "decision"
+                      ? <>{x.decision === "autorizado" ? "Autorizado" : "Rechazado"} por {x.por}{x.sinComprobante ? " · sin comprobante" : ""}</>
+                      : <>Presentado de nuevo por {x.por}</>}
+                    {" · "}{fechaHora.format(x.en)}{x.motivo ? <><br /><span className="sub">{x.tipo === "decision" ? "Motivo" : "Nota"}: «{x.motivo}»</span></> : null}
+                  </li>
+                ))}
+              </ul></dd></>
+            ) : null}
+            {d.reembolsoDetalle.pago ? (
+              <><dt>Pagado</dt><dd data-testid="pago-reembolso">{pesos.format(Number(d.reembolsoDetalle.pago.importe))} · {NOMBRE_ORIGEN[d.reembolsoDetalle.pago.origen]}{d.reembolsoDetalle.pago.cuenta ? ` · ${d.reembolsoDetalle.pago.cuenta}` : ""} · {d.reembolsoDetalle.pago.pagadoPor} · {fechaHora.format(d.reembolsoDetalle.pago.en)}</dd></>
+            ) : null}
+            {d.reembolsoDetalle.recibidoEn ? <><dt>Recibido</dt><dd>Confirmó {d.reembolsoDetalle.beneficiario} · {fechaHora.format(d.reembolsoDetalle.recibidoEn)}</dd></> : null}
+          </dl>
+          {d.puedeDecidirReembolso ? (
+            <>
+              <div className="aviso aviso-info" data-testid="revision-reembolso">
+                <strong>Para decidir</strong>
+                <dl className="datos-expediente">
+                  <dt>Gasto original</dt>
+                  <dd>{d.reembolsoDetalle.revision.clave} · {d.reembolsoDetalle.revision.concepto}
+                    {d.reembolsoDetalle.revision.compraDe ? <> · parte de la compra <Link href={`/sucursales/${codigo}/gastos/${d.reembolsoDetalle.revision.compraDe}`}>{d.reembolsoDetalle.revision.compraDe}</Link></> : null}
+                    {d.reembolsoDetalle.revision.deAnticipo ? ` · excedente del anticipo de ${d.reembolsoDetalle.revision.deAnticipo}` : ""}</dd>
+                  <dt>Puso el dinero</dt><dd>{d.reembolsoDetalle.beneficiario} · {pesos.format(Number(d.reembolsoDetalle.importe))} · el {d.reembolsoDetalle.revision.pagadoEl.split("-").reverse().join("/")}</dd>
+                  <dt>Autorización del gasto</dt>
+                  <dd>{d.reembolsoDetalle.revision.autorizadoPor
+                    ? `${pesos.format(Number(d.reembolsoDetalle.revision.autorizadoImporte))} por ${d.reembolsoDetalle.revision.autorizadoPor} · ${fechaHora.format(d.reembolsoDetalle.revision.autorizadoEn!)}`
+                    : "Sin autorización registrada"}</dd>
+                  <dt>Comprobantes</dt>
+                  <dd data-testid="revision-comprobantes">{d.reembolsoDetalle.revision.comprobantes.length
+                    ? d.reembolsoDetalle.revision.comprobantes.map((c) => `${TIPO_COMPROBANTE[c.tipo as keyof typeof TIPO_COMPROBANTE]}${c.folio ? ` · folio ${c.folio}` : ""}`).join(", ")
+                    : <strong className="campo-error" data-testid="falta-comprobante">Falta comprobante{d.reembolsoDetalle.revision.sinComprobanteMotivo ? ` · «${d.reembolsoDetalle.revision.sinComprobanteMotivo}»` : ""}: para autorizar, escribe el motivo</strong>}</dd>
+                </dl>
+              </div>
+              <FormularioDecisionReembolso codigo={codigo} clave={g.clave} importe={d.reembolsoDetalle.importe} beneficiario={d.reembolsoDetalle.beneficiario}
+                sinComprobante={!d.reembolsoDetalle.revision.comprobantes.length} />
+            </>
+          ) : null}
+          {d.puedePresentarReembolso ? <FormularioPresentarReembolso codigo={codigo} clave={g.clave} /> : null}
+          {d.origenesReembolso.length ? (
+            <FormularioPagoReembolso codigo={codigo} clave={g.clave} importe={d.reembolsoDetalle.importe} beneficiario={d.reembolsoDetalle.beneficiario} origenes={d.origenesReembolso} />
+          ) : null}
+          {d.puedeConfirmarReembolso ? <FormularioConfirmarReembolso codigo={codigo} clave={g.clave} importe={d.reembolsoDetalle.importe} /> : null}
+          <p className="sub">El reembolso es un paso del mismo dinero, no un gasto nuevo: el gasto ya contó al pagarse. Se paga una sola vez, por lo pagado.</p>
         </section>
       ) : null}
       <section className="tarjeta" aria-labelledby="t-versiones" data-testid="versiones-gasto">
@@ -220,6 +282,20 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
               {d.sinComprobante ? (
                 <tr><td data-etiqueta="Fecha y hora">{fechaHora.format(d.sinComprobante.en)}</td>
                   <td data-etiqueta="Qué pasó">Sin comprobante · «{d.sinComprobante.motivo}»</td><td data-etiqueta="Cuenta">{d.sinComprobante.registradoPor}</td></tr>
+              ) : null}
+              {d.reembolsoDetalle?.rondas.map((x, i) => (
+                <tr key={`r${i}`}><td data-etiqueta="Fecha y hora">{fechaHora.format(x.en)}</td>
+                  <td data-etiqueta="Qué pasó">{x.tipo === "decision" ? `Reembolso ${x.decision === "autorizado" ? "autorizado" : "rechazado"}${x.sinComprobante ? " sin comprobante" : ""}` : "Reembolso presentado de nuevo"}{x.motivo ? ` · «${x.motivo}»` : ""}</td>
+                  <td data-etiqueta="Cuenta">{x.por}</td></tr>
+              ))}
+              {d.reembolsoDetalle?.pago ? (
+                <tr><td data-etiqueta="Fecha y hora">{fechaHora.format(d.reembolsoDetalle.pago.en)}</td>
+                  <td data-etiqueta="Qué pasó">Reembolso pagado · {NOMBRE_ORIGEN[d.reembolsoDetalle.pago.origen]} · {pesos.format(Number(d.reembolsoDetalle.pago.importe))} · a {d.reembolsoDetalle.beneficiario}</td>
+                  <td data-etiqueta="Cuenta">{d.reembolsoDetalle.pago.pagadoPor}</td></tr>
+              ) : null}
+              {d.reembolsoDetalle?.recibidoEn ? (
+                <tr><td data-etiqueta="Fecha y hora">{fechaHora.format(d.reembolsoDetalle.recibidoEn)}</td>
+                  <td data-etiqueta="Qué pasó">Confirmó que recibió el reembolso</td><td data-etiqueta="Cuenta">{d.reembolsoDetalle.beneficiario}</td></tr>
               ) : null}
               {d.anticipo?.cambios.map((c, i) => (
                 <tr key={`k${i}`}><td data-etiqueta="Fecha y hora">{fechaHora.format(c.en)}</td>

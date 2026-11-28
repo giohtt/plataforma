@@ -2,10 +2,12 @@ import type postgres from "postgres";
 import { leerImporte } from "@/lib/datos-turno";
 import type { Entorno } from "@/lib/entorno";
 import { esIdentificadorValido } from "@/lib/permisos";
-import { NOMBRE_ORIGEN, type Comprobacion, type EstadoGasto, type Impedimento, type LugarAnticipo, type OrigenPago } from "@/lib/datos-gasto";
+import {
+  NOMBRE_ORIGEN, type Comprobacion, type EstadoGasto, type EstadoReembolso, type Impedimento, type LugarAnticipo, type OrigenPago, type OrigenReembolso,
+} from "@/lib/datos-gasto";
 
-export { NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, NOMBRE_ORIGEN, TEXTO_IMPEDIMENTO } from "@/lib/datos-gasto";
-export type { Comprobacion, EstadoGasto, Impedimento, LugarAnticipo, OrigenPago } from "@/lib/datos-gasto";
+export { NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, NOMBRE_ORIGEN, NOMBRE_REEMBOLSO, TEXTO_IMPEDIMENTO } from "@/lib/datos-gasto";
+export type { Comprobacion, EstadoGasto, EstadoReembolso, Impedimento, LugarAnticipo, OrigenPago, OrigenReembolso } from "@/lib/datos-gasto";
 
 /**
  * Solicitudes de gasto (bloque 6, PR 3; acordado el 27 nov 2026; solo datos ficticios).
@@ -35,7 +37,9 @@ export type ErrorGasto =
   | "decision" | "ya_decidido" | "propio" | "de_direccion" | "sin_facultad" | "limite" | "diario"
   | "no_autorizado" | "ya_pagado" | "origen" | "excede" | "fecha" | "cuenta" | "referencia" | "a_quien" | "autorizo"
   | "sin_turno" | "no_responsable" | "entrega_en_curso" | "comprobante" | "folio" | "no_excede"
-  | "con_anticipo" | "lugar" | "recibe" | "no_recibe" | "anticipo_estado" | "cambio" | "devuelve" | "excedente_anticipo";
+  | "con_anticipo" | "lugar" | "recibe" | "no_recibe" | "anticipo_estado" | "cambio" | "devuelve" | "excedente_anticipo"
+  | "sin_reembolso" | "reembolso_decidido" | "no_direccion" | "reembolso_no_autorizado" | "ya_reembolsado" | "propio_reembolso"
+  | "motivo_sin_comprobante" | "no_rechazado" | "nota";
 
 
 
@@ -54,6 +58,8 @@ export type GastoResumen = {
   impedimento: Impedimento | null;
   /** Pago registrado (null si no se ha pagado) y su comprobación. */
   origenPago: OrigenPago | null; importePagado: string | null; comprobacion: Comprobacion | null;
+  /** Solo si se pagó con dinero personal. */
+  reembolso: EstadoReembolso | null;
 };
 
 const CODIGO = /^[A-Z0-9]{2,5}$/;
@@ -86,9 +92,19 @@ const RESUMEN = (db: Sql | Tx, usuarioId: string) => db`
          case when pg.id is null then null
               when exists (select 1 from comprobante_gasto c where c.gasto_id = g.id) then 'comprobado'
               when exists (select 1 from sin_comprobante_gasto c where c.gasto_id = g.id) then 'sin_comprobante'
-              else 'por_comprobar' end as comprobacion
+              else 'por_comprobar' end as comprobacion,
+         case when pg.origen is distinct from 'dinero_personal' then null
+              when dr.pago_id is null then 'por_decidir'
+              when dr.decision = 'rechazado' and exists (select 1 from reenvio_reembolso rv where rv.pago_id = pg.id and rv.ronda = dr.ronda + 1)
+                then 'presentado_de_nuevo'
+              when dr.decision = 'rechazado' then 'rechazado'
+              when rg.id is null then 'por_pagar'
+              when not exists (select 1 from reembolso_recibido rr where rr.reembolso_id = rg.id) then 'pagado'
+              else 'recibido' end as reembolso
   from gasto g
   left join pago_gasto pg on pg.gasto_id = g.id
+  left join lateral (select * from decision_reembolso x where x.pago_id = pg.id order by x.ronda desc limit 1) dr on true
+  left join reembolso_gasto rg on rg.pago_id = pg.id
   join lateral (select * from gasto_version x where x.gasto_id = g.id order by x.version desc limit 1) v on true
   left join decision_gasto d on d.gasto_id = g.id and d.version = v.version
   left join usuario du on du.id = d.por
@@ -109,6 +125,10 @@ const VE_PARA_PAGAR = (db: Sql | Tx, usuarioId: string) => db`(
    and not exists (select 1 from pago_gasto pp where pp.gasto_id = g.id))
   or exists (select 1 from pago_gasto pp where pp.gasto_id = g.id and pp.registrado_por = ${usuarioId})
   or exists (select 1 from anticipo_gasto aa where aa.gasto_id = g.id and ${usuarioId} in (aa.recibe, aa.entregado_por))
+  or exists (select 1 from pago_gasto pp join reembolso_gasto rr on rr.pago_id = pp.id where pp.gasto_id = g.id and rr.pagado_por = ${usuarioId})
+  or (tiene_permiso(${usuarioId}, 'gasto.pagar', g.sucursal_paga_id)
+      and exists (select 1 from pago_gasto pp join decision_reembolso dd on dd.pago_id = pp.id
+                  where pp.gasto_id = g.id and dd.decision = 'autorizado' and not exists (select 1 from reembolso_gasto rr where rr.pago_id = pp.id)))
   or (tiene_permiso(${usuarioId}, 'gasto.pagar', g.sucursal_paga_id)
       and exists (select 1 from anticipo_gasto aa join anticipo_comprobado kk on kk.anticipo_id = aa.id
                   where aa.gasto_id = g.id and kk.cambio > (select coalesce(sum(cc.importe), 0) from anticipo_cambio cc where cc.anticipo_id = aa.id))))`;
@@ -199,7 +219,29 @@ export type DetalleGasto = {
   puedeRecibirCambio: boolean;
   /** Lo realmente pagado de toda la compra (original y sus partes), una vez cada pago. */
   pagosCompra: { clave: string; origen: OrigenPago; importe: string }[];
+  /** Reembolso de lo pagado con dinero personal (PR 7). */
+  reembolsoDetalle: ReembolsoDetalle | null;
+  puedeDecidirReembolso: boolean;
+  /** Orígenes con los que esta persona puede pagar el reembolso ahora (vacío si no puede). */
+  origenesReembolso: OrigenReembolso[];
+  puedeConfirmarReembolso: boolean;
+  puedePresentarReembolso: boolean;
   totalPagadoCompra: string;
+};
+
+export type ReembolsoDetalle = {
+  estado: EstadoReembolso; importe: string; beneficiario: string;
+  /** Última decisión (la vigente). */
+  decision: { decision: "autorizado" | "rechazado"; por: string; motivo: string | null; en: Date; ronda: number; sinComprobante: boolean } | null;
+  /** Todas las rondas: decisiones y presentaciones de nuevo, en orden. Nada se borra. */
+  rondas: { tipo: "decision" | "reenvio"; ronda: number; decision: "autorizado" | "rechazado" | null; por: string; motivo: string | null; sinComprobante: boolean; en: Date }[];
+  /** Lo que Dirección revisa al decidir. */
+  revision: {
+    clave: string; concepto: string; compraDe: string | null; autorizadoPor: string | null; autorizadoImporte: string | null; autorizadoEn: Date | null;
+    pagadoEl: string; deAnticipo: string | null; comprobantes: { tipo: string; folio: string | null }[]; sinComprobanteMotivo: string | null;
+  };
+  pago: { origen: OrigenReembolso; importe: string; pagadoPor: string; cuenta: string | null; referencia: string | null; en: Date } | null;
+  recibidoEn: Date | null;
 };
 
 export type Anticipo = {
@@ -326,6 +368,8 @@ export async function detalleGasto(sql: Sql, usuarioId: string, codigo: string, 
   const pagosCompra = await sql<{ clave: string; origen: OrigenPago; importe: string }[]>`
     select x.clave, p.origen, p.importe::text as importe from gasto x join pago_gasto p on p.gasto_id = x.id
     where coalesce(x.compra_de, x.id) = (select coalesce(compra_de, id) from gasto where id = ${g.id}) order by x.numero`;
+  const reembolsoDetalle = pago?.origen === "dinero_personal" ? await detalleReembolso(sql, g.id, g.reembolso!) : null;
+  const reembolsoAcciones = reembolsoDetalle ? await accionesReembolso(sql, usuarioId, g.id) : null;
   const totalPagadoCompra = (pagosCompra.reduce((n, p) => n + Math.round(Number(p.importe) * 100), 0) / 100).toFixed(2);
   const [{ comprueba }] = await sql<{ comprueba: boolean }[]>`
     select exists (select 1 from pago_gasto p where p.gasto_id = ${g.id} and (p.registrado_por = ${usuarioId} or ${g.propia}))
@@ -345,6 +389,8 @@ export async function detalleGasto(sql: Sql, usuarioId: string, codigo: string, 
     puedeComprobarAnticipo: Boolean(anticipo && anticipo.recibidoEn && !anticipo.comprobado && anticipo.recibeId === usuarioId),
     puedeRecibirCambio: Boolean(lugarCambio),
     pagosCompra: [...pagosCompra], totalPagadoCompra,
+    reembolsoDetalle, puedeDecidirReembolso: reembolsoAcciones?.decidir ?? false, origenesReembolso: reembolsoAcciones?.origenes ?? [],
+    puedeConfirmarReembolso: reembolsoAcciones?.confirmar ?? false, puedePresentarReembolso: reembolsoAcciones?.presentar ?? false,
   };
 }
 
@@ -464,7 +510,7 @@ export async function decidirGasto(
   }
 }
 
-export type VistaBandeja = "por_autorizar" | "tuyos" | "autorizados" | "rechazados" | "todos";
+export type VistaBandeja = "por_autorizar" | "tuyos" | "autorizados" | "rechazados" | "reembolsos" | "todos";
 export type Bandeja = {
   vista: VistaBandeja;
   cuentas: Record<VistaBandeja, number>;
@@ -480,7 +526,7 @@ export async function bandejaGastos(sql: Sql, usuarioId: string, vista: string):
   const [{ alguna }] = await sql<{ alguna: boolean }[]>`
     select exists (select 1 from sucursal s where tiene_permiso(${usuarioId}, 'gasto.consultar', s.id)) as alguna`;
   if (!alguna) return null;
-  const v: VistaBandeja = (["por_autorizar", "tuyos", "autorizados", "rechazados", "todos"] as const).find((x) => x === vista) ?? "tuyos";
+  const v: VistaBandeja = (["por_autorizar", "tuyos", "autorizados", "rechazados", "reembolsos", "todos"] as const).find((x) => x === vista) ?? "tuyos";
   const todos = await sql<(GastoResumen & { codigo: string })[]>`
     select r.*, s.codigo from (${RESUMEN(sql, usuarioId)}
       where tiene_permiso(${usuarioId}, 'gasto.consultar', g.sucursal_id) or tiene_permiso(${usuarioId}, 'gasto.consultar', g.sucursal_paga_id)) r
@@ -491,6 +537,7 @@ export async function bandejaGastos(sql: Sql, usuarioId: string, vista: string):
     tuyos: (g) => g.estado === "por_autorizar" && g.impedimento === null,
     autorizados: (g) => g.estado === "autorizado",
     rechazados: (g) => g.estado === "rechazado",
+    reembolsos: (g) => g.reembolso === "por_decidir" || g.reembolso === "presentado_de_nuevo",
     todos: () => true,
   };
   const cuentas = Object.fromEntries(Object.entries(filtro).map(([k, f]) => [k, todos.filter(f).length])) as Record<VistaBandeja, number>;
@@ -928,4 +975,241 @@ export async function anticiposPendientes(sql: Sql, usuarioId: string, sucursalI
     left join anticipo_comprobado k on k.anticipo_id = a.id
     where g.sucursal_paga_id = ${sucursalId}`;
   return { aTuCargo: r.a_tu_cargo, cambioPorRecibir: r.cambio };
+}
+
+/*
+ * Reembolsos (bloque 6, PR 7; acordado el 27 nov 2026 en la maqueta; solo datos ficticios). La base lo respalda (0053).
+ * - Lo pagado con dinero personal queda pendiente de reembolso. Registrar ese pago no autoriza el reembolso: lo decide
+ *   Dirección desde su cuenta (perfil de Dirección en la sucursal que paga y facultad de gasto vigente).
+ * - Autorizado, se paga una sola vez y por lo pagado: de la bolsa o el cajón (la responsable vigente, una salida
+ *   «Reembolso» que baja el esperado) o por transferencia (Administración, Gestión administrativa o Dirección).
+ *   Quien lo recibe no se lo paga a sí misma, y lo confirma desde su cuenta.
+ * - No es un gasto nuevo: el gasto ya contó al pagarse con dinero personal.
+ */
+async function detalleReembolso(db: Sql | Tx, gastoId: string, estado: EstadoReembolso): Promise<ReembolsoDetalle> {
+  const [r] = await db<{ pago: string; importe: string; beneficiario: string; pagado_el: string; origen: OrigenReembolso | null; rimporte: string | null;
+                         rpor: string | null; cuenta: string | null; referencia: string | null; ren: Date | null; recibido: Date | null;
+                         clave: string; concepto: string; compra_de: string | null; apor: string | null; aimporte: string | null; aen: Date | null;
+                         de_anticipo: string | null; sin_motivo: string | null }[]>`
+    select p.id as pago, p.importe::text as importe, b.nombre as beneficiario, to_char(p.pagado_el, 'YYYY-MM-DD') as pagado_el,
+           r.origen, r.importe::text as rimporte, ru.nombre as rpor, r.cuenta, r.referencia, r.en as ren, rr.en as recibido,
+           g.clave, v.concepto, o.clave as compra_de, au.nombre as apor, dg.importe::text as aimporte, dg.en as aen,
+           (select x.clave from anticipo_comprobado k join anticipo_gasto a on a.id = k.anticipo_id join gasto x on x.id = a.gasto_id
+            where k.excedente_gasto_id = g.id) as de_anticipo,
+           (select s.motivo from sin_comprobante_gasto s where s.gasto_id = g.id) as sin_motivo
+    from pago_gasto p join usuario b on b.id = p.pagado_por join gasto g on g.id = p.gasto_id
+    join gasto_version v on v.gasto_id = g.id and v.version = p.version
+    left join gasto o on o.id = g.compra_de
+    left join decision_gasto dg on dg.gasto_id = g.id and dg.version = p.version left join usuario au on au.id = dg.por
+    left join reembolso_gasto r on r.pago_id = p.id left join usuario ru on ru.id = r.pagado_por
+    left join reembolso_recibido rr on rr.reembolso_id = r.id
+    where p.gasto_id = ${gastoId}`;
+  const rondas = await db<ReembolsoDetalle["rondas"]>`
+    select 'decision' as tipo, d.ronda, d.decision, u.nombre as por, d.motivo, d.sin_comprobante as "sinComprobante", d.en
+    from decision_reembolso d join usuario u on u.id = d.por where d.pago_id = ${r.pago}
+    union all
+    select 'reenvio', x.ronda, null, u.nombre, x.nota, false, x.en from reenvio_reembolso x join usuario u on u.id = x.por where x.pago_id = ${r.pago}
+    order by en`;
+  const ultima = [...rondas].reverse().find((x) => x.tipo === "decision");
+  const comprobantes = await db<{ tipo: string; folio: string | null }[]>`select tipo, folio from comprobante_gasto where gasto_id = ${gastoId} order by en`;
+  return {
+    estado, importe: r.importe, beneficiario: r.beneficiario,
+    decision: ultima ? { decision: ultima.decision!, por: ultima.por, motivo: ultima.motivo, en: ultima.en, ronda: ultima.ronda, sinComprobante: ultima.sinComprobante } : null,
+    rondas: [...rondas],
+    revision: {
+      clave: r.clave, concepto: r.concepto, compraDe: r.compra_de, autorizadoPor: r.apor, autorizadoImporte: r.aimporte, autorizadoEn: r.aen,
+      pagadoEl: r.pagado_el, deAnticipo: r.de_anticipo, comprobantes: [...comprobantes], sinComprobanteMotivo: r.sin_motivo,
+    },
+    pago: r.origen ? { origen: r.origen, importe: r.rimporte!, pagadoPor: r.rpor!, cuenta: r.cuenta, referencia: r.referencia, en: r.ren! } : null,
+    recibidoEn: r.recibido,
+  };
+}
+
+type EstadoRonda = { pago: string; ronda: number; pendiente: boolean; autorizada: boolean; rechazada: boolean; reenviada: boolean };
+/** La ronda vigente del reembolso de un pago: si hay una decisión pendiente (la primera, o después de presentarlo de nuevo). */
+async function rondaReembolso(db: Sql | Tx, pagoId: string): Promise<EstadoRonda> {
+  const [u] = await db<{ ronda: number | null; decision: string | null }[]>`
+    select ronda, decision from decision_reembolso where pago_id = ${pagoId} order by ronda desc limit 1`;
+  const ronda = (u?.ronda ?? 0) + 1;
+  const reenviada = Boolean(u?.ronda) && (await db`select 1 from reenvio_reembolso where pago_id = ${pagoId} and ronda = ${ronda}`).length > 0;
+  return {
+    pago: pagoId, ronda, pendiente: !u?.ronda || (u.decision === "rechazado" && reenviada),
+    autorizada: u?.decision === "autorizado", rechazada: u?.decision === "rechazado" && !reenviada, reenviada,
+  };
+}
+
+/** Qué puede hacer esta persona con el reembolso de ese gasto ahora mismo (servidor; la base lo vuelve a comprobar). */
+async function accionesReembolso(db: Sql | Tx, usuarioId: string, gastoId: string): Promise<{ decidir: boolean; origenes: OrigenReembolso[]; confirmar: boolean; presentar: boolean }> {
+  const [o] = await db<{ pago: string; personal: boolean; pagado: boolean; recibido: boolean; beneficiario: boolean; direccion: boolean; puede: boolean; admin: boolean; paga: string }[]>`
+    select p.id as pago, p.origen = 'dinero_personal' as personal,
+           r.id is not null as pagado, exists (select 1 from reembolso_recibido x where x.reembolso_id = r.id) as recibido,
+           p.pagado_por = ${usuarioId} as beneficiario,
+           exists (select 1 from perfiles_en_sucursal(${usuarioId}, g.sucursal_paga_id) x where x = 'direccion')
+             and exists (select 1 from facultad_gasto(${usuarioId}, g.sucursal_id)) and exists (select 1 from facultad_gasto(${usuarioId}, g.sucursal_paga_id)) as direccion,
+           tiene_permiso(${usuarioId}, 'gasto.pagar', g.sucursal_paga_id) as puede,
+           exists (select 1 from perfiles_en_sucursal(${usuarioId}, g.sucursal_paga_id) x where x in ('administracion', 'gestion_administrativa', 'direccion')) as admin,
+           g.sucursal_paga_id as paga
+    from gasto g join pago_gasto p on p.gasto_id = g.id left join reembolso_gasto r on r.pago_id = p.id
+    where g.id = ${gastoId}`;
+  if (!o?.personal) return { decidir: false, origenes: [], confirmar: false, presentar: false };
+  const e = await rondaReembolso(db, o.pago);
+  const origenes: OrigenReembolso[] = [];
+  if (e.autorizada && !o.pagado && !o.beneficiario && o.puede) {
+    for (const l of LUGARES) if (await responsableVigente(db, usuarioId, o.paga, l)) origenes.push(l);
+    if (o.admin) origenes.push("transferencia");
+  }
+  return { decidir: e.pendiente && o.direccion, origenes, confirmar: o.pagado && !o.recibido && o.beneficiario, presentar: e.rechazada && o.beneficiario };
+}
+
+async function pagoPersonal(tx: Tx, usuarioId: string, codigo: string, clave: string) {
+  const g = await gastoParaAnticipo(tx, usuarioId, codigo, clave);
+  if (!g) return null;
+  const [p] = await tx<{ id: string; origen: OrigenPago; importe: string; pagado_por: string }[]>`
+    select id, origen, importe::text as importe, pagado_por from pago_gasto where gasto_id = ${g.id} for update`;
+  return { g, p: p ?? null };
+}
+
+/**
+ * Dirección autoriza o rechaza (con motivo) la ronda pendiente del reembolso. Si falta comprobante, queda señalado y
+ * autorizar exige motivo expreso. No consume el acumulado diario: ese gasto ya se autorizó una vez.
+ */
+export async function decidirReembolso(
+  sql: Sql, usuarioId: string, codigo: string, d: { clave: string; decision: string; motivo: string }, { entorno }: { entorno: Entorno },
+): Promise<{ ok: true } | { ok: false; error: ErrorGasto }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!CODIGO.test(codigo) || !CLAVE.test(d.clave)) return { ok: false, error: "no_encontrada" };
+  if (d.decision !== "autorizado" && d.decision !== "rechazado") return { ok: false, error: "decision" };
+  const motivo = texto(d.motivo);
+  if ((d.decision === "rechazado" || motivo) && (motivo.length < 5 || motivo.length > 300)) return { ok: false, error: "motivo" };
+  try {
+    return await sql.begin(async (tx) => {
+      const x = await pagoPersonal(tx, usuarioId, codigo, d.clave);
+      if (!x) return { ok: false as const, error: "no_encontrada" as const };
+      if (!x.p || x.p.origen !== "dinero_personal") return { ok: false as const, error: "sin_reembolso" as const };
+      const e = await rondaReembolso(tx, x.p.id);
+      if (!e.pendiente) return { ok: false as const, error: "reembolso_decidido" as const };
+      const a = await accionesReembolso(tx, usuarioId, x.g.id);
+      if (!a.decidir) return { ok: false as const, error: "no_direccion" as const };
+      const sinComprobante = !(await tx`select 1 from comprobante_gasto where gasto_id = ${x.g.id}`).length;
+      if (d.decision === "autorizado" && sinComprobante && !motivo) return { ok: false as const, error: "motivo_sin_comprobante" as const };
+      await tx`insert into decision_reembolso (pago_id, ronda, decision, por, motivo, sin_comprobante)
+               values (${x.p.id}, ${e.ronda}, ${d.decision}, ${usuarioId}, ${motivo || null}, ${sinComprobante})`;
+      return { ok: true as const };
+    });
+  } catch (e) {
+    if (e instanceof Error && "code" in e && e.code === "23505") return { ok: false, error: "reembolso_decidido" };
+    throw e;
+  }
+}
+
+/**
+ * Después de un rechazo, quien puso el dinero lo presenta de nuevo con lo que corrigió (por ejemplo, el comprobante que
+ * faltaba). El rechazo anterior se conserva; queda un solo pendiente.
+ */
+export async function presentarReembolso(
+  sql: Sql, usuarioId: string, codigo: string, d: { clave: string; nota: string }, { entorno }: { entorno: Entorno },
+): Promise<{ ok: true } | { ok: false; error: ErrorGasto }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!CODIGO.test(codigo) || !CLAVE.test(d.clave)) return { ok: false, error: "no_encontrada" };
+  const nota = texto(d.nota);
+  if (nota.length < 5 || nota.length > 300) return { ok: false, error: "nota" };
+  try {
+    return await sql.begin(async (tx) => {
+      const x = await pagoPersonal(tx, usuarioId, codigo, d.clave);
+      if (!x) return { ok: false as const, error: "no_encontrada" as const };
+      if (!x.p || x.p.origen !== "dinero_personal") return { ok: false as const, error: "sin_reembolso" as const };
+      if (x.p.pagado_por !== usuarioId) return { ok: false as const, error: "no_recibe" as const };
+      const e = await rondaReembolso(tx, x.p.id);
+      if (!e.rechazada) return { ok: false as const, error: "no_rechazado" as const };
+      await tx`insert into reenvio_reembolso (pago_id, ronda, nota, por) values (${x.p.id}, ${e.ronda}, ${nota}, ${usuarioId})`;
+      return { ok: true as const };
+    });
+  } catch (e) {
+    if (e instanceof Error && "code" in e && e.code === "23505") return { ok: false, error: "no_rechazado" };
+    throw e;
+  }
+}
+
+/** Paga el reembolso autorizado, completo y una sola vez (aunque falte confirmar). En efectivo, una salida del turno. */
+export async function pagarReembolso(
+  sql: Sql, usuarioId: string, codigo: string, d: { clave: string; origen: string; cuenta: string; referencia: string }, { entorno }: { entorno: Entorno },
+): Promise<{ ok: true } | { ok: false; error: ErrorGasto }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!CODIGO.test(codigo) || !CLAVE.test(d.clave)) return { ok: false, error: "no_encontrada" };
+  const origen = (["bolsa_visitas", "cajon_mensualidades", "transferencia"] as const).find((o) => o === d.origen);
+  if (!origen) return { ok: false, error: "origen" };
+  const cuenta = texto(d.cuenta);
+  const referencia = texto(d.referencia);
+  if (origen === "transferencia") {
+    if (cuenta.length < 2 || cuenta.length > 40 || /\d{4}/.test(cuenta)) return { ok: false, error: "cuenta" };
+    if (referencia.length < 3 || referencia.length > 60) return { ok: false, error: "referencia" };
+  }
+  try {
+    return await sql.begin(async (tx) => {
+      const x = await pagoPersonal(tx, usuarioId, codigo, d.clave);
+      if (!x) return { ok: false as const, error: "no_encontrada" as const };
+      if (!x.p || x.p.origen !== "dinero_personal") return { ok: false as const, error: "sin_reembolso" as const };
+      if ((await tx`select 1 from reembolso_gasto where pago_id = ${x.p.id}`).length) return { ok: false as const, error: "ya_reembolsado" as const };
+      if (!(await rondaReembolso(tx, x.p.id)).autorizada) return { ok: false as const, error: "reembolso_no_autorizado" as const };
+      if (x.p.pagado_por === usuarioId) return { ok: false as const, error: "propio_reembolso" as const };
+      const a = await accionesReembolso(tx, usuarioId, x.g.id);
+      if (!a.origenes.includes(origen)) {
+        if (origen === "transferencia") return { ok: false as const, error: "origen" as const };
+        const [t] = await tx<{ id: string }[]>`select id from turno where sucursal_id = ${x.g.sucursal_paga_id} and cerrado_en is null`;
+        if (!t) return { ok: false as const, error: "sin_turno" as const };
+        if ((await tx`select 1 from entrega_turno where turno_id = ${t.id} and estado in ('pendiente', 'recuento')`).length) {
+          return { ok: false as const, error: "entrega_en_curso" as const };
+        }
+        return { ok: false as const, error: "no_responsable" as const };
+      }
+      const [r] = await tx<{ id: string }[]>`
+        insert into reembolso_gasto (pago_id, origen, importe, pagado_por, cuenta, referencia)
+        values (${x.p.id}, ${origen}, ${x.p.importe}, ${usuarioId}, ${origen === "transferencia" ? cuenta : null}, ${referencia || null}) returning id`;
+      if (origen !== "transferencia") {
+        const l = await responsableVigente(tx, usuarioId, x.g.sucursal_paga_id, origen);
+        if (!l) return { ok: false as const, error: "no_responsable" as const };
+        await tx`insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, reembolso_id, responsable_id, registrado_por)
+                 values (${l.lugarId}, ${l.turnoId}, 'salida_reembolso_gasto', ${(-Number(x.p.importe)).toFixed(2)}, ${r.id}, ${usuarioId}, ${usuarioId})`;
+      }
+      return { ok: true as const };
+    });
+  } catch (e) {
+    if (e instanceof Error && "code" in e && e.code === "23505") return { ok: false, error: "ya_reembolsado" };
+    throw e;
+  }
+}
+
+/** Solo la cuenta de quien puso el dinero confirma que recibió el reembolso. */
+export async function confirmarReembolso(
+  sql: Sql, usuarioId: string, codigo: string, d: { clave: string }, { entorno }: { entorno: Entorno },
+): Promise<{ ok: true } | { ok: false; error: ErrorGasto }> {
+  if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
+  if (!CODIGO.test(codigo) || !CLAVE.test(d.clave)) return { ok: false, error: "no_encontrada" };
+  return sql.begin(async (tx) => {
+    const x = await pagoPersonal(tx, usuarioId, codigo, d.clave);
+    if (!x) return { ok: false as const, error: "no_encontrada" as const };
+    if (!x.p || x.p.origen !== "dinero_personal") return { ok: false as const, error: "sin_reembolso" as const };
+    const [r] = await tx<{ id: string; recibido: boolean }[]>`
+      select r.id, exists (select 1 from reembolso_recibido x where x.reembolso_id = r.id) as recibido from reembolso_gasto r where r.pago_id = ${x.p.id}`;
+    if (!r) return { ok: false as const, error: "reembolso_no_autorizado" as const };
+    if (x.p.pagado_por !== usuarioId) return { ok: false as const, error: "no_recibe" as const };
+    if (!r.recibido) await tx`insert into reembolso_recibido (reembolso_id, por) values (${r.id}, ${usuarioId})`;
+    return { ok: true as const };
+  });
+}
+
+/** Pendientes de reembolsos de esta persona en la sucursal (para «Requiere tu acción»). */
+export async function reembolsosPendientes(sql: Sql, usuarioId: string, sucursalId: string): Promise<{ porDecidir: number; porPagar: number; porConfirmar: number }> {
+  const filas = await sql<{ id: string }[]>`
+    select g.id from gasto g join pago_gasto p on p.gasto_id = g.id and p.origen = 'dinero_personal'
+    where g.sucursal_paga_id = ${sucursalId}
+      and not exists (select 1 from reembolso_gasto r join reembolso_recibido x on x.reembolso_id = r.id where r.pago_id = p.id)`;
+  let porDecidir = 0, porPagar = 0, porConfirmar = 0;
+  for (const f of filas) {
+    const a = await accionesReembolso(sql, usuarioId, f.id);
+    if (a.decidir) porDecidir++;
+    if (a.origenes.length) porPagar++;
+    if (a.confirmar) porConfirmar++;
+  }
+  return { porDecidir, porPagar, porConfirmar };
 }

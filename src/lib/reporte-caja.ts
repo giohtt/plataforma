@@ -651,6 +651,7 @@ const TIPO_MOVIMIENTO: Record<string, string> = {
   salida_devolucion_cambio: "Devolución de cambio a una persona visitante",
   salida_pago_gasto: "Pago de un gasto autorizado",
   salida_anticipo_gasto: "Anticipo entregado para una compra", entrada_cambio_anticipo: "Cambio devuelto de un anticipo",
+  salida_reembolso_gasto: "Reembolso de un gasto pagado con dinero personal",
   entrada_fondo: "Entrada al fondo de caja", salida_sobre: "Excedente al sobre del cierre",
 };
 const VERIFICACION: Record<string, string> = { correcto: "cerrado y con su folio", falta: "no estaba", abierto: "llegó abierto o con el sello roto", otro_folio: "traía otro folio" };

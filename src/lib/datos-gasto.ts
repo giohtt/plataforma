@@ -14,6 +14,15 @@ export const NOMBRE_ORIGEN: Record<OrigenPago, string> = {
 };
 
 export type LugarAnticipo = "bolsa_visitas" | "cajon_mensualidades";
+
+/** Reembolso de lo pagado con dinero personal (bloque 6, PR 7). */
+export type EstadoReembolso = "por_decidir" | "presentado_de_nuevo" | "rechazado" | "por_pagar" | "pagado" | "recibido";
+export const NOMBRE_REEMBOLSO: Record<EstadoReembolso, string> = {
+  por_decidir: "Reembolso por decidir · Dirección", presentado_de_nuevo: "Reembolso presentado de nuevo · por decidir · Dirección",
+  rechazado: "Reembolso rechazado · puede presentarse de nuevo", por_pagar: "Reembolso autorizado · por pagar",
+  pagado: "Reembolso pagado · falta que lo confirme quien lo recibe", recibido: "Reembolso recibido",
+};
+export type OrigenReembolso = "bolsa_visitas" | "cajon_mensualidades" | "transferencia";
 export type Comprobacion = "por_comprobar" | "comprobado" | "sin_comprobante";
 export const NOMBRE_COMPROBACION: Record<Comprobacion, string> = {
   por_comprobar: "Por comprobar", comprobado: "Comprobado", sin_comprobante: "Sin comprobante · por revisar · Dirección",
