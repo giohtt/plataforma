@@ -262,6 +262,50 @@ describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () =
     expect(await previa(t)).toBe("sin_autorizacion_previa");
   });
 
+  it("hora del pago declarada (opcional): con hora se comparan fecha y hora; sin hora y el mismo día, no comprobada", async () => {
+    const r = await solicitarGasto(sql, adm, codigo, { concepto: "Servicio ficticio", categoria: "prueba_otros", importe: "90",
+      proveedor: "", nota: "", pagaId: "", compraDe: "", envio: randomUUID() }, PRUEBAS);
+    if (!r.ok) throw new Error(r.error);
+    expect(await decidirGasto(sql, enc, codigo, { clave: r.clave, version: 1, decision: "autorizado", motivo: "" }, PRUEBAS)).toEqual({ ok: true });
+    const pago = (x: Record<string, string>) => registrarPago(sql, adm, codigo, { clave: r.clave, version: 1, origen: "transferencia", importe: "90",
+      aQuien: "", pagadoEl: hoyMx(), cuenta: "Cuenta ficticia", referencia: "TRF-77", tipo: "ticket", folio: "", motivoSin: "", ...x }, PRUEBAS);
+    // Validaciones: formato, futura, y solo en transferencia, tarjeta o dinero personal.
+    expect(await pago({ hora: "25:00" })).toEqual({ ok: false, error: "hora" });
+    expect(await pago({ hora: "23:59", pagadoEl: manana() })).toEqual({ ok: false, error: "fecha" });
+    expect(await pago({ hora: "10:00", origen: "bolsa_visitas" })).toEqual({ ok: false, error: "hora" });
+    const ahora = new Intl.DateTimeFormat("en-GB", { timeZone: "America/Mexico_City", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+    if (ahora < "23:58") {
+      const [h, m] = ahora.split(":").map(Number);
+      const futura = `${String(m >= 58 ? h + 1 : h).padStart(2, "0")}:${String((m + 2) % 60).padStart(2, "0")}`;
+      expect(await pago({ hora: futura })).toEqual({ ok: false, error: "hora" });
+    }
+    // Sin hora, el mismo día de la autorización: no comprobada.
+    expect(await pago({ hora: "" })).toEqual({ ok: true });
+    expect((await detalleGasto(sql, dir, codigo, r.clave))?.gasto.autorizacionPrevia).toBe("no_comprobada");
+    // Con hora declarada (se fija la autorización a las 12:00 de ese día en la base de prueba): antes, sin autorización
+    // previa; después, comprobada. La hora declarada y el registro automático se guardan aparte.
+    const ajustar = (hora: string) => sql.begin(async (tx) => {
+      await tx`set local session_replication_role = replica`;
+      const [{ gid }] = await tx<{ gid: string }[]>`select id as gid from gasto where clave = ${r.clave}`;
+      await tx`update decision_gasto d set en = (p.pagado_el + time '12:00') at time zone 'America/Mexico_City'
+               from pago_gasto p where p.gasto_id = ${gid} and d.gasto_id = ${gid}`;
+      await tx`update pago_gasto set hora_declarada = ${hora}::time where gasto_id = ${gid}`;
+    });
+    await ajustar("11:59");
+    expect((await detalleGasto(sql, dir, codigo, r.clave))?.gasto.autorizacionPrevia).toBe("sin_autorizacion_previa");
+    await ajustar("12:01");
+    const d = await detalleGasto(sql, dir, codigo, r.clave);
+    expect(d?.gasto.autorizacionPrevia).toBe("comprobada");
+    expect(d?.pago).toMatchObject({ horaDeclarada: "12:01", pagadoEl: hoyMx() });
+    expect(d?.pago?.en).toBeInstanceOf(Date);
+    // En un gasto ya pagado también se puede declarar; en efectivo, no.
+    const y = await yaPagado(enc, { origen: "tarjeta", turno: "", pagadoPor: enc, cuenta: "Tarjeta ficticia", referencia: "", hora: "00:00" });
+    expect(y.ok).toBe(true);
+    expect((await detalleGasto(sql, enc, codigo, y.ok ? y.clave : ""))?.pago?.horaDeclarada).toBe("00:00");
+    expect(await yaPagado(enc, { hora: "00:00" })).toEqual({ ok: false, error: "hora" });
+    await expect(sql`update pago_gasto set hora_declarada = '10:00' where gasto_id = (select id from gasto where clave = ${r.clave})`).rejects.toThrow(/no se edita/);
+  });
+
   it("la base lo respalda: sin registro de ya pagado no hay pago posterior; sin decisión; efectivo cerrado sin salida", async () => {
     const r = await yaPagado(adm, { importe: "40" });
     const clave = r.ok ? r.clave : "";

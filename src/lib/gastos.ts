@@ -40,7 +40,7 @@ export type ErrorGasto =
   | "con_anticipo" | "lugar" | "recibe" | "no_recibe" | "anticipo_estado" | "cambio" | "devuelve" | "excedente_anticipo"
   | "sin_reembolso" | "reembolso_decidido" | "no_direccion" | "reembolso_no_autorizado" | "ya_reembolsado" | "propio_reembolso"
   | "motivo_sin_comprobante" | "no_rechazado" | "nota"
-  | "pagado_por" | "turno" | "turno_abierto" | "motivo_ya_pagado";
+  | "pagado_por" | "turno" | "turno_abierto" | "motivo_ya_pagado" | "hora";
 
 
 
@@ -109,6 +109,8 @@ const RESUMEN = (db: Sql | Tx, usuarioId: string) => db`
               -- Anticipo: se entregó (y luego se pagó al proveedor) después de autorizar.
               when pg.origen = 'anticipo' then case when (select a.en from anticipo_gasto a where a.gasto_id = g.id) > d.en
                                                     then 'comprobada' else 'no_comprobada' end
+              -- Transferencia, tarjeta o dinero personal con hora declarada: se comparan fecha y hora.
+              when pg.hora_declarada is not null then case when momento_declarado_pago(pg.id) > d.en then 'comprobada' else 'sin_autorizacion_previa' end
               when pg.pagado_el > dia_en_sucursal(g.sucursal_paga_id, d.en) then 'comprobada'
               when pg.pagado_el < dia_en_sucursal(g.sucursal_paga_id, d.en) then 'sin_autorizacion_previa'
               else 'no_comprobada' end as "autorizacionPrevia", du.nombre as "decididoPor", d.en as "decididoEn", d.motivo as "motivoDecision",
@@ -231,6 +233,8 @@ export type DetalleGasto = {
   pago: { origen: OrigenPago; importe: string; pagadoEl: string; pagadoPor: string; registradoPor: string; en: Date;
           aQuien: string | null; cuenta: string | null; referencia: string | null;
           /** Registrado después de pagarse; si fue en efectivo, el turno cerrado del que salió (sin salida en el turno actual). */
+          /** Hora del pago declarada por quien registra (opcional; transferencia, tarjeta o dinero personal). `en` es el registro automático. */
+          horaDeclarada: string | null;
           posterior: boolean; turnoCerrado: { abierto: Date; cerrado: Date } | null;
           /** Si salió de caja: la responsable del lugar en el movimiento (en un gasto ya pagado, la vigente al registrarlo). */
           salidaResponsable: string | null } | null;
@@ -367,6 +371,7 @@ export async function detalleGasto(sql: Sql, usuarioId: string, codigo: string, 
   const [pago] = await sql<NonNullable<DetalleGasto["pago"]>[]>`
     select p.origen, p.importe::text as importe, to_char(p.pagado_el, 'YYYY-MM-DD') as "pagadoEl", a.nombre as "pagadoPor",
            r.nombre as "registradoPor", p.en, p.a_quien as "aQuien", p.cuenta, p.referencia, p.posterior,
+           to_char(p.hora_declarada, 'HH24:MI') as "horaDeclarada",
            case when t.id is null then null else json_build_object('abierto', t.abierto_en, 'cerrado', t.cerrado_en) end as "turnoCerrado",
            mr.nombre as "salidaResponsable"
     from pago_gasto p join usuario a on a.id = p.pagado_por join usuario r on r.id = p.registrado_por
@@ -601,6 +606,25 @@ export async function gastosPorDecidir(sql: Sql, usuarioId: string, sucursalId: 
 
 
 
+/**
+ * Hora del pago declarada (opcional) en transferencia, tarjeta y dinero personal: «HH:MM». null si no se declaró;
+ * false si no es válida o no aplica a ese origen.
+ */
+function leerHora(origen: string, hora = ""): string | null | false {
+  const h = hora.trim();
+  if (!h) return null;
+  if (!["transferencia", "tarjeta", "dinero_personal"].includes(origen)) return false;
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(h) ? h : false;
+}
+
+/** La fecha y hora declaradas quedarían en el futuro (en la zona de la sucursal que paga). */
+async function horaFutura(tx: Tx, sucursalId: string, fecha: string, hora: string | null): Promise<boolean> {
+  if (!hora) return false;
+  const [x] = await tx<{ futura: boolean }[]>`
+    select ((${fecha}::date + ${hora}::time) at time zone s.zona_horaria) > now() as futura from sucursal s where s.id = ${sucursalId}`;
+  return x.futura;
+}
+
 const TIPOS_COMPROBANTE = ["ticket", "nota", "factura"] as const;
 export type DatosComprobante = { tipo: string; folio: string; motivoSin: string };
 
@@ -630,7 +654,7 @@ async function guardarComprobante(tx: Tx, usuarioId: string, gastoId: string, v:
  */
 export async function registrarPago(
   sql: Sql, usuarioId: string, codigo: string,
-  d: { clave: string; version: number; origen: string; importe: string; aQuien: string; pagadoEl: string; cuenta: string; referencia: string } & DatosComprobante,
+  d: { clave: string; version: number; origen: string; importe: string; aQuien: string; pagadoEl: string; cuenta: string; referencia: string; hora?: string } & DatosComprobante,
   { entorno }: { entorno: Entorno },
 ): Promise<{ ok: true } | { ok: false; error: ErrorGasto }> {
   if (entorno === "produccion") return { ok: false, error: "bloqueado_produccion" };
@@ -649,6 +673,8 @@ export async function registrarPago(
     if (referencia.length > 60 || (origen === "transferencia" && referencia.length < 3) || (referencia && referencia.length < 3)) return { ok: false, error: "referencia" };
   }
   if (!efectivo && !/^\d{4}-\d{2}-\d{2}$/.test(d.pagadoEl)) return { ok: false, error: "fecha" };
+  const hora = leerHora(origen, d.hora);
+  if (hora === false) return { ok: false, error: "hora" };
   const c = leerComprobante(d);
   if (!c.ok) return c;
   try {
@@ -697,10 +723,11 @@ export async function registrarPago(
                                        and dia_en_sucursal(${g.sucursal_paga_id}, now()) as ok`;
         if (!f.ok) return { ok: false as const, error: "fecha" as const };
       }
+      if (await horaFutura(tx, g.sucursal_paga_id, pagadoEl, hora)) return { ok: false as const, error: "hora" as const };
       const [p] = await tx<{ id: string }[]>`
-        insert into pago_gasto (gasto_id, version, origen, importe, pagado_el, pagado_por, registrado_por, a_quien, cuenta, referencia)
+        insert into pago_gasto (gasto_id, version, origen, importe, pagado_el, pagado_por, registrado_por, a_quien, cuenta, referencia, hora_declarada)
         values (${g.id}, ${v.version}, ${origen}, ${i.valor}, ${pagadoEl}, ${usuarioId}, ${usuarioId}, ${aQuien || null},
-                ${origen === "transferencia" || origen === "tarjeta" ? cuenta : null}, ${referencia || null})
+                ${origen === "transferencia" || origen === "tarjeta" ? cuenta : null}, ${referencia || null}, ${hora})
         returning id`;
       if (efectivo) {
         const [t] = await tx<{ id: string }[]>`select id from turno where sucursal_id = ${g.sucursal_paga_id} and cerrado_en is null for update`;
@@ -1328,7 +1355,7 @@ export async function registrarGastoPagado(
   sql: Sql, usuarioId: string, codigo: string,
   d: CamposGasto & DatosComprobante & {
     envio: string; pagaId: string; origen: string; pagadoPor: string; pagadoEl: string; turno: string; aQuien: string; cuenta: string;
-    referencia: string; motivoPagado: string;
+    referencia: string; motivoPagado: string; hora?: string;
   },
   { entorno }: { entorno: Entorno },
 ): Promise<{ ok: true; clave: string } | { ok: false; error: ErrorGasto }> {
@@ -1341,6 +1368,8 @@ export async function registrarGastoPagado(
   if (!esIdentificadorValido(d.pagadoPor)) return { ok: false, error: "pagado_por" };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d.pagadoEl)) return { ok: false, error: "fecha" };
   if (efectivo && !esIdentificadorValido(d.turno)) return { ok: false, error: "turno" };
+  const hora = leerHora(origen, d.hora);
+  if (hora === false) return { ok: false, error: "hora" };
   const aQuien = texto(d.aQuien);
   if (aQuien && (aQuien.length < 2 || aQuien.length > 120)) return { ok: false, error: "a_quien" };
   const cuenta = texto(d.cuenta);
@@ -1369,6 +1398,7 @@ export async function registrarGastoPagado(
       if (!op.origenes.includes(origen)) return { ok: false as const, error: efectivo ? "turno" as const : "origen" as const };
       if (!op.personas.some((p) => p.id === d.pagadoPor)) return { ok: false as const, error: "pagado_por" as const };
       if (d.pagadoEl > op.hoy) return { ok: false as const, error: "fecha" as const };
+      if (await horaFutura(tx, paga, d.pagadoEl, hora)) return { ok: false as const, error: "hora" as const };
       let turnoCerrado: string | null = null;
       let salida: { turnoId: string; lugarId: string; responsableId: string } | null = null;
       if (efectivo) {
@@ -1398,9 +1428,9 @@ export async function registrarGastoPagado(
                values (${g.id}, 1, ${v.v.concepto}, ${v.v.categoria}, ${v.v.importe}, ${v.v.proveedor}, ${v.v.nota}, ${usuarioId})`;
       await tx`insert into gasto_ya_pagado (gasto_id, motivo, registrado_por) values (${g.id}, ${motivo}, ${usuarioId})`;
       const [pago] = await tx<{ id: string }[]>`
-        insert into pago_gasto (gasto_id, version, origen, importe, pagado_el, pagado_por, registrado_por, a_quien, cuenta, referencia, posterior, turno_cerrado_id)
+        insert into pago_gasto (gasto_id, version, origen, importe, pagado_el, pagado_por, registrado_por, a_quien, cuenta, referencia, posterior, turno_cerrado_id, hora_declarada)
         values (${g.id}, 1, ${origen}, ${v.v.importe}, ${d.pagadoEl}, ${d.pagadoPor}, ${usuarioId}, ${aQuien || v.v.proveedor},
-                ${origen === "transferencia" || origen === "tarjeta" ? cuenta : null}, ${referencia || null}, true, ${turnoCerrado})
+                ${origen === "transferencia" || origen === "tarjeta" ? cuenta : null}, ${referencia || null}, true, ${turnoCerrado}, ${hora})
         returning id`;
       if (salida) {
         await tx`insert into movimiento_efectivo (lugar_id, turno_id, tipo, importe, pago_gasto_id, responsable_id, registrado_por)

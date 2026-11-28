@@ -66,6 +66,7 @@ const MENSAJES: Record<ErrorGasto, string> = {
   pagado_por: "Elige a la persona que pagó. Si fue en efectivo, debe haber sido responsable de ese lugar en ese turno.",
   turno: "Elige el turno cerrado del que salió el efectivo.",
   turno_abierto: "Del turno abierto no se registra como ya pagado: al contar se verá la salida; cuando se cierre, regístralo como pago de ese turno cerrado.",
+  hora: "La hora va como HH:MM (por ejemplo 14:30), solo en transferencia, tarjeta o dinero personal, y no puede quedar en el futuro.",
   motivo_ya_pagado: "Escribe por qué se pagó sin pedir autorización antes (de 5 a 300 caracteres).",
   excedente_anticipo: "Este excedente ya se pagó al proveedor con dinero de quien recibió el anticipo: lo registra esa persona, como dinero personal. Lo que salga de caja para devolvérselo es su reembolso.",
 };
@@ -74,7 +75,7 @@ const CAMPO: Partial<Record<ErrorGasto, string>> = {
   sucursal_paga: "paga", compra: "compra", motivo: "motivo",
   origen: "origen", excede: "importe", fecha: "pagadoEl", cuenta: "cuenta", referencia: "referencia", a_quien: "aQuien", comprobante: "tipo", folio: "folio",
   no_excede: "importeReal",
-  pagado_por: "pagadoPor", turno: "turno", turno_abierto: "turno", motivo_ya_pagado: "motivoPagado",
+  pagado_por: "pagadoPor", turno: "turno", turno_abierto: "turno", motivo_ya_pagado: "motivoPagado", hora: "hora",
 };
 
 async function inicio() {
@@ -146,7 +147,7 @@ export async function accionRegistrarPago(previo: EstadoGasto, datos: FormData):
   const codigo = leer("codigo", 8);
   const clave = leer("clave", 20);
   const valores = { origen: leer("origen", 30), importe: leer("importe", 20), aQuien: leer("aQuien", 200), pagadoEl: leer("pagadoEl", 10),
-                    cuenta: leer("cuenta", 60), referencia: leer("referencia", 80), ...comprobante(leer) };
+                    cuenta: leer("cuenta", 60), referencia: leer("referencia", 80), hora: leer("hora", 8), ...comprobante(leer) };
   const intento = (previo?.intento ?? 0) + 1;
   const r = await registrarPago(sql, sesion.usuarioId, codigo, { ...valores, clave, version: Number(leer("version", 8)) }, { entorno: leerEntorno() });
   if (r.ok) redirect(`/sucursales/${codigo}/gastos/${clave}?aviso=pagado`);
@@ -293,7 +294,7 @@ export async function accionRegistrarGastoPagado(previo: EstadoGasto, datos: For
   const codigo = leer("codigo", 8);
   const valores = {
     ...campos(leer), ...comprobante(leer), origen: leer("origen", 30), pagadoPor: leer("pagadoPor", 40), pagadoEl: leer("pagadoEl", 10),
-    pagaId: leer("paga", 40), turno: leer("turno", 40), aQuien: leer("aQuien", 200), cuenta: leer("cuenta", 60), referencia: leer("referencia", 80), motivoPagado: leer("motivoPagado", 400),
+    pagaId: leer("paga", 40), turno: leer("turno", 40), hora: leer("hora", 8), aQuien: leer("aQuien", 200), cuenta: leer("cuenta", 60), referencia: leer("referencia", 80), motivoPagado: leer("motivoPagado", 400),
   };
   const intento = (previo?.intento ?? 0) + 1;
   const r = await registrarGastoPagado(sql, sesion.usuarioId, codigo, { ...valores, envio: leer("envio", 40) }, { entorno: leerEntorno() });

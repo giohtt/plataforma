@@ -159,6 +159,16 @@ export function FormularioDecision({ codigo, clave, version, importe }: { codigo
 }
 
 /** Comprobante: ticket, nota o factura (folio opcional), o «sin comprobante» con motivo. Las fotos llegan con el almacenamiento. */
+function CampoHora({ estado, id }: { estado: EstadoGasto; id: string }) {
+  return (
+    <div className="campo">
+      <label htmlFor={id}>Hora del pago (opcional)</label>
+      <input id={id} name="hora" type="time" defaultValue={estado?.valores?.hora ?? ""} aria-invalid={estado?.errores?.hora ? true : undefined} />
+      <span className="sub">La declara quien registra. Sirve para comprobar si el pago fue después de la autorización; la fecha y hora del registro se guardan aparte.</span>
+      <ErrorCampo estado={estado} campo="hora" />
+    </div>
+  );
+}
 function CamposComprobante({ estado, opcional }: { estado: EstadoGasto; opcional: boolean }) {
   const [tipo, setTipo] = useState(estado?.valores?.tipo ?? "");
   return (
@@ -242,6 +252,7 @@ export function FormularioPago({ codigo, clave, version, autorizado, origenes, p
             <ErrorCampo estado={estado} campo="pagadoEl" />
           </div>
         ) : null}
+        {!deAnticipo && (origen === "transferencia" || origen === "tarjeta" || origen === "dinero_personal") ? <CampoHora estado={estado} id="hora-pago" /> : null}
       </div>
       {origen === "transferencia" || origen === "tarjeta" ? (
         <div className="campos-fila">
@@ -625,6 +636,7 @@ export function FormularioGastoPagado({ codigo, sucursalId, categorias, opciones
           <input id="pagadoEl-ya" name="pagadoEl" type="date" max={opciones.hoy} defaultValue={estado?.valores?.pagadoEl ?? opciones.hoy} aria-invalid={estado?.errores?.pagadoEl ? true : undefined} />
           <ErrorCampo estado={estado} campo="pagadoEl" />
         </div>
+        {origen === "transferencia" || origen === "tarjeta" || origen === "dinero_personal" ? <CampoHora estado={estado} id="hora-ya" /> : null}
       </div>
       {origen === "transferencia" || origen === "tarjeta" ? (
         <div className="campos-fila">

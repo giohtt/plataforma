@@ -164,7 +164,9 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
           <dl className="datos-expediente">
             <dt>De dónde salió</dt><dd data-testid="origen-pago">{NOMBRE_ORIGEN[d.pago.origen]}{d.pago.cuenta ? ` · ${d.pago.cuenta}` : ""}</dd>
             <dt>Importe pagado</dt><dd data-testid="importe-pagado">{pesos.format(Number(d.pago.importe))}</dd>
-            <dt>Fecha del pago</dt><dd>{d.pago.pagadoEl.split("-").reverse().join("/")}</dd>
+            <dt>Fecha del pago</dt><dd data-testid="fecha-pago">{d.pago.pagadoEl.split("-").reverse().join("/")}
+              {d.pago.horaDeclarada ? <> · {d.pago.horaDeclarada} <span className="sub">(hora declarada por quien registra)</span></> : null}</dd>
+            <dt>Registrado</dt><dd data-testid="registro-pago">{fechaHora.format(d.pago.en)} <span className="sub">(automático)</span></dd>
             {d.pago.posterior && d.pago.salidaResponsable ? (
               <><dt>Turno</dt><dd data-testid="turno-abierto">Salió del turno abierto (responsable del lugar: {d.pago.salidaResponsable}): una sola salida, que bajó el esperado una vez</dd></>
             ) : null}
