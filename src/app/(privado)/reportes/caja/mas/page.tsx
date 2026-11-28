@@ -172,6 +172,19 @@ function Movimientos({ r, c, varias }: { r: ReporteCaja; c: CajaSucursal; varias
           <li data-testid="mov-devoluciones"><span>Devoluciones de cambio a visitantes ({m.devoluciones.n}) · no restan del ingreso</span><span className="renglon-importe">{$(m.devoluciones.importe)}</span></li>
         ) : null}
         <li><span>Depositado en el banco ({m.depositado.n})</span><span className="renglon-importe">{$(m.depositado.importe)}</span></li>
+        <li data-testid="mov-gastos"><span>Gastos pagados de la bolsa o el cajón ({c.gastos.movimientos.gastos.n})</span><span className="renglon-importe">{$(c.gastos.movimientos.gastos.importe)}</span></li>
+        <li data-testid="mov-anticipos"><span>Anticipos entregados ({c.gastos.movimientos.anticipos.n})</span><span className="renglon-importe">{$(c.gastos.movimientos.anticipos.importe)}</span></li>
+        <li data-testid="mov-cambios"><span>Cambio de anticipos recibido ({c.gastos.movimientos.cambios.n})</span><span className="renglon-importe">{$(c.gastos.movimientos.cambios.importe)}</span></li>
+        <li data-testid="mov-reembolsos"><span>Reembolsos pagados de la bolsa o el cajón ({c.gastos.movimientos.reembolsos.n}) · no son gastos nuevos</span><span className="renglon-importe">{$(c.gastos.movimientos.reembolsos.importe)}</span></li>
+        <li data-testid="mov-turnos-cerrados">
+          <details>
+            <summary>Aparte: pagos de turnos cerrados registrados en el periodo ({c.gastos.turnosCerrados.n}) · no cambian el esperado ni se vuelven a descontar</summary>
+            <ul>{c.gastos.turnosCerrados.lista.map((x) => (
+              <li key={x.clave}><Link prefetch={false} href={`/sucursales/${x.codigo}/gastos/${x.clave}`}><span className="mono">{x.clave}</span></Link> · {x.concepto} · {$(x.importe)} · {x.nota}</li>
+            ))}</ul>
+          </details>
+          <span className="renglon-importe sin-corte">{$(c.gastos.turnosCerrados.importe)}</span>
+        </li>
       </ul>
       <p className="sub">
         Son pasos del mismo dinero: no se suman entre sí ni con los saldos. Los cobros de visitas están en el{" "}

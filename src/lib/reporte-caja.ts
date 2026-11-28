@@ -1,5 +1,6 @@
 import type postgres from "postgres";
 import { esIdentificadorValido } from "@/lib/permisos";
+import { gastosCaja, type GastosCaja } from "@/lib/gastos-caja";
 import { periodo } from "@/lib/reporte-visitas";
 import type { TipoLugar } from "@/lib/turnos";
 
@@ -156,6 +157,11 @@ export type CajaSucursal = {
   sinDatos: number;
   /** Lleva importes anotados de sobres que aún no se cuentan (quien consulta no los recoge). */
   anotadosSinContar: boolean;
+  /**
+   * Gastos que paga esta sucursal (bloque 6, PR 9): salidas y entradas del periodo (ya dentro del efectivo), pagos de
+   * turnos cerrados (aparte), fuera de caja (anticipos por comprobar y cambio por devolver) y pendientes al corte.
+   */
+  gastos: GastosCaja;
 };
 export type ReporteCaja = {
   sucursales: { codigo: string; nombre: string; descargar: boolean }[];
@@ -172,7 +178,7 @@ export type ReporteCaja = {
  * es exactamente lo que JavaScript, con sus fechas en milésimas, también ve antes o en el corte. Viaja como texto
  * (`::text::timestamptz`): como fecha, el cliente la recortaría otra vez a milésimas.
  */
-const hastaElCorte = (corte: Date) => corte.toISOString().replace(/Z$/, "999Z");
+export const hastaElCorte = (corte: Date) => corte.toISOString().replace(/Z$/, "999Z");
 
 /** Fecha y hora válidas del corte pedido, o null. */
 function leerCorte(v: string | undefined): Date | null {
@@ -182,7 +188,7 @@ function leerCorte(v: string | undefined): Date | null {
 }
 
 /** Periodo, inicio y corte (fin del periodo o ahora; uno pedido solo si cae dentro del periodo y no es futuro). */
-async function ventana(tx: Tx, filtros: { desde?: string; hasta?: string; corte?: string }) {
+export async function ventana(tx: Tx, filtros: { desde?: string; hasta?: string; corte?: string }) {
   const [{ ahora, hoy }] = await tx<{ ahora: Date; hoy: string }[]>`select now() as ahora, (now() at time zone ${ZONA})::date::text as hoy`;
   let p = periodo(filtros.desde, filtros.hasta, hoy);
   if (p.desde > hoy) p = { ...periodo(undefined, undefined, hoy), invalido: true };
@@ -559,6 +565,7 @@ async function calcularSucursal(tx: Tx, usuarioId: string, s: { id: string; codi
   return {
     id: s.id, codigo: s.codigo, nombre: s.nombre, recogedor, lugares, sobres, pendientes, confirmados, depositos, diferencias: difVisibles, investigar, movimientos,
     entradas, porDevolver: { n: pd.n, importe: pd.importe }, origenes, visible: pesos(visible), ocultos, sinDatos: lugares.filter((l) => l.estado === "sin_datos").length, anotadosSinContar: !recogedor && sinContar,
+    gastos: await gastosCaja(tx, s.id, inicio, corteBd),
   };
 }
 

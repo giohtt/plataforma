@@ -6,8 +6,11 @@ import { useState } from "react";
  * Botón «Descargar» de «Caja y depósitos»: al tocarlo muestra las opciones (formato y contenido) y una forma visible de
  * cerrarlas. El servidor vuelve a comprobar los permisos al descargar; esto solo es la presentación.
  */
-export function PanelDescarga({ sucursal, desde, hasta, corte, corteTexto, incluidas, excluidas }: {
+export function PanelDescarga({ sucursal, desde, hasta, corte, corteTexto, incluidas, excluidas, accion = "/reportes/caja/descargar",
+                               detalle = "Con detalle (origen y destino e historial)", aviso = "Mismo corte ({corte}); respeta los importes ocultos. Queda en el historial de descargas." }: {
   sucursal: string; desde: string; hasta: string; corte: string; corteTexto: string; incluidas: string[]; excluidas: string[];
+  /** Otro reporte que usa el mismo panel (por ejemplo, gastos). */
+  accion?: string; detalle?: string; aviso?: string;
 }) {
   const [abierto, setAbierto] = useState(false);
   return (
@@ -17,7 +20,7 @@ export function PanelDescarga({ sucursal, desde, hasta, corte, corteTexto, inclu
         Descargar
       </button>
       {abierto ? (
-        <form id="panel-descarga" className="panel-descarga" method="post" action="/reportes/caja/descargar" data-testid="descargar">
+        <form id="panel-descarga" className="panel-descarga" method="post" action={accion} data-testid="descargar">
           <div className="panel-descarga-cabeza">
             <b>Descargar</b>
             <button type="button" className="boton boton-chico" onClick={() => setAbierto(false)} data-testid="cerrar-descarga">Cerrar ✕</button>
@@ -39,9 +42,9 @@ export function PanelDescarga({ sucursal, desde, hasta, corte, corteTexto, inclu
           <fieldset className="campo-grupo">
             <legend className="campo-etiqueta">Contenido</legend>
             <label className="casilla"><input type="radio" name="contenido" value="resumen" defaultChecked /> Resumen</label>
-            <label className="casilla"><input type="radio" name="contenido" value="detalle" /> Con detalle (origen y destino e historial)</label>
+            <label className="casilla"><input type="radio" name="contenido" value="detalle" /> {detalle}</label>
           </fieldset>
-          <p className="sub">Mismo corte ({corteTexto}); respeta los importes ocultos. Queda en el historial de descargas.</p>
+          <p className="sub">{aviso.replace("{corte}", corteTexto)}</p>
           <button className="boton boton-principal" type="submit" data-testid="boton-descargar">Descargar</button>
         </form>
       ) : null}

@@ -262,6 +262,9 @@ export default async function PaginaSucursal({ params, searchParams }: PageProps
             {puedeVerReporteVisitas ? (
               <Link className="boton" href={`/reportes/visitas?sucursal=${sucursal.codigo}`} data-testid="reporte-visitas">Visitas y cobros</Link>
             ) : null}
+            {puedeConsultarGastos ? (
+              <Link className="boton" href={`/reportes/gastos?sucursal=${sucursal.codigo}`} data-testid="reporte-gastos">Reporte de gastos</Link>
+            ) : null}
             {puedeVerExpedientes ? (
               <Link className="boton" href={`/reportes/expedientes?sucursal=${sucursal.codigo}`} data-testid="reporte-expedientes">Reporte de expedientes</Link>
             ) : null}
