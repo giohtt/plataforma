@@ -9,6 +9,13 @@ export const NOMBRE_ESTADO_GASTO: Record<EstadoGasto, string> = {
   sin_autorizacion_previa: "Pagado sin autorización previa · por revisar · Dirección",
 };
 
+/** Autorización previa del pago, por fecha y hora (PR 8). */
+export type AutorizacionPrevia = "comprobada" | "no_comprobada" | "sin_autorizacion_previa" | "pendiente";
+export const NOMBRE_AUTORIZACION_PREVIA: Record<AutorizacionPrevia, string> = {
+  comprobada: "Autorización previa comprobada", no_comprobada: "Autorización previa no comprobada",
+  sin_autorizacion_previa: "Pagado sin autorización previa", pendiente: "Pagado · autorización pendiente",
+};
+
 export type OrigenPago = "bolsa_visitas" | "cajon_mensualidades" | "transferencia" | "tarjeta" | "dinero_personal" | "anticipo";
 export const NOMBRE_ORIGEN: Record<OrigenPago, string> = {
   bolsa_visitas: "Bolsa de visitas", cajon_mensualidades: "Cajón de mensualidades", transferencia: "Transferencia",

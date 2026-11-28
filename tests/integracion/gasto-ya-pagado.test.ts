@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  bandejaGastos, comprobarAnticipo, confirmarAnticipo, decidirGasto, decidirReembolso, detalleGasto, entregarAnticipo, gastosPorDecidir,
+  registrarPago, bandejaGastos, comprobarAnticipo, confirmarAnticipo, decidirGasto, decidirReembolso, detalleGasto, entregarAnticipo, gastosPorDecidir,
   opcionesGastoPagado, pagosPosterioresDelTurno, registrarGastoPagado, solicitarGasto,
 } from "@/lib/gastos";
 import { reporteVisitas } from "@/lib/reporte-visitas";
@@ -94,7 +94,7 @@ describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () =
     expect(r.ok).toBe(true);
     const clave = r.ok ? r.clave : "";
     const d = await detalleGasto(sql, enc, codigo, clave);
-    expect(d?.gasto).toMatchObject({ estado: "sin_autorizacion_previa", sinAutorizacionPrevia: true, impedimento: "ya_pagado", origenPago: "bolsa_visitas" });
+    expect(d?.gasto).toMatchObject({ estado: "sin_autorizacion_previa", autorizacionPrevia: "sin_autorizacion_previa", impedimento: "ya_pagado", origenPago: "bolsa_visitas" });
     expect(d?.yaPagado).toMatchObject({ registradoPor: "Encargado Y", motivo: "Prueba ficticia: se acabó el agua y no había quién autorizara" });
     expect(d?.pago).toMatchObject({ posterior: true, pagadoPor: "Recepción Y", registradoPor: "Encargado Y", importe: "120.00" });
     expect(d?.pago?.turnoCerrado?.cerrado).toBeInstanceOf(Date);
@@ -136,7 +136,7 @@ describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () =
       from movimiento_efectivo me join pago_gasto p on p.id = me.pago_gasto_id join gasto g on g.id = p.gasto_id where g.clave = ${clave}`;
     expect(m).toEqual({ n: 1, responsable: rec2, registro: enc, importe: "-75.00", turno: t2.id });
     const d = await detalleGasto(sql, enc, codigo, clave);
-    expect(d?.gasto).toMatchObject({ estado: "sin_autorizacion_previa", sinAutorizacionPrevia: true });
+    expect(d?.gasto).toMatchObject({ estado: "sin_autorizacion_previa", autorizacionPrevia: "sin_autorizacion_previa" });
     expect(d?.pago).toMatchObject({ posterior: true, turnoCerrado: null, salidaResponsable: "Recepción Y2", pagadoPor: "Encargado Y" });
     // Reenviar el mismo formulario, consultar, verlo en la bandeja o intentar autorizarlo no vuelve a descontar.
     expect(await yaPagado(enc, datos)).toEqual(r);
@@ -211,28 +211,55 @@ describe.skipIf(!URL_ADMIN)("gastos ya pagados y pagos de turnos cerrados", () =
     expect((await yaPagado(enc, { origen: "tarjeta", turno: "", pagadoPor: enc, cuenta: "Tarjeta ficticia", referencia: "" })).ok).toBe(true);
   });
 
-  it("excedente de un anticipo: se marca solo si el pago al proveedor fue antes del día de su autorización", async () => {
-    const s = await solicitarGasto(sql, rec2, codigo, { concepto: "Material ficticio", categoria: "prueba_limpieza", importe: "100",
-      proveedor: "", nota: "", pagaId: "", compraDe: "", envio: randomUUID() }, PRUEBAS);
-    if (!s.ok) throw new Error(s.error);
-    expect(await decidirGasto(sql, enc, codigo, { clave: s.clave, version: 1, decision: "autorizado", motivo: "" }, PRUEBAS)).toEqual({ ok: true });
-    expect(await entregarAnticipo(sql, rec2, codigo, { clave: s.clave, version: 1, lugar: "bolsa_visitas", recibe: adm }, PRUEBAS)).toEqual({ ok: true });
-    expect(await confirmarAnticipo(sql, adm, codigo, { clave: s.clave }, PRUEBAS)).toEqual({ ok: true });
-    const c = await comprobarAnticipo(sql, adm, codigo, { clave: s.clave, gastado: "130", pagadoEl: hoyMx(), aQuien: "", envio: randomUUID(),
+  it("autorización previa por fecha y hora: excedente pendiente y luego sin autorización previa; mismo día sin hora, no comprobada", async () => {
+    const autorizar = async (importe: string) => {
+      const r = await solicitarGasto(sql, adm, codigo, { concepto: `Material ficticio ${importe}`, categoria: "prueba_limpieza", importe,
+        proveedor: "", nota: "", pagaId: "", compraDe: "", envio: randomUUID() }, PRUEBAS);
+      if (!r.ok) throw new Error(r.error);
+      expect(await decidirGasto(sql, enc, codigo, { clave: r.clave, version: 1, decision: "autorizado", motivo: "" }, PRUEBAS)).toEqual({ ok: true });
+      return r.clave;
+    };
+    const previa = async (clave: string) => (await detalleGasto(sql, dir, codigo, clave))?.gasto.autorizacionPrevia;
+
+    // Excedente de un anticipo: el proveedor se pagó antes de comprobar; mientras no se autorice, queda pendiente.
+    const a = await autorizar("100");
+    expect(await previa(a)).toBeNull();
+    expect(await entregarAnticipo(sql, rec2, codigo, { clave: a, version: 1, lugar: "bolsa_visitas", recibe: adm }, PRUEBAS)).toEqual({ ok: true });
+    expect(await confirmarAnticipo(sql, adm, codigo, { clave: a }, PRUEBAS)).toEqual({ ok: true });
+    const c = await comprobarAnticipo(sql, adm, codigo, { clave: a, gastado: "130", pagadoEl: hoyMx(), aQuien: "", envio: randomUUID(),
       tipo: "nota", folio: "", motivoSin: "" }, PRUEBAS);
     const exc = c.ok ? c.excedente! : "";
-    // Por autorizar: no se marca. Autorizado el mismo día del pago al proveedor: tampoco.
-    expect((await detalleGasto(sql, adm, codigo, exc))?.gasto).toMatchObject({ estado: "por_autorizar", sinAutorizacionPrevia: false });
+    expect(await previa(exc)).toBe("pendiente");
+    expect((await bandejaGastos(sql, dir, "sin_autorizacion"))!.gastos.map((g) => g.clave)).toContain(exc);
+    // Se autoriza el mismo día, pero después de la comprobación (cuando ya se había pagado): no fue autorización previa.
     expect(await decidirGasto(sql, enc, codigo, { clave: exc, version: 1, decision: "autorizado", motivo: "" }, PRUEBAS)).toEqual({ ok: true });
-    expect((await detalleGasto(sql, adm, codigo, exc))?.gasto).toMatchObject({ estado: "autorizado", sinAutorizacionPrevia: false });
-    expect((await detalleGasto(sql, adm, codigo, s.clave))?.gasto.sinAutorizacionPrevia).toBe(false);
-    // Si el pago al proveedor fue un día antes de la autorización, sí (se simula la fecha en la base de prueba).
+    expect(await previa(exc)).toBe("sin_autorizacion_previa");
+    const [orden] = await sql<{ comprobado: Date; autorizado: Date }[]>`
+      select k.en as comprobado, d.en as autorizado from anticipo_comprobado k join gasto x on x.id = k.excedente_gasto_id
+      join decision_gasto d on d.gasto_id = x.id where x.clave = ${exc}`;
+    expect(orden.comprobado.getTime()).toBeLessThan(orden.autorizado.getTime());
+    // El anticipo mismo se entregó después de autorizar: comprobada.
+    expect(await previa(a)).toBe("comprobada");
+
+    // Efectivo del turno abierto: el registro es la hora del pago, después de autorizar: comprobada.
+    const b = await autorizar("40");
+    expect(await registrarPago(sql, rec2, codigo, { clave: b, version: 1, origen: "bolsa_visitas", importe: "40", aQuien: "", pagadoEl: "",
+      cuenta: "", referencia: "", tipo: "ticket", folio: "", motivoSin: "" }, PRUEBAS)).toEqual({ ok: true });
+    expect(await previa(b)).toBe("comprobada");
+
+    // Tarjeta con solo el día del pago, el mismo de la autorización: no se puede comprobar el orden.
+    const t = await autorizar("55");
+    expect(await registrarPago(sql, adm, codigo, { clave: t, version: 1, origen: "tarjeta", importe: "55", aQuien: "", pagadoEl: hoyMx(),
+      cuenta: "Tarjeta ficticia", referencia: "", tipo: "ticket", folio: "", motivoSin: "" }, PRUEBAS)).toEqual({ ok: true });
+    expect(await previa(t)).toBe("no_comprobada");
+    expect((await bandejaGastos(sql, dir, "sin_autorizacion"))!.gastos.map((g) => g.clave)).toContain(t);
+    expect((await bandejaGastos(sql, dir, "sin_autorizacion"))!.gastos.map((g) => g.clave)).not.toContain(b);
+    // Si el día del pago es anterior al de la autorización (se simula la fecha en la base de prueba): sin autorización previa.
     await sql.begin(async (tx) => {
       await tx`set local session_replication_role = replica`;
-      await tx`update pago_gasto set pagado_el = pagado_el - 1
-               where id = (select k.pago_id from anticipo_comprobado k join gasto x on x.id = k.excedente_gasto_id where x.clave = ${exc})`;
+      await tx`update pago_gasto set pagado_el = pagado_el - 1 where gasto_id = (select id from gasto where clave = ${t})`;
     });
-    expect((await detalleGasto(sql, adm, codigo, exc))?.gasto.sinAutorizacionPrevia).toBe(true);
+    expect(await previa(t)).toBe("sin_autorizacion_previa");
   });
 
   it("la base lo respalda: sin registro de ya pagado no hay pago posterior; sin decisión; efectivo cerrado sin salida", async () => {

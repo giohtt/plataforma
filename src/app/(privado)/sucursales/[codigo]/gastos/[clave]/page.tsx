@@ -6,7 +6,7 @@ import {
   FormularioPresentarReembolso,
 } from "@/components/Gastos";
 import { obtenerBaseDatos } from "@/lib/db";
-import { detalleGasto, NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, NOMBRE_ORIGEN, NOMBRE_REEMBOLSO, TEXTO_IMPEDIMENTO } from "@/lib/gastos";
+import { detalleGasto, NOMBRE_AUTORIZACION_PREVIA, NOMBRE_COMPROBACION, NOMBRE_ESTADO_GASTO, NOMBRE_ORIGEN, NOMBRE_REEMBOLSO, TEXTO_IMPEDIMENTO } from "@/lib/gastos";
 import { requerirSesion } from "@/lib/sesion-servidor";
 
 export const metadata = { title: "Solicitud de gasto · Fitnessland" };
@@ -60,7 +60,9 @@ export default async function Gasto({ params, searchParams }: PageProps<"/sucurs
           <span className={`chip-estado ${CLASE_ESTADO[g.estado]}`}>{NOMBRE_ESTADO_GASTO[g.estado]}</span>
           {g.decididoPor ? ` por ${g.decididoPor}` : ""}{ultima.version > 1 ? ` · versión ${ultima.version}` : ""}
           {g.origenPago && g.estado !== "sin_autorizacion_previa" ? <> · <span className="chip-estado chip-vigente" data-testid="pagado">Pagado</span></> : null}
-          {g.sinAutorizacionPrevia && g.estado !== "sin_autorizacion_previa" ? <> · <span className="chip-estado chip-programada" data-testid="sin-autorizacion-previa">Pagado sin autorización previa</span></> : null}
+          {g.autorizacionPrevia && g.autorizacionPrevia !== "comprobada" && g.estado !== "sin_autorizacion_previa" ? (
+            <> · <span className="chip-estado chip-programada" data-testid="autorizacion-previa">{NOMBRE_AUTORIZACION_PREVIA[g.autorizacionPrevia]}</span></>
+          ) : null}
           {d.anticipo && !d.anticipo.comprobado ? <> · <span className="chip-estado chip-programada" data-testid="anticipo-por-comprobar">Fuera de caja: anticipo por comprobar</span></> : null}
           {d.anticipo && Number(d.anticipo.pendiente) > 0 ? <> · <span className="chip-estado chip-programada" data-testid="cambio-pendiente">Fuera de caja: cambio por devolver {pesos.format(Number(d.anticipo.pendiente))}</span></> : null}
         </p>
